@@ -1,0 +1,24 @@
+target/
+build/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/
+*.class
+.DS_Store
+*.log
+
+# PJSIP 预编译，各人本机放置
+native/**/*.dll
+native/**/*.dylib
+native/**/*.so
+native/**/*.jar
+**/*.lib
+**/*.exp
+
+# 本地密钥与数据
+admin/uploads/
+*.env
+server/mysql-data/

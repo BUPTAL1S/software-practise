@@ -1,0 +1,33 @@
+# 本机只跑这一套服务。镜像 tag 选定后回写 docs/deps.md。
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: lab
+      MYSQL_DATABASE: sipim
+      MYSQL_USER: sipim
+      MYSQL_PASSWORD: sipim
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  kamailio:
+    image: ghcr.io/kamailio/kamailio:5.8.3-alpine
+    network_mode: host
+    volumes:
+      - ./kamailio:/etc/kamailio
+    depends_on:
+      - mysql
+
+  freeswitch:
+    image: safarov/freeswitch:latest
+    network_mode: host
+    volumes:
+      - ./freeswitch:/etc/freeswitch
+    depends_on:
+      - mysql
+
+volumes:
+  mysql-data:
