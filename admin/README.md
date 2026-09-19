@@ -13,7 +13,8 @@ mvn spring-boot:run
 - 健康检查：`GET http://localhost:8080/api/health`
 - 用户列表：`GET http://localhost:8080/api/users`
 - 库文件：`admin/sipim.db`（已 gitignore）
-- 首次启动会插入测试用户 `100`–`107`（`sip_id` 同名）。Kamailio 仍用静态账号，这里不同步 SIP 密码。
+- 首次启动会插入测试用户 `1001`–`1008`（`sip_id` 同名，与 Kamailio 静态账号对齐）。阶段 1 仍不校验 SIP 密码。
+- 若本机已经有旧的 `admin/sipim.db`（里面是 `100`–`107`），删掉该文件后重启才会重灌。
 
 ## 四张表
 

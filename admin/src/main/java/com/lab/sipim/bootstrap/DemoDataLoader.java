@@ -25,7 +25,7 @@ public class DemoDataLoader implements CommandLineRunner {
             return;
         }
         // Kamailio 阶段 1 用静态账号；这里只给后台自己的用户表灌测试数据，不同步 SIP 密码。
-        for (int i = 100; i <= 107; i++) {
+        for (int i = 1001; i <= 1008; i++) {
             String id = String.valueOf(i);
             User user = new User();
             user.setUsername(id);
@@ -33,6 +33,6 @@ public class DemoDataLoader implements CommandLineRunner {
             user.setPasswordHash("dev-" + id);
             users.save(user);
         }
-        log.info("inserted {} demo users (100-107)", users.count());
+        log.info("inserted {} demo users (1001-1008)", users.count());
     }
 }

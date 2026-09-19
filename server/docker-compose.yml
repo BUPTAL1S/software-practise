@@ -1,6 +1,6 @@
 # 本机只跑 SIP 相关容器。业务库是后台进程里的 SQLite，不在这里。
 # Windows / Docker Desktop：用桥接 + 端口映射。不要用 host 网络。
-# listen / advertise 见 kamailio/kamailio.cfg 顶部，必须填实测 IP。
+# listen / advertise 的 PUBLIC_IP 由 ./start-kamailio.sh 或 ./start-kamailio.ps1 探测写入。
 
 services:
   kamailio:
@@ -8,6 +8,8 @@ services:
     container_name: kamailio
     entrypoint: ["kamailio"]
     command: ["-DD", "-E", "-m", "64", "-M", "8"]
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-}
     ports:
       - target: 5060
         published: 5060

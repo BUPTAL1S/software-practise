@@ -19,8 +19,8 @@ class UserRepositoryTest {
 
     @Test
     void seedsEightDemoUsers() {
-        assertThat(users.findBySipId("100")).isPresent();
-        assertThat(users.findByUsername("107")).isPresent();
+        assertThat(users.findBySipId("1001")).isPresent();
+        assertThat(users.findByUsername("1008")).isPresent();
         assertThat(users.count()).isGreaterThanOrEqualTo(8);
     }
 

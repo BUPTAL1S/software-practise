@@ -20,11 +20,23 @@ docs/      规划与分工
 
 ## 怎么跑（阶段 1）
 
+信令先探测校园网 IP 再起 Kamailio（不要手填 `PUBLIC_IP`）：
+
 ```bash
-cd server && docker compose up -d
+cd server
+./start-kamailio.sh          # macOS / Linux
+# Windows: .\start-kamailio.ps1
 ```
 
-客户端与后台工程尚未落代码，先读 docs，再按角色开工。SIP 域：`lab`。一对一走 Kamailio；房间 `sip:room-<id>@lab` 进 FreeSWITCH，上限 8 人。
+客户端默认 TCP、账号 `1001`，第二窗口用 `1002`：
+
+```bash
+cd client
+./启动.command
+./启动.command --user=1002 --port=5062 --peer=1001
+```
+
+SIP 域：`lab`。一对一走 Kamailio；`sip:room-<id>@lab` 阶段 1 回 480，不进 MCU。原生库不入库，见 `native/`。
 
 ## 协作
 
