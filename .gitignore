@@ -9,6 +9,7 @@ build/
 *.class
 .DS_Store
 *.log
+hs_err_pid*.log
 
 # PJSIP 预编译，各人本机放置
 native/**/*.dll
@@ -25,3 +26,5 @@ admin/uploads/
 *.db
 *.db-wal
 *.db-shm
+client/.local-prefs
+server/kamailio/public-ip.defs
