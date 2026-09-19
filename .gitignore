@@ -13,6 +13,7 @@ build/
 # PJSIP 预编译，各人本机放置
 native/**/*.dll
 native/**/*.dylib
+native/**/*.jnilib
 native/**/*.so
 native/**/*.jar
 **/*.lib

@@ -1,22 +1,42 @@
 # client
 
-JavaFX 桌面端。代码按 [docs/分工-客户端.md](../docs/分工-客户端.md) 后续添加，此处不预置空包。
+JavaFX 桌面端，Win / Mac **同一份代码**。阶段 1：REGISTER + 一对一音频。
 
-## 原生库
+## 准备
 
-启动时按系统加载，不要写死一种 OS：
+- JDK **17**（`JAVA_HOME` 指向它）
+- Maven
+- 本机编好的 PJSUA2 2.17 原生库（见下方）
 
-| 系统 | 目录 | 库名 |
+## 编 JNI
+
+| 系统 | 文档 | 产物（不入库） |
 |---|---|---|
-| Windows x64 | `native/windows-x64/` | `pjsua2.dll` |
-| macOS arm64 | `native/macos-arm64/` | `libpjsua2.dylib` |
+| macOS arm64 | [native/macos-arm64/BUILD.md](../native/macos-arm64/BUILD.md) | `native/macos-arm64/libpjsua2.dylib` |
+| Windows x64 | [native/windows-x64/BUILD.md](../native/windows-x64/BUILD.md) | `native/windows-x64/pjsua2.dll` |
 
-PJSIP **2.17**，SWIG Java 绑定。Win / Mac 必须同一上游版本，否则 Java 类对不上。
+SWIG 生成的 Java 放在 `src/main/java/org/pjsip/pjsua2/`，两平台共用，必须都是 2.17。
+
+## 启动
+
+在 `client/` 目录：
+
+```bash
+# macOS
+./启动.command
+# 或
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+mvn javafx:run
+```
+
+```bat
+REM Windows
+启动.bat
+```
+
+同机开两个客户端时，把「本机 SIP 端口」改成 `5060` 和 `5062`。SIP 服务器填组内 Kamailio 的 IP，域 `lab`，呼叫对方用户名即可（会变成 `sip:<user>@lab`）。
 
 ## SIP 约定
 
-- 注册到组内 Kamailio（compose 默认 `5060`）
-- 一对一：`INVITE sip:<user>@lab`
-- 房间：`INVITE sip:room-<id>@lab`（id 来自后台）
-- 文字：SIP MESSAGE
-- 文件：后台 HTTP，不走 SIP 包体
+- 一对一：`INVITE sip:<user>@lab`，不进 MCU
+- 阶段 1 不做视频、MESSAGE、文件、房间、后台登录
