@@ -1,12 +1,10 @@
 # native
 
-各平台自己编译 PJSIP 2.17 的 PJSUA2 JNI，放到对应目录。二进制被 `.gitignore` 忽略。
+各平台自己编译 PJSIP **2.17** 的 PJSUA2 JNI。二进制 gitignore，不要提交。
 
-```
-native/windows-x64/    pjsua2.dll 及运行依赖
-native/macos-arm64/    libpjsua2.dylib
-```
+| 系统 | 怎么编 | 放到哪 |
+|---|---|---|
+| macOS arm64 | [macos-arm64/BUILD.md](macos-arm64/BUILD.md) | `libpjsua2.jnilib` 或 `libpjsua2.dylib` |
+| Windows x64 | [windows-x64/BUILD.md](windows-x64/BUILD.md) | `pjsua2.dll` 及 MinGW 依赖 dll |
 
-Intel Mac 若需要，再加 `macos-x64/`，不要覆盖 arm64。
-
-构建步骤跟官方文档：https://docs.pjsip.org/en/latest/pjsua2/building.html （Java SWIG）。编完在组内网盘或 Release 附件互传即可，不要把几百 MB 的上游源码推进本仓库。
+SWIG 生成的 Java 在 `client/src/main/java/org/pjsip/pjsua2/`，两平台共用同一 2.17。
