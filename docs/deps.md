@@ -7,8 +7,8 @@
 | 用途 | 项目 | 版本 | 本仓库位置 |
 |---|---|---|---|
 | 客户端 SIP + 音视频 | [pjsip/pjproject](https://github.com/pjsip/pjproject) | **2.17**（[tag](https://github.com/pjsip/pjproject/releases/tag/2.17)） | 源码不入库；预编译放到 `native/<平台>/`（git 忽略） |
-| SIP 代理 | [kamailio/kamailio](https://github.com/kamailio/kamailio) | 与 `server/docker-compose.yml` 镜像 tag 一致，优先 `5.8` 线 | `server/kamailio/` 只放我们的 cfg 片段 |
-| 房间 MCU | FreeSWITCH `mod_conference` | 与 compose 镜像 tag 一致，优先 `1.10` 线 | `server/freeswitch/` 只放会议相关说明/片段 |
+| SIP 代理 | [kamailio/kamailio](https://github.com/kamailio/kamailio) | **5.8.3**，镜像 `ghcr.io/kamailio/kamailio-ci:5.8.3-alpine`（与 compose 一致） | `server/kamailio/` 只放我们的 cfg |
+| 房间 MCU | FreeSWITCH `mod_conference` | 阶段 1 未启用；compose profile `mcu`，镜像 `safarov/freeswitch:latest`（阶段 5 再钉 tag） | `server/freeswitch/` 只放会议相关说明/片段 |
 | ESL | Maven `org.freeswitch.esl.client:esl-client-netty4`（或 compose 文档指定的坐标） | 跟后台 POM 钉死一版 | 只在 `admin` 依赖里引用 |
 | 后台 | Spring Boot **3.3.x** + Java **17** | POM 锁定 | `admin/` |
 | UI | JavaFX（与 JDK 17 匹配的 OpenJFX） | POM 锁定 | `client/` |
@@ -27,6 +27,7 @@ PJSIP Java 绑定：用发行源码里 `pjsip-apps/src/swig/java` 按官方文�
 | mjSIP / JAIN-SIP 作主引擎 | 无媒体；报告里可对比，代码不进主路径 |
 | miniSIPServer | 已确认 Kamailio；其会议室上限 5，不够 6–8 人 |
 
-## 镜像占位
+## 镜像（阶段 1 已钉）
 
-compose 里的 tag 在阶段 1 由信令角色选定后，回写本表「与 compose 一致」那一行，避免三个人各拉各的 latest。
+- Kamailio：`ghcr.io/kamailio/kamailio-ci:5.8.3-alpine`
+- FreeSWITCH：阶段 5 再用；不要三个人各拉各的 latest 当 Kamailio。

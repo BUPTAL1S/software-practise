@@ -1,16 +1,32 @@
 # 本机只跑 SIP 相关容器。业务库是后台进程里的 SQLite，不在这里。
-# 镜像 tag 选定后回写 docs/deps.md。
-# host 网络在 Mac/Windows 的 Docker Desktop 上不稳：阶段 1 请在一台 Linux 上起 compose。
+# Windows / Docker Desktop：用桥接 + 端口映射。不要用 host 网络。
+# listen / advertise 见 kamailio/kamailio.cfg 顶部，必须填实测 IP。
 
 services:
   kamailio:
-    image: ghcr.io/kamailio/kamailio:5.8.3-alpine
-    network_mode: host
+    image: ghcr.io/kamailio/kamailio-ci:5.8.3-alpine
+    container_name: kamailio
+    entrypoint: ["kamailio"]
+    command: ["-DD", "-E", "-m", "64", "-M", "8"]
+    ports:
+      - target: 5060
+        published: 5060
+        protocol: udp
+      - target: 5060
+        published: 5060
+        protocol: tcp
     volumes:
       - ./kamailio:/etc/kamailio
+    restart: unless-stopped
 
+  # 阶段 5 再配 MCU。默认不启动，避免空目录覆盖镜像配置。
+  # 启用：docker compose --profile mcu up -d
   freeswitch:
     image: safarov/freeswitch:latest
-    network_mode: host
-    volumes:
-      - ./freeswitch:/etc/freeswitch
+    container_name: freeswitch
+    profiles: ["mcu"]
+    ports:
+      - "5080:5080/udp"
+      - "5080:5080/tcp"
+      - "8021:8021"
+    restart: unless-stopped
