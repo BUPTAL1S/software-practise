@@ -6,13 +6,14 @@
 - 开源依赖（钉版本，不拷全仓）：[docs/deps.md](docs/deps.md)
 - 上游怎么改：[docs/如何改开源组件.md](docs/如何改开源组件.md)
 - PR 规范：[docs/PR规范.md](docs/PR规范.md)
+- 答辩口径：[docs/答辩口径.md](docs/答辩口径.md)
 
 ## 结构
 
 ```
 client/    JavaFX + PJSUA2
 native/    各平台 pjsua2 预编译（不入库）
-server/    docker compose：Kamailio + FreeSWITCH + MySQL
+server/    docker compose：Kamailio + FreeSWITCH
 admin/     Spring Boot 单体
 docs/      规划与分工
 ```

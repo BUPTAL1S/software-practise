@@ -16,7 +16,7 @@
 ## 依赖
 
 - Spring Web
-- Spring Data JPA + MySQL（compose 服务 `mysql`）
+- Spring Data JPA + SQLite（文件 `sipim.db`，不入库）
 - ESL：`org.freeswitch.esl.client` 一系，只订房间成员增减
 
-阶段 1 先能连上 MySQL。Kamailio 先用静态账号，不必一开始就和 users 表同步。
+阶段 1 先能读写 SQLite。Kamailio 先用静态账号，不必一开始就和 users 表同步。

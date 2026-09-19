@@ -18,7 +18,7 @@
 ## 不要提交
 
 - `native/` 下的 `.dll` / `.dylib` / `.so`
-- `target/`、IDE 配置、本机 `.env`、MySQL 数据卷
+- `target/`、IDE 配置、本机 `.env`、`*.db`
 - 上游整仓拷贝
 
 ## PR 怎么写

@@ -12,7 +12,7 @@
 | ESL | Maven `org.freeswitch.esl.client:esl-client-netty4`（或 compose 文档指定的坐标） | 跟后台 POM 钉死一版 | 只在 `admin` 依赖里引用 |
 | 后台 | Spring Boot **3.3.x** + Java **17** | POM 锁定 | `admin/` |
 | UI | JavaFX（与 JDK 17 匹配的 OpenJFX） | POM 锁定 | `client/` |
-| 库 | MySQL **8.0** | compose 镜像 | compose 服务 `mysql` |
+| 库 | SQLite（JPA） | 跟 Spring Boot 走 | `admin/` 下 `sipim.db`（gitignore） |
 
 PJSIP Java 绑定：用发行源码里 `pjsip-apps/src/swig/java` 按官方文档生成 JNI，Win / Mac 各编一次。不要用 Android 示例当 PC 主工程。
 

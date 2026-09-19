@@ -4,7 +4,7 @@
 
 ## 做
 
-- `server/docker-compose.yml` 能拉起 Kamailio + FreeSWITCH + MySQL
+- `server/docker-compose.yml` 能拉起 Kamailio + FreeSWITCH（不要数据库容器）
 - Kamailio：REGISTER / 查找 / 一对一转发
 - Kamailio：用户部分 `room-*` 的 INVITE 转到 FreeSWITCH，其它 INVITE 不进 MCU
 - FreeSWITCH：一个会议室，`max-members=8`，视频 3×3，640×360 或 720p30（不要 1080p）
@@ -35,7 +35,7 @@
 | 1 通话底座 | compose 起来；两个 UA 能经 Kamailio 音频通话 |
 | 2 视频界面 | 视频 SDP 能过（编解码与客户端约定 OpenH264 或同一套 H.264） |
 | 3 消息文件 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
-| 4 后台统计 | MySQL 给后台用；ESL 端口通 |
+| 4 后台统计 | ESL 端口通，供后台订房间事件 |
 | 5 房间 MCU | 6–8 路进同一会议室，第 9 人拒绝 |
 | 6 交付 | 演示用一键 `docker compose up` |
 
