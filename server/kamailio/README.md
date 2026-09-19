@@ -1,10 +1,10 @@
 # Kamailio
 
-完整 `kamailio.cfg` 第 1–2 周由信令角色补齐。这里只定行为，避免抄一份用不上的全量配置。
+完整 `kamailio.cfg` 阶段 1 由信令角色补齐。这里只定行为，避免抄一份用不上的全量配置。
 
 ## 必须有的三条
 
-1. `REGISTER` 进 usrloc（内存即可，第一周不必上 DB）
+1. `REGISTER` 进 usrloc（内存即可，阶段 1 不必上 DB）
 2. `INVITE` 用户 `sip:<user>@lab` → lookup 后 `relay` 到联系地址
 3. 若 R-URI 用户部分匹配 `room-` 前缀 → `relay` 到本机 FreeSWITCH SIP（默认 `5080` 或 FS 内部 profile 端口，compose 起来后写死一处）
 

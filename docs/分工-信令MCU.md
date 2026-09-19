@@ -28,15 +28,15 @@
 
 配置意图见 [kamailio/README.md](../server/kamailio/README.md) 与 [freeswitch/README.md](../server/freeswitch/README.md)。
 
-## 十周里你的交付
+## 按阶段交付
 
-| 周 | 你交出什么 |
+| 阶段 | 你交出什么 |
 |---|---|
-| 1–2 | compose 起来；两个 UA 能经 Kamailio 音频通话 |
-| 3–4 | 视频 SDP 能过（编解码与客户端约定 OpenH264 或同一套 H.264） |
-| 5–6 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
-| 7 | MySQL 给后台用；ESL 端口通 |
-| 8–9 | 6–8 路进同一会议室，第 9 人拒绝 |
-| 10 | 演示用一键 `docker compose up` |
+| 1 通话底座 | compose 起来；两个 UA 能经 Kamailio 音频通话 |
+| 2 视频界面 | 视频 SDP 能过（编解码与客户端约定 OpenH264 或同一套 H.264） |
+| 3 消息文件 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
+| 4 后台统计 | MySQL 给后台用；ESL 端口通 |
+| 5 房间 MCU | 6–8 路进同一会议室，第 9 人拒绝 |
+| 6 交付 | 演示用一键 `docker compose up` |
 
 和客户端对齐端口与账号。和后台对齐房间 id 规则、ESL 密码。

@@ -17,4 +17,4 @@
 
 ## 镜像
 
-compose 里是占位镜像，第 1 周换成组内能拉到、带 `mod_conference` 视频的 tag，并回写 [docs/deps.md](../../docs/deps.md)。
+compose 里是占位镜像，阶段 1 换成组内能拉到、带 `mod_conference` 视频的 tag，并回写 [docs/deps.md](../../docs/deps.md)。

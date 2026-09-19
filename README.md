@@ -4,6 +4,8 @@
 
 - 整体规划与三人分工：[docs/整体规划.md](docs/整体规划.md)
 - 开源依赖（钉版本，不拷全仓）：[docs/deps.md](docs/deps.md)
+- 上游怎么改：[docs/如何改开源组件.md](docs/如何改开源组件.md)
+- PR 规范：[docs/PR规范.md](docs/PR规范.md)
 
 ## 结构
 
@@ -15,7 +17,7 @@ admin/     Spring Boot 单体
 docs/      规划与分工
 ```
 
-## 怎么跑（第 1 周目标）
+## 怎么跑（阶段 1）
 
 ```bash
 cd server && docker compose up -d
@@ -26,4 +28,4 @@ cd server && docker compose up -d
 ## 协作
 
 仓库：https://github.com/GaiYa0/software-practise  
-在仓库 Settings → Collaborators 里加另外两名同学。不要提交 `.dll` / `.dylib`。
+在仓库 Settings → Collaborators 里加另外两名同学。不要提交 `.dll` / `.dylib`。改代码走 PR，见 [docs/PR规范.md](docs/PR规范.md)。

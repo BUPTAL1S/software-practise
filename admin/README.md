@@ -19,4 +19,4 @@
 - Spring Data JPA + MySQL（compose 服务 `mysql`）
 - ESL：`org.freeswitch.esl.client` 一系，只订房间成员增减
 
-第 1 周先能连上 MySQL。Kamailio 先用静态账号，不必第一周就和 users 表同步。
+阶段 1 先能连上 MySQL。Kamailio 先用静态账号，不必一开始就和 users 表同步。

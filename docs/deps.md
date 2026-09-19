@@ -1,6 +1,6 @@
 # 用到的开源项目
 
-本仓库只放课设代码和配置说明，不 vendor 上游全仓，不加巨型 submodule。
+本仓库只放课设代码和配置说明，不 vendor 上游全仓，不加巨型 submodule。怎么在本地编 JNI、改 cfg，见 [如何改开源组件.md](如何改开源组件.md)。
 
 ## 采用
 
@@ -29,4 +29,4 @@ PJSIP Java 绑定：用发行源码里 `pjsip-apps/src/swig/java` 按官方文�
 
 ## 镜像占位
 
-compose 里的 tag 在第 1 周由信令角色选定后，回写本表「与 compose 一致」那一行，避免三个人各拉各的 latest。
+compose 里的 tag 在阶段 1 由信令角色选定后，回写本表「与 compose 一致」那一行，避免三个人各拉各的 latest。
