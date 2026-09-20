@@ -9,11 +9,11 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
-import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 public final class MainApp extends Application {
@@ -22,7 +22,17 @@ public final class MainApp extends Application {
           new SipService.Events() {
             @Override
             public void log(String msg) {
-              Platform.runLater(() -> append(msg));
+              Platform.runLater(() -> logs.appendApp(msg));
+            }
+
+            @Override
+            public void log(String category, String msg) {
+              Platform.runLater(() -> logs.append(category, msg));
+            }
+
+            @Override
+            public void sip(boolean outgoing, String summary, String raw) {
+              Platform.runLater(() -> logs.appendSip(outgoing, summary, raw));
             }
 
             @Override
@@ -37,7 +47,8 @@ public final class MainApp extends Application {
             }
           });
 
-  private TextArea log;
+  private LogView logs;
+  private Label callStatus;
   private TextField server;
   private ComboBox<String> transport;
   private Button startEngine;
@@ -81,17 +92,28 @@ public final class MainApp extends Application {
     call = new Button("呼叫");
     answer = new Button("接听");
     hangup = new Button("挂断");
-    log = new TextArea();
-    log.setEditable(false);
-    log.setPrefRowCount(12);
+    logs = new LogView();
+    callStatus = new Label();
+    callStatus.setStyle(
+        "-fx-font-size: 13px; -fx-padding: 6 8 6 8; -fx-background-color: #f6f8fa;"
+            + " -fx-background-radius: 6; -fx-border-color: #d0d7de; -fx-border-radius: 6;");
+    callStatus.setMaxWidth(Double.MAX_VALUE);
 
     fillLan.setOnAction(
         e -> {
           if (campusIp.isEmpty()) {
-            append("没有探测到校园网 IPv4（跳过了回环/虚拟网卡）。");
+            logs.appendApp("没有探测到校园网 IPv4（跳过了回环/虚拟网卡）。");
             return;
           }
           server.setText(campusIp);
+          if (!CampusLan.probeTcp(campusIp) && CampusLan.probeTcp("127.0.0.1")) {
+            logs.appendApp(
+                "本机访问 "
+                    + campusIp
+                    + ":5060 不通（Docker Desktop 常见）。同机注册请改成 127.0.0.1；Mac 仍填 "
+                    + campusIp
+                    + "。");
+          }
         });
     startEngine.setOnAction(
         e ->
@@ -119,7 +141,6 @@ public final class MainApp extends Application {
     GridPane grid = new GridPane();
     grid.setHgap(8);
     grid.setVgap(8);
-    grid.setPadding(new Insets(12));
     int r = 0;
     grid.add(new Label("SIP 服务器"), 0, r);
     HBox serverRow = new HBox(8, server, fillLan);
@@ -139,32 +160,45 @@ public final class MainApp extends Application {
     grid.add(peer, 1, r++);
     HBox buttons = new HBox(8, startEngine, register, call, answer, hangup);
     grid.add(buttons, 0, r++, 2, 1);
-    grid.add(log, 0, r, 2, 1);
     GridPane.setHgrow(serverRow, Priority.ALWAYS);
 
+    VBox root = new VBox(10, grid, callStatus, logs);
+    root.setPadding(new Insets(12));
+    VBox.setVgrow(logs, Priority.ALWAYS);
+
     stage.setTitle("SIP 客户端 · 阶段 1 音频");
-    stage.setScene(new Scene(grid, 620, 480));
+    stage.setScene(new Scene(root, 760, 640));
     stage.setOnCloseRequest(e -> sip.shutdown());
     stage.show();
 
-    append("SIP 服务器 = Kamailio 所在机器的校园网 IP；本机 IP 只用于 Contact。");
-    append(
+    logs.appendApp("SIP 服务器 = Kamailio 所在机器的校园网 IP；本机 IP 只用于 Contact。");
+    logs.appendApp(
         campusIp.isEmpty()
             ? "未探测到校园网 IPv4。"
             : "本机校园网：" + campusIp);
-    if (!LocalPrefs.server.isEmpty()) {
+    String filled = server.getText() == null ? "" : server.getText().trim();
+    if (!named.containsKey("server")
+        && !CampusLan.probeTcp(filled.isEmpty() ? campusIp : filled)
+        && CampusLan.probeTcp("127.0.0.1")) {
+      server.setText("127.0.0.1");
+      logs.appendApp(
+          "本机连校园网 IP:5060 不通（Docker Desktop 连自己的局域网地址会超时），"
+              + "SIP 服务器已改为 127.0.0.1。Mac 端仍填 "
+              + campusIp
+              + "。");
+    } else if (!LocalPrefs.server.isEmpty()) {
       if (CampusLan.probeTcp(LocalPrefs.server)) {
-        append("上次代理 " + LocalPrefs.server + " TCP 可达。");
+        logs.appendApp("上次代理 " + LocalPrefs.server + " TCP 可达。");
       } else {
-        append(
+        logs.appendApp(
             "上次代理不可达，可点「填入本机 IP」或问信令要新 IP（当前仍填着 "
                 + LocalPrefs.server
                 + "）。");
       }
     }
-    append("同机第二窗口：mvn javafx:run -Djavafx.args=\"--user=1002 --port=5062 --peer=1001\"");
-    append("必须用 TCP。只让一边呼叫，等对端出现「来电」再接听。");
-    append("两窗口不要用同一个账号，Kamailio 内存 usrloc 会被后注册的顶掉。");
+    logs.appendApp("同机第二窗口：mvn javafx:run -Djavafx.args=\"--user=1002 --port=5062 --peer=1001\"");
+    logs.appendApp("必须用 TCP。只让一边呼叫，等对端出现「来电」再接听。");
+    logs.appendApp("两窗口不要用同一个账号，Kamailio 内存 usrloc 会被后注册的顶掉。");
     refreshButtons();
   }
 
@@ -175,19 +209,16 @@ public final class MainApp extends Application {
     call.setDisable(!sip.isRegistered());
     answer.setDisable(!sip.hasIncoming());
     hangup.setDisable(!on);
+    callStatus.setText("状态  " + sip.statusText());
   }
 
   private void run(Throwing action) {
     try {
       action.run();
-    } catch (Exception ex) {
-      append("错误：" + ex.getMessage());
+    } catch (Throwable ex) {
+      logs.append("错误", ex.getClass().getSimpleName() + "：" + ex.getMessage());
     }
     refreshButtons();
-  }
-
-  private void append(String msg) {
-    log.appendText(msg + "\n");
   }
 
   @FunctionalInterface
