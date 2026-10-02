@@ -60,6 +60,7 @@ final class SipService {
   private String outboundProxy = "";
   private int lastRegCode;
   private int hangupWatchSeq;
+  private boolean byeAnswered;
   private ScheduledFuture<?> hangupWatchTask;
 
   SipService(Events events) {
@@ -261,14 +262,20 @@ final class SipService {
   }
 
   void hangup() {
-    ClientCall call = hangupQuiet();
+    ClientCall call;
+    String proxy;
+    synchronized (this) {
+      call = activeCall;
+      proxy = outboundProxy;
+    }
     if (call == null) {
       events.log("通话", "当前没有通话");
       events.stateChanged();
       return;
     }
-    events.log("通话", "正在发送 BYE" + (outboundProxy.isEmpty() ? "" : " 经 " + outboundProxy));
+    events.log("通话", "正在发送 BYE" + (proxy.isEmpty() ? "" : " 经 " + proxy));
     armHangupWatch(call);
+    hangupQuiet(false);
     events.stateChanged();
   }
 
@@ -336,8 +343,9 @@ final class SipService {
     EpConfig epConfig = new EpConfig();
     logWriter = new ClientLogWriter();
     epConfig.getLogConfig().setWriter(logWriter);
+    // pjsua 只把 level <= consoleLevel 的日志交给自定义 writer；SIP 报文 dump 是 4 级。
     epConfig.getLogConfig().setLevel(4);
-    epConfig.getLogConfig().setConsoleLevel(2);
+    epConfig.getLogConfig().setConsoleLevel(4);
     epConfig.getLogConfig().setMsgLogging(1);
     long decor = epConfig.getLogConfig().getDecor();
     decor &=
@@ -379,7 +387,13 @@ final class SipService {
   }
 
   private ClientCall hangupQuiet() {
-    cancelHangupWatch();
+    return hangupQuiet(true);
+  }
+
+  private ClientCall hangupQuiet(boolean cancelWatch) {
+    if (cancelWatch) {
+      cancelHangupWatch();
+    }
     ClientCall call;
     synchronized (this) {
       call = activeCall;
@@ -399,44 +413,55 @@ final class SipService {
     return call;
   }
 
+  // PJSIP 一发出 BYE 就把通话置为 DISCONNECTED，不等应答；要判断对端是否收到，只能看 BYE 的响应。
   private void armHangupWatch(ClientCall call) {
     cancelHangupWatch();
     final int seq;
     synchronized (this) {
       seq = ++hangupWatchSeq;
+      byeAnswered = false;
     }
     hangupWatchTask =
         hangupWatch.schedule(
             () -> {
               synchronized (SipService.this) {
-                if (seq != hangupWatchSeq || activeCall != call) {
+                if (seq != hangupWatchSeq || byeAnswered) {
                   return;
                 }
               }
-              try {
-                int state = call.getInfo().getState();
-                if (state != pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
-                  events.log(
-                      "警告",
-                      "3 秒内没有 DISCONNECTED，对端可能仍显示通话中。"
-                          + "BYE 应走注册时的代理（本机 Docker 填 127.0.0.1，Mac 填校园网 IP）。");
-                }
-              } catch (Exception ignored) {
-                events.log(
-                    "警告",
-                    "挂断后状态读不到，对端可能没收到 BYE。确认 SIP 服务器仍是注册时用的代理。");
-              }
+              events.log(
+                  "警告",
+                  "BYE 发出 4 秒没有收到应答，对端可能仍显示通话中。"
+                      + "本机 Docker 的 SIP 服务器要填 127.0.0.1，Mac 填校园网 IP；信令侧看 Kamailio 日志。");
             },
-            3,
+            4,
             TimeUnit.SECONDS);
   }
 
+  private void onByeResponse(int code, String reason) {
+    boolean first;
+    synchronized (this) {
+      first = !byeAnswered;
+      byeAnswered = true;
+    }
+    if (!first) {
+      return;
+    }
+    cancelHangupWatch();
+    if (code >= 200 && code < 300) {
+      events.log("通话", "对端已确认挂断 " + code + " " + reason);
+    } else if (code >= 300) {
+      events.log("警告", "BYE 被拒绝 " + code + " " + reason + "，对端可能仍显示通话中");
+    }
+  }
+
   private void cancelHangupWatch() {
+    ScheduledFuture<?> task;
     synchronized (this) {
       hangupWatchSeq++;
+      task = hangupWatchTask;
+      hangupWatchTask = null;
     }
-    ScheduledFuture<?> task = hangupWatchTask;
-    hangupWatchTask = null;
     if (task != null) {
       task.cancel(false);
     }
@@ -485,6 +510,17 @@ final class SipService {
         summary = compactPjsipHeader(msg);
       }
       events.sip(tx, summary, msg);
+      if (rx && msg.contains("Response msg ") && msg.contains("/BYE/") && summary.startsWith("SIP/2.0 ")) {
+        String[] parts = summary.split("\\s+", 3);
+        try {
+          int code = Integer.parseInt(parts[1]);
+          if (code >= 200) {
+            onByeResponse(code, parts.length > 2 ? parts[2] : "");
+          }
+        } catch (NumberFormatException ignored) {
+          // not a status line
+        }
+      }
       return true;
     }
 
@@ -598,9 +634,14 @@ final class SipService {
               incomingRinging = false;
             }
           }
-          cancelHangupWatch();
           String detail = ci.getLastStatusCode() + " " + ci.getLastReason();
-          events.log("通话", local ? "本端已断开 " + detail : "对端已挂断 " + detail);
+          if (local) {
+            // 本端挂断：DISCONNECTED 只说明 BYE 已发出，是否送达看 onByeResponse。
+            events.log("通话", "本端已断开 " + detail + "，等待对端应答 BYE");
+          } else {
+            cancelHangupWatch();
+            events.log("通话", "对端已挂断 " + detail);
+          }
           Platform.runLater(
               () -> {
                 try {
