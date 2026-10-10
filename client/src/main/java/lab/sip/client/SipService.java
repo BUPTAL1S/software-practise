@@ -23,13 +23,19 @@ import org.pjsip.pjsua2.OnIncomingCallParam;
 import org.pjsip.pjsua2.OnRegStateParam;
 import org.pjsip.pjsua2.StringVector;
 import org.pjsip.pjsua2.TransportConfig;
+import org.pjsip.pjsua2.VidDevManager;
+import org.pjsip.pjsua2.VideoDevInfo;
+import org.pjsip.pjsua2.VideoPreview;
+import org.pjsip.pjsua2.VideoPreviewOpParam;
+import org.pjsip.pjsua2.VideoWindow;
 import org.pjsip.pjsua2.pj_log_decoration;
 import org.pjsip.pjsua2.pjmedia_type;
 import org.pjsip.pjsua2.pjsip_inv_state;
 import org.pjsip.pjsua2.pjsip_status_code;
 import org.pjsip.pjsua2.pjsip_transport_type_e;
+import org.pjsip.pjsua2.pjsua_call_media_status;
 
-/** PJSUA2 wrapper: REGISTER + one-to-one audio. No video, no MCU fallback. */
+/** PJSUA2 wrapper: REGISTER + audio and video. */
 final class SipService {
   interface Events {
     void log(String msg);
@@ -53,6 +59,7 @@ final class SipService {
   private ClientLogWriter logWriter;
   private ClientAccount account;
   private ClientCall activeCall;
+  private VideoPreview videoPreview;
   private boolean started;
   private boolean incomingRinging;
   private int boundPort;
@@ -73,6 +80,92 @@ final class SipService {
 
   synchronized boolean isRegistered() {
     return started && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
+  }
+
+  boolean hasVideoSupport() {
+    synchronized (this) {
+      if (!started || endpoint == null) {
+        return false;
+      }
+      try {
+        return endpoint.vidDevManager().getDevCount() > 0;
+      } catch (Throwable ignored) {
+        return false;
+      }
+    }
+  }
+
+  int findDefaultCaptureDev() {
+    synchronized (this) {
+      if (endpoint == null) {
+        return -1;
+      }
+      try {
+        VidDevManager vidMgr = endpoint.vidDevManager();
+        int count = (int) vidMgr.getDevCount();
+        int fallback = -1;
+        for (int i = 0; i < count; i++) {
+          VideoDevInfo info = vidMgr.getDevInfo(i);
+          int dir = info.getDir();
+          if (dir == 1 || dir == 3) {
+            String name = info.getName().toLowerCase();
+            if (!name.contains("colorbar")) {
+              return i;
+            }
+            if (fallback < 0) {
+              fallback = i;
+            }
+          }
+        }
+        return fallback;
+      } catch (Throwable ignored) {
+        return -1;
+      }
+    }
+  }
+
+  synchronized boolean isPreviewActive() {
+    return videoPreview != null;
+  }
+
+  synchronized void startPreview() throws Exception {
+    if (!started || endpoint == null) {
+      throw new IllegalStateException("请先启动引擎");
+    }
+    if (videoPreview != null) {
+      return;
+    }
+    int capDev = findDefaultCaptureDev();
+    if (capDev < 0) {
+      throw new IllegalStateException("未检测到可用的视频输入设备");
+    }
+    videoPreview = new VideoPreview(capDev);
+    videoPreview.start(new VideoPreviewOpParam());
+    try {
+      VideoWindow win = videoPreview.getVideoWindow();
+      if (win != null) {
+        win.Show(true);
+      }
+    } catch (Exception ignored) {
+    }
+    events.log("系统", "本地摄像头预览已开启 (设备 ID=" + capDev + ")");
+    events.stateChanged();
+  }
+
+  synchronized void stopPreview() {
+    if (videoPreview != null) {
+      try {
+        videoPreview.stop();
+      } catch (Exception ignored) {
+      }
+      try {
+        videoPreview.delete();
+      } catch (Exception ignored) {
+      }
+      videoPreview = null;
+      events.log("系统", "本地摄像头预览已关闭");
+      events.stateChanged();
+    }
   }
 
   boolean hasIncoming() {
@@ -203,8 +296,17 @@ final class SipService {
     cfg.getNatConfig().setContactRewriteUse(0);
     cfg.getNatConfig().setViaRewriteUse(0);
     cfg.getNatConfig().setContactUseSrcPort(0);
-    cfg.getVideoConfig().setAutoShowIncoming(false);
-    cfg.getVideoConfig().setAutoTransmitOutgoing(false);
+    if (hasVideoSupport()) {
+      cfg.getVideoConfig().setAutoShowIncoming(true);
+      cfg.getVideoConfig().setAutoTransmitOutgoing(true);
+      int capDev = findDefaultCaptureDev();
+      if (capDev >= 0) {
+        cfg.getVideoConfig().setDefaultCaptureDevice(capDev);
+      }
+    } else {
+      cfg.getVideoConfig().setAutoShowIncoming(false);
+      cfg.getVideoConfig().setAutoTransmitOutgoing(false);
+    }
     // 经 127.0.0.1 连 Docker 时 PJSIP 会把 Contact 写成回环，容器内 INVITE 回不了本机。
     String advertise = advertisedIp.isBlank() ? CampusLan.detect() : advertisedIp;
     if (!advertise.isBlank() && !advertise.equals("127.0.0.1") && !advertise.equals("localhost")) {
@@ -236,6 +338,10 @@ final class SipService {
   }
 
   void call(String peerUser, String domain) throws Exception {
+    call(peerUser, domain, true);
+  }
+
+  void call(String peerUser, String domain, boolean video) throws Exception {
     if (!isRegistered()) {
       throw new IllegalStateException("尚未注册成功");
     }
@@ -256,8 +362,14 @@ final class SipService {
       activeCall = next;
       proxy = outboundProxy;
     }
-    next.makeCall(dst, new CallOpParam(true));
-    events.log("通话", "正在呼叫 " + dst + (proxy.isEmpty() ? "" : " 经 " + proxy));
+    CallOpParam prm = new CallOpParam(true);
+    if (!video) {
+      prm.getOpt().setVideoCount(0);
+    }
+    next.makeCall(dst, prm);
+    events.log(
+        "通话",
+        "正在发起" + (video ? "视频" : "语音") + "呼叫 " + dst + (proxy.isEmpty() ? "" : " 经 " + proxy));
     events.stateChanged();
   }
 
@@ -280,6 +392,10 @@ final class SipService {
   }
 
   void answer() throws Exception {
+    answer(true);
+  }
+
+  void answer(boolean video) throws Exception {
     ClientCall call;
     synchronized (this) {
       call = activeCall;
@@ -295,17 +411,21 @@ final class SipService {
     }
     CallOpParam prm = new CallOpParam();
     prm.setStatusCode(pjsip_status_code.PJSIP_SC_OK);
+    if (!video) {
+      prm.getOpt().setVideoCount(0);
+    }
     call.answer(prm);
     synchronized (this) {
       if (activeCall == call) {
         incomingRinging = false;
       }
     }
-    events.log("通话", "已接听 " + nullToEmpty(info.getRemoteUri()));
+    events.log("通话", "已接听" + (video ? "（视频）" : "（语音）") + " " + nullToEmpty(info.getRemoteUri()));
     events.stateChanged();
   }
 
   void shutdown() {
+    stopPreview();
     cancelHangupWatch();
     hangupQuiet();
     ClientAccount acc;
@@ -670,10 +790,25 @@ final class SipService {
             endpoint.audDevManager().getCaptureDevMedia().startTransmit(audio);
             audio.startTransmit(endpoint.audDevManager().getPlaybackDevMedia());
             events.log("通话", "音频已接通");
+          } else if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
+            if (media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
+              int winId = media.getVideoIncomingWindowId();
+              if (winId >= 0) {
+                try {
+                  VideoWindow vidWin = new VideoWindow(winId);
+                  vidWin.Show(true);
+                  events.log("通话", "视频流已接通 (窗口 ID=" + winId + ")");
+                } catch (Exception ve) {
+                  events.log("警告", "视频窗口显示异常: " + ve.getMessage());
+                }
+              } else {
+                events.log("通话", "视频媒体已激活");
+              }
+            }
           }
         }
       } catch (Exception e) {
-        events.log("错误", "音频连接失败：" + e.getMessage());
+        events.log("错误", "媒体连接处理失败：" + e.getMessage());
       }
     }
   }
