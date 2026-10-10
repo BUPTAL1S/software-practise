@@ -1,0 +1,134 @@
+diff --git a/pjmedia/src/pjmedia-videodev/metal_dev.m b/pjmedia/src/pjmedia-videodev/metal_dev.m
+index b908c8b..c76762e 100644
+--- a/pjmedia/src/pjmedia-videodev/metal_dev.m
++++ b/pjmedia/src/pjmedia-videodev/metal_dev.m
+@@ -472,7 +472,15 @@ - (void)update_image
+     id<MTLTexture> texture;
+     MTLTextureDescriptor *textureDescriptor;
+     MTLRegion region;
+-    unsigned width = stream->size.w, height = stream->size.h;
++    unsigned width, height;
++
++    if (!stream || !stream->is_running || !_view) {
++        if (stream) stream->is_rendering = PJ_FALSE;
++        return;
++    }
++
++    width = stream->size.w;
++    height = stream->size.h;
+ 
+     /* Place the buffer into a texture */
+     textureDescriptor = [MTLTextureDescriptor
+@@ -484,12 +492,23 @@ - (void)update_image
+     [texture replaceRegion:region mipmapLevel:0 withBytes:stream->render_buf
+              bytesPerRow:stream->bytes_per_row];
+ 
++    /* Get the drawable that will be presented at the end of the frame */
++    drawable = _view.currentDrawable;
++    if (drawable == nil) {
++        [texture release];
++        stream->is_rendering = PJ_FALSE;
++        return;
++    }
++
+     /* The render pass descriptor references the texture into which Metal
+      * should draw.
+      */
+     renderPassDescriptor = _view.currentRenderPassDescriptor;
+-    if (renderPassDescriptor == nil)
++    if (renderPassDescriptor == nil) {
++        [texture release];
+        stream->is_rendering = PJ_FALSE;
+         return;
++    }
+ 
+     commandBuffer = [commandQueue commandBuffer];
+ 
+@@ -505,12 +524,6 @@ - (void)update_image
+ 
+     [renderEncoder endEncoding];
+     
+-    /* Get the drawable that will be presented at the end of the frame */
+-    drawable = _view.currentDrawable;
+-
+-    /* Request that the drawable texture be presented by the windowing system
+-     * once drawing is done.
+-     */
+     [commandBuffer presentDrawable:drawable];
+     [commandBuffer commit];
+ 
+@@ -553,7 +566,7 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
+         return PJMEDIA_EVID_SYSERR;
+ 
+     strm->view.enableSetNeedsDisplay = NO;
+-    strm->view.paused = NO;
++    strm->view.paused = YES;
+     strm->view.device = MTLCreateSystemDefaultDevice();
+     strm->view.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+     strm->param.window.info.window = strm->view;
+@@ -582,6 +595,8 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
+         if (!strm->window)
+             return PJMEDIA_EVID_SYSERR;
+ 
++        [strm->window setReleasedWhenClosed:NO];
++
+         /* Make the window visible */
+         [strm->window.contentView addSubview:strm->view];
+         [strm->window makeKeyAndOrderFront:strm->window];
+@@ -919,9 +934,18 @@ static pj_status_t metal_stream_stop(pjmedia_vid_dev_stream *strm)
+ 
+     stream->is_running = PJ_FALSE;
+ 
+-    /* Wait until the rendering finishes */
+-    for (i = 0; i < 15; i++) pj_thread_sleep(10);
+-    while (stream->is_rendering);
++    if (stream->renderer) {
++        dispatch_sync_on_main_queue(^{
++            [NSObject cancelPreviousPerformRequestsWithTarget:stream->renderer
++                      selector:@selector(update_image) object:nil];
++        });
++    }
++
++    /* Wait until the rendering finishes if not on main thread */
++    if (![NSThread isMainThread]) {
++        for (i = 0; i < 15 && stream->is_rendering; i++) pj_thread_sleep(10);
++    }
++    stream->is_rendering = PJ_FALSE;
+     
+     return PJ_SUCCESS;
+ }
+@@ -936,24 +960,30 @@ static pj_status_t metal_stream_destroy(pjmedia_vid_dev_stream *strm)
+ 
+     metal_stream_stop(strm);
+ 
+-    if (stream->renderer) {
+-        [stream->renderer release];
+-        stream->renderer = nil;
+-    }
++    dispatch_sync_on_main_queue(^{
++        if (stream->renderer) {
++            [NSObject cancelPreviousPerformRequestsWithTarget:stream->renderer];
++        }
++
++        if (stream->view) {
++            stream->view.delegate = nil;
++            [stream->view removeFromSuperview];
++            [stream->view release];
++            stream->view = nil;
++        }
++
++        if (stream->renderer) {
++            [stream->renderer release];
++            stream->renderer = nil;
++        }
++
++        if (stream->window) {
++            NSWindow *win = stream->window;
++            stream->window = nil;
++            [win close];
++            [win release];
++        }
++    });
+     
+     pjmedia_vid_dev_conv_destroy_converter(&stream->conv);
+ 

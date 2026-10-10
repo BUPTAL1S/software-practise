@@ -223,15 +223,16 @@ final class SipService {
 
   synchronized void stopPreview() {
     if (videoPreview != null) {
-      try {
-        videoPreview.stop();
-      } catch (Exception ignored) {
-      }
-      try {
-        videoPreview.delete();
-      } catch (Exception ignored) {
-      }
+      VideoPreview vp = videoPreview;
       videoPreview = null;
+      try {
+        vp.stop();
+      } catch (Exception ignored) {
+      }
+      try {
+        vp.delete();
+      } catch (Exception ignored) {
+      }
       events.log("系统", "本地摄像头预览已关闭");
       events.stateChanged();
     }

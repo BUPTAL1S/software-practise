@@ -7,6 +7,7 @@ brew install swig openjdk@17 sdl2
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17
 git clone --branch 2.17 --depth 1 https://github.com/pjsip/pjproject.git ~/src/pjproject
 cd ~/src/pjproject
+git apply /path/to/software-practise/native/macos-arm64/pjsip-metal-fix.patch
 printf '%s\n' 'export CFLAGS += -fPIC' > user.mak
 printf '%s\n' '#define PJMEDIA_HAS_VIDEO 1' '#define PJMEDIA_HAS_VID_TOOLBOX_CODEC 1' > pjlib/include/pj/config_site.h
 ./configure --disable-ffmpeg --disable-libwebrtc
