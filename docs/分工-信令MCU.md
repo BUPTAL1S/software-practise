@@ -33,7 +33,7 @@
 | 阶段 | 你交出什么 |
 |---|---|
 | 1 通话底座 | compose 起来；两个 UA 能经 Kamailio 音频通话 |
-| 2 视频界面 | 视频 SDP 能过（编解码与客户端约定 OpenH264 或同一套 H.264） |
+| 2 视频界面 | 视频 SDP 能过。约定 PJSIP 2.17 OpenH264：`97 H264/90000`，`profile-level-id=42e01e`，`packetization-mode=1`。一对一不改 SDP、不进 MCU |
 | 3 消息文件 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
 | 4 后台统计 | ESL 端口通，供后台订房间事件 |
 | 5 房间 MCU | 6–8 路进同一会议室，第 9 人拒绝 |
