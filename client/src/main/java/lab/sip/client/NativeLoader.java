@@ -15,16 +15,38 @@ final class NativeLoader {
               + lib
               + "\n请按 native/macos-arm64/BUILD.md 或 native/windows-x64/BUILD.md 编译后拷到该目录。");
     }
-    // Windows LoadLibrary(abs) does not search the DLL folder for dependents.
     Path dir = lib.getParent();
-    if (dir != null && System.getProperty("os.name", "").toLowerCase().contains("win")) {
-      for (String dep :
-          new String[] {
-            "libwinpthread-1.dll", "libgcc_s_seh-1.dll", "libssp-0.dll", "libstdc++-6.dll"
-          }) {
-        Path p = dir.resolve(dep);
-        if (Files.isRegularFile(p)) {
-          System.load(p.toAbsolutePath().toString());
+    if (dir != null) {
+      if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+        // Windows LoadLibrary(abs) does not search the DLL folder for dependents.
+        for (String dep :
+            new String[] {
+              "libwinpthread-1.dll",
+              "libgcc_s_seh-1.dll",
+              "libssp-0.dll",
+              "libstdc++-6.dll",
+              "openh264.dll",
+              "libopenh264.dll",
+              "SDL2.dll"
+            }) {
+          Path p = dir.resolve(dep);
+          if (Files.isRegularFile(p)) {
+            try {
+              System.load(p.toAbsolutePath().toString());
+            } catch (Throwable ignored) {
+            }
+          }
+        }
+      } else {
+        // macOS preloads openh264 if bundled
+        for (String dep : new String[] {"libopenh264.dylib", "libopenh264.jnilib"}) {
+          Path p = dir.resolve(dep);
+          if (Files.isRegularFile(p)) {
+            try {
+              System.load(p.toAbsolutePath().toString());
+            } catch (Throwable ignored) {
+            }
+          }
         }
       }
     }

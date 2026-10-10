@@ -1,8 +1,16 @@
 # 在 Windows x64 上编译 pjsua2.dll
 
-本机是 Windows 时按此做。不要把 `.dll` 提交进 git。PJSIP **必须 2.17**，与 Mac 同一 tag。阶段 1 只开音频。
+本机是 Windows 时按此做。不要把 `.dll` 提交进 git。PJSIP **必须 2.17**，与 Mac 同一 tag。阶段 2 开启视频支持（OpenH264 编解码器与 DirectShow/SDL 视频驱动）。
 
 官方说明：https://docs.pjsip.org/en/latest/pjsua2/building.html
+
+## 编解码器约定（双端对齐）
+
+全组统一采用 **H.264** 编解码（SDP 编码名 `H264`，时钟率 90000，Packetization-Mode 1）：
+- **Windows**：编译依赖 Cisco `openh264`，由 MSYS2 MinGW-w64 提供；
+- **macOS**：系统自带硬件加速 `VideoToolbox` H.264，亦支持 `openh264`；
+- **Kamailio**：透传 SDP 视频 m-line，不转码；
+- **FreeSWITCH MCU**：阶段 5 会议室默认接受 H.264。
 
 ## 准备
 
@@ -12,27 +20,37 @@
 
 ## 步骤
 
-在 MSYS2 MinGW64 终端：
+在 MSYS2 MinGW64 终端（`C:\msys64\mingw64.exe`）：
 
 ```bash
-pacman -S --needed git make mingw-w64-x86_64-gcc swig
+pacman -S --needed git make mingw-w64-x86_64-gcc swig mingw-w64-x86_64-openh264 mingw-w64-x86_64-SDL2
 git clone --branch 2.17 --depth 1 https://github.com/pjsip/pjproject.git "$HOME/src/pjproject"
 cd "$HOME/src/pjproject"
 cat > user.mak << 'EOF'
 export CFLAGS += -fPIC
 EOF
-./configure --disable-video --disable-libwebrtc
+printf '%s\n' '#define PJMEDIA_HAS_VIDEO 1' '#define PJMEDIA_HAS_OPENH264_CODEC 1' > pjlib/include/pj/config_site.h
+./configure --disable-ffmpeg --disable-libwebrtc
 make dep
-make
+make -j"$(nproc)"
 cd pjsip-apps/src/swig/java
 make
 ```
 
-把生成的 `pjsua2.dll`（以及同目录依赖的 `libgcc` / `libstdc++` / `libwinpthread` 等，若有）拷到本目录：
+把生成的 `pjsua2.dll` 拷到仓库根目录 `native/windows-x64/`：
 
 ```text
 native/windows-x64/pjsua2.dll
 ```
+
+并将 MinGW 依赖 DLL（从 `C:\msys64\mingw64\bin\` 拷贝）：
+- `libwinpthread-1.dll`
+- `libgcc_s_seh-1.dll`
+- `libssp-0.dll`
+- `libstdc++-6.dll`
+- `libopenh264-*.dll`（或重命名为 `openh264.dll`）
+- `SDL2.dll`
+拷到 `native/windows-x64/` 同一目录。`NativeLoader` 会在加载 `pjsua2.dll` 前自动预加载这些同级依赖。
 
 SWIG 生成的 Java 若与仓库 `client/src/main/java/org/pjsip/pjsua2/` 不一致，用 2.17 重新生成后覆盖那一份（Win/Mac 共用，不要各改各的）。
 
