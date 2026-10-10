@@ -76,6 +76,33 @@ JavaFX 客户端默认 TCP，会记住上次代理。本机 IP 只用于 Contact
 2. `1001` 呼叫 `1002`，能振铃、接通、有声音。任一方挂断，对端应变 DISCONNECTED。
 3. 反向呼叫同样通。改 cfg 后必须 `docker compose restart kamailio`（或重跑 `start-kamailio`）。
 
+## 阶段 2：视频 SDP
+
+一对一仍是 `INVITE sip:<用户>@lab`，经 `lookup` 后原样 `t_relay`。不进 MCU，不加载 rtpengine / sdpops，不改 SDP。`room-*` 仍回 `480 MCU not ready in phase 1`。
+
+客户端用 PJSIP **2.17 OpenH264**，Windows 与 macOS 必须是同一套，不要同时再放 ffmpeg / VideoToolbox 的另一套 H.264：
+
+| 项 | 值 |
+| --- | --- |
+| rtpmap | `97 H264/90000` |
+| profile-level-id | `42e01e`（Constrained Baseline，Level 3.0） |
+| packetization-mode | `1` |
+| fmtp | `profile-level-id=42e01e; packetization-mode=1` |
+
+这是 OpenH264 在 2.17 里的默认值（动态载荷 `PJMEDIA_RTP_PT_H264` = 97）。分号后的空格可有可无，参数值不能换。200 OK 里视频端口变成 0，是对端没编上这套，不是 Kamailio 删的。
+
+媒体仍是两端 RTP 直连，不经过本代理。Contact 继续通告校园网 IP。Windows 防火墙若只放行 5060，信令能通、画面会黑；视频 UDP 打在 Contact 里的媒体端口上。
+
+本机客户端重编原生库、打开 OpenH264 是客户端的事。信令侧只保证上面的视频行能穿过，并且对话内 re-INVITE / ACK / BYE 仍走现有双 Record-Route。
+
+## 阶段 3：一对一 MESSAGE
+
+`MESSAGE sip:<用户>@lab` 发给已注册用户时原样转发，`text/plain` 正文不改，对端的 200 回到主叫。没注册回 404，Kamailio 不存离线消息。文件、图片、语音条走后台 HTTP，不走 SIP，也不做 MSRP。
+
+`room-*` 仍回 `480 MCU not ready in phase 1`，阶段 5 之前不做群聊。
+
+Contact 里如果写了 `methods` 但没有 `MESSAGE`，REGISTER 时会补上，否则 `method_filtering` 对这条消息回 405。没写 `methods` 的客户端不用改。
+
 ## 端口只通 127.0.0.1、不通局域网 IP
 
 Docker Desktop + WSL2 常见。对端仍然填 **启动脚本打印的局域网 IP**，不要把 Domain 改成 `127.0.0.1`。
