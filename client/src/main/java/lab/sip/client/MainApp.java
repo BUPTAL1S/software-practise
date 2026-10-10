@@ -63,6 +63,8 @@ public final class MainApp extends Application {
   private Button hangup;
   private HBox incomingBox;
   private Label incomingNotice;
+  private Label videoBadge;
+  private Label videoDetailLabel;
   private String campusIp = "";
 
   @Override
@@ -138,9 +140,6 @@ public final class MainApp extends Application {
                   int bound =
                       sip.start(Integer.parseInt(sipPort.getText().trim()), campusIp);
                   sipPort.setText(Integer.toString(bound));
-                  if (sip.hasVideoSupport()) {
-                    logs.appendApp("视频支持已开启：检测到硬件视频设备及 H.264 编解码器。");
-                  }
                 }));
 
     register.setOnAction(
@@ -206,7 +205,27 @@ public final class MainApp extends Application {
     incomingBox.setVisible(false);
     incomingBox.setManaged(false);
 
-    VBox callCard = new VBox(8, dialRow, incomingBox);
+    // 视频功能控制与状态行
+    HBox videoTitleRow = new HBox(8);
+    videoTitleRow.setAlignment(Pos.CENTER_LEFT);
+    Label videoTitle = new Label("视频状态:");
+    videoTitle.setStyle("-fx-font-weight: bold;");
+    videoBadge = new Label("未检测");
+    videoBadge.setStyle(
+        "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #eaeef2;"
+            + " -fx-text-fill: #57606a; -fx-background-radius: 4; -fx-border-color: #d0d7de; -fx-border-radius: 4;");
+    videoDetailLabel = new Label("启动引擎后将自动探测 H.264 与采集设备");
+    videoDetailLabel.setStyle("-fx-text-fill: #57606a; -fx-font-size: 11px;");
+    videoTitleRow.getChildren().addAll(videoTitle, videoBadge, videoDetailLabel);
+    HBox.setHgrow(videoTitleRow, Priority.ALWAYS);
+
+    HBox videoRow = new HBox(12, videoTitleRow, previewBtn);
+    videoRow.setAlignment(Pos.CENTER_LEFT);
+    videoRow.setPadding(new Insets(6, 10, 6, 10));
+    videoRow.setStyle(
+        "-fx-background-color: #f6f8fa; -fx-border-color: #d0d7de; -fx-border-radius: 6; -fx-background-radius: 6;");
+
+    VBox callCard = new VBox(8, dialRow, incomingBox, videoRow);
     callCard.setPadding(new Insets(10));
     callCard.setStyle(
         "-fx-background-color: #ffffff; -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8;");
@@ -239,7 +258,7 @@ public final class MainApp extends Application {
     cfgPane.setExpanded(true);
 
     // 顶部状态栏
-    HBox topStatus = new HBox(8, callStatus, previewBtn);
+    HBox topStatus = new HBox(8, callStatus);
     topStatus.setAlignment(Pos.CENTER_LEFT);
 
     VBox root = new VBox(10, topStatus, callCard, cfgPane, logs);
@@ -286,12 +305,18 @@ public final class MainApp extends Application {
     boolean on = sip.isStarted();
     boolean reg = sip.isRegistered();
     boolean incoming = sip.hasIncoming();
-    boolean videoSupported = sip.hasVideoSupport();
+    SipService.VideoDetails vd = sip.queryVideoDetails();
+    boolean videoSupported = vd.supported;
+    boolean hasCapture = vd.captureDevId >= 0;
 
     startEngine.setDisable(on);
     register.setDisable(!on);
-    previewBtn.setDisable(!on || !videoSupported);
-    previewBtn.setText(sip.isPreviewActive() ? "关闭预览" : "摄像头预览");
+    previewBtn.setDisable(!on || !videoSupported || !hasCapture);
+    if (!hasCapture && videoSupported) {
+      previewBtn.setText("无摄像头");
+    } else {
+      previewBtn.setText(sip.isPreviewActive() ? "关闭预览" : "摄像头预览");
+    }
 
     callAudio.setDisable(!reg);
     callVideo.setDisable(!reg || !videoSupported);
@@ -301,11 +326,36 @@ public final class MainApp extends Application {
     incomingBox.setVisible(incoming);
     incomingBox.setManaged(incoming);
     if (incoming) {
-      incomingNotice.setText("来电响铃中：可选择接听视频或仅接听语音");
+      if (videoSupported) {
+        incomingNotice.setText("收到来电：可选择【接听(视频)】或【接听(语音)】");
+      } else {
+        incomingNotice.setText("收到来电：当前为纯音频模式，请选择【接听(语音)】");
+      }
     }
 
     hangup.setDisable(!on);
     callStatus.setText("状态  " + sip.statusText());
+
+    if (!on) {
+      videoBadge.setText("引擎未启动");
+      videoBadge.setStyle(
+          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #eaeef2;"
+              + " -fx-text-fill: #57606a; -fx-background-radius: 4; -fx-border-color: #d0d7de; -fx-border-radius: 4;");
+      videoDetailLabel.setText("启动引擎后将自动探测 H.264 编解码器与视频输入输出设备。");
+    } else if (videoSupported) {
+      videoBadge.setText("视频就绪 (" + vd.codec + ")");
+      videoBadge.setStyle(
+          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #dafbe1;"
+              + " -fx-text-fill: #1a7f37; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #4ac26b; -fx-border-radius: 4;");
+      String capDesc = hasCapture ? vd.captureDev : "无可用摄像头（仅可接收画面）";
+      videoDetailLabel.setText("采集: " + capDesc + " | 渲染: " + vd.renderDev + " | 接通后拉起独立原生低延迟窗口");
+    } else {
+      videoBadge.setText("阶段 1 纯音频模式");
+      videoBadge.setStyle(
+          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #fff8c5;"
+              + " -fx-text-fill: #9a6700; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #d4a72c; -fx-border-radius: 4;");
+      videoDetailLabel.setText("底层动态库未启用 H.264（见 native/ 编译指南）；呼叫与接听已自动降级为语音通话。");
+    }
   }
 
   private void run(Throwing action) {

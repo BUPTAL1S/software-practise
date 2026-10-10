@@ -21,6 +21,9 @@ import org.pjsip.pjsua2.OnCallMediaStateParam;
 import org.pjsip.pjsua2.OnCallStateParam;
 import org.pjsip.pjsua2.OnIncomingCallParam;
 import org.pjsip.pjsua2.OnRegStateParam;
+import org.pjsip.pjsua2.CodecInfo;
+import org.pjsip.pjsua2.CodecInfoVector2;
+import org.pjsip.pjsua2.MediaSize;
 import org.pjsip.pjsua2.StringVector;
 import org.pjsip.pjsua2.TransportConfig;
 import org.pjsip.pjsua2.VidDevManager;
@@ -82,46 +85,105 @@ final class SipService {
     return started && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
   }
 
-  boolean hasVideoSupport() {
+  static final class VideoDetails {
+    final boolean supported;
+    final String codec;
+    final String captureDev;
+    final String renderDev;
+    final int captureDevId;
+    final int renderDevId;
+
+    VideoDetails(
+        boolean supported,
+        String codec,
+        String captureDev,
+        String renderDev,
+        int capId,
+        int renId) {
+      this.supported = supported;
+      this.codec = codec;
+      this.captureDev = captureDev;
+      this.renderDev = renderDev;
+      this.captureDevId = capId;
+      this.renderDevId = renId;
+    }
+  }
+
+  VideoDetails queryVideoDetails() {
     synchronized (this) {
       if (!started || endpoint == null) {
-        return false;
+        return new VideoDetails(false, "引擎未启动", "无", "无", -1, -1);
       }
       try {
-        return endpoint.vidDevManager().getDevCount() > 0;
-      } catch (Throwable ignored) {
-        return false;
+        String foundCodec = "";
+        CodecInfoVector2 codecs = endpoint.videoCodecEnum2();
+        for (int i = 0; i < (int) codecs.size(); i++) {
+          CodecInfo ci = codecs.get(i);
+          if (ci.getPriority() > 0) {
+            String cid = ci.getCodecId();
+            if (foundCodec.isEmpty()) {
+              foundCodec = cid;
+            } else {
+              foundCodec += ", " + cid;
+            }
+          }
+        }
+        if (foundCodec.isEmpty()) {
+          return new VideoDetails(false, "无活跃编解码器", "无", "无", -1, -1);
+        }
+
+        VidDevManager mgr = endpoint.vidDevManager();
+        int devCount = (int) mgr.getDevCount();
+        String capName = "无可用采集设备";
+        int capId = -1;
+        String renName = "系统默认渲染器";
+        int renId = -1;
+
+        int fallbackCap = -1;
+        String fallbackCapName = "";
+
+        for (int i = 0; i < devCount; i++) {
+          VideoDevInfo info = mgr.getDevInfo(i);
+          int dir = info.getDir();
+          if (dir == 1 || dir == 3) {
+            String name = info.getName();
+            if (!name.toLowerCase().contains("colorbar") && capId < 0) {
+              capId = i;
+              capName = name;
+            }
+            if (fallbackCap < 0) {
+              fallbackCap = i;
+              fallbackCapName = name;
+            }
+          }
+          if ((dir == 2 || dir == 3) && renId < 0) {
+            renId = i;
+            renName = info.getName();
+          }
+        }
+
+        if (capId < 0 && fallbackCap >= 0) {
+          capId = fallbackCap;
+          capName = fallbackCapName;
+        }
+
+        return new VideoDetails(true, foundCodec, capName, renName, capId, renId);
+      } catch (Throwable t) {
+        return new VideoDetails(false, "阶段1纯音频模式", "无", "无", -1, -1);
       }
     }
   }
 
+  boolean hasVideoSupport() {
+    return queryVideoDetails().supported;
+  }
+
+  boolean hasCaptureDevice() {
+    return queryVideoDetails().captureDevId >= 0;
+  }
+
   int findDefaultCaptureDev() {
-    synchronized (this) {
-      if (endpoint == null) {
-        return -1;
-      }
-      try {
-        VidDevManager vidMgr = endpoint.vidDevManager();
-        int count = (int) vidMgr.getDevCount();
-        int fallback = -1;
-        for (int i = 0; i < count; i++) {
-          VideoDevInfo info = vidMgr.getDevInfo(i);
-          int dir = info.getDir();
-          if (dir == 1 || dir == 3) {
-            String name = info.getName().toLowerCase();
-            if (!name.contains("colorbar")) {
-              return i;
-            }
-            if (fallback < 0) {
-              fallback = i;
-            }
-          }
-        }
-        return fallback;
-      } catch (Throwable ignored) {
-        return -1;
-      }
-    }
+    return queryVideoDetails().captureDevId;
   }
 
   synchronized boolean isPreviewActive() {
@@ -135,20 +197,27 @@ final class SipService {
     if (videoPreview != null) {
       return;
     }
-    int capDev = findDefaultCaptureDev();
-    if (capDev < 0) {
+    VideoDetails vd = queryVideoDetails();
+    if (!vd.supported || vd.captureDevId < 0) {
       throw new IllegalStateException("未检测到可用的视频输入设备");
     }
-    videoPreview = new VideoPreview(capDev);
+    videoPreview = new VideoPreview(vd.captureDevId);
     videoPreview.start(new VideoPreviewOpParam());
     try {
       VideoWindow win = videoPreview.getVideoWindow();
       if (win != null) {
+        MediaSize sz = new MediaSize();
+        sz.setW(480);
+        sz.setH(320);
+        try {
+          win.setSize(sz);
+        } catch (Throwable ignored) {
+        }
         win.Show(true);
       }
     } catch (Exception ignored) {
     }
-    events.log("系统", "本地摄像头预览已开启 (设备 ID=" + capDev + ")");
+    events.log("系统", "本地摄像头预览已开启 (" + vd.captureDev + ")");
     events.stateChanged();
   }
 
@@ -253,6 +322,19 @@ final class SipService {
     String contact =
         publicIp == null || publicIp.isBlank() ? "" : "，Contact " + publicIp;
     events.log("系统", "引擎已启动，本机 SIP UDP/TCP " + boundPort + contact);
+    VideoDetails vd = queryVideoDetails();
+    if (vd.supported) {
+      events.log(
+          "系统",
+          "视频引擎就绪：编解码器 "
+              + vd.codec
+              + "，输入设备 "
+              + vd.captureDev
+              + "，渲染器 "
+              + vd.renderDev);
+    } else {
+      events.log("系统", "底层库运行于阶段 1 纯音频模式（未检测到视频支持）");
+    }
     events.stateChanged();
     return boundPort;
   }
@@ -345,6 +427,13 @@ final class SipService {
     if (!isRegistered()) {
       throw new IllegalStateException("尚未注册成功");
     }
+    if (video && !hasVideoSupport()) {
+      throw new IllegalStateException("当前底层库未启用视频支持（阶段 1 纯音频库）");
+    }
+    if (isPreviewActive()) {
+      events.log("系统", "正在发起呼叫，自动停止本地摄像头预览以释放设备");
+      stopPreview();
+    }
     hangupQuiet();
     String dst = peerUser.trim();
     if (!dst.startsWith("sip:")) {
@@ -402,6 +491,13 @@ final class SipService {
     }
     if (call == null) {
       throw new IllegalStateException("没有来电");
+    }
+    if (video && !hasVideoSupport()) {
+      throw new IllegalStateException("当前底层库未启用视频支持（阶段 1 纯音频库）");
+    }
+    if (isPreviewActive()) {
+      events.log("系统", "正在接听呼叫，自动停止本地摄像头预览以释放设备");
+      stopPreview();
     }
     CallInfo info = call.getInfo();
     int state = info.getState();
@@ -796,13 +892,20 @@ final class SipService {
               if (winId >= 0) {
                 try {
                   VideoWindow vidWin = new VideoWindow(winId);
+                  MediaSize sz = new MediaSize();
+                  sz.setW(640);
+                  sz.setH(360);
+                  try {
+                    vidWin.setSize(sz);
+                  } catch (Throwable ignored) {
+                  }
                   vidWin.Show(true);
-                  events.log("通话", "视频流已接通 (窗口 ID=" + winId + ")");
+                  events.log("通话", "双向视频流已接通，已拉起独立原生视频窗口 (窗口 ID=" + winId + ")");
                 } catch (Exception ve) {
                   events.log("警告", "视频窗口显示异常: " + ve.getMessage());
                 }
               } else {
-                events.log("通话", "视频媒体已激活");
+                events.log("通话", "视频媒体已激活（等待远端画面）");
               }
             }
           }
