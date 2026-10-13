@@ -12,6 +12,7 @@ final class LocalPrefs {
 
   static String server = "";
   static String transport = "tcp";
+  static String httpServer = "http://localhost:8080";
 
   static void load() {
     Path file = file();
@@ -26,12 +27,17 @@ final class LocalPrefs {
     }
     server = props.getProperty("sip.server", "").trim();
     transport = "tcp";
+    String h = props.getProperty("http.server", "").trim();
+    if (!h.isEmpty()) {
+      httpServer = h;
+    }
   }
 
-  static void save(String sipServer, String sipTransport) {
+  static void save(String sipServer, String sipTransport, String httpUrl) {
     Properties props = new Properties();
     props.setProperty("sip.server", sipServer == null ? "" : sipServer.trim());
     props.setProperty("sip.transport", "tcp");
+    props.setProperty("http.server", httpUrl == null ? "http://localhost:8080" : httpUrl.trim());
     Path file = file();
     try {
       Files.createDirectories(file.getParent());
@@ -40,6 +46,7 @@ final class LocalPrefs {
       }
       server = props.getProperty("sip.server");
       transport = props.getProperty("sip.transport");
+      httpServer = props.getProperty("http.server");
     } catch (IOException ignored) {
       // local convenience only
     }

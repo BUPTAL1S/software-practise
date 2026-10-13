@@ -74,17 +74,22 @@ public class pjsua2JNI {
   public final static native void delete_StringToStringMap(long jarg1);
 
     static {
+      boolean loaded = false;
       try {
-        System.loadLibrary("openh264");
-      } catch (UnsatisfiedLinkError e) {
-        System.err.println("Failed to load native library openh264\n" + e);
-        System.out.println("This could be safely ignored if you " +
-                           "don't use OpenH264 video codec.");
+        lab.sip.client.NativeLoader.load();
+        loaded = true;
+      } catch (Throwable ignored) {
       }
-      try {
-        System.loadLibrary("pjsua2");
-      } catch (UnsatisfiedLinkError e) {
-        System.err.println("Failed to load native library pjsua2\n" + e);
+      if (!loaded) {
+        try {
+          System.loadLibrary("openh264");
+        } catch (UnsatisfiedLinkError ignored) {
+        }
+        try {
+          System.loadLibrary("pjsua2");
+        } catch (UnsatisfiedLinkError e) {
+          System.err.println("Failed to load native library pjsua2\n" + e);
+        }
       }
     }
   

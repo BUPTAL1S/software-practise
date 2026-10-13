@@ -4,10 +4,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /** Loads PJSUA2 JNI from native/windows-x64 or native/macos-arm64. */
-final class NativeLoader {
+public final class NativeLoader {
+  private static boolean loaded = false;
+
   private NativeLoader() {}
 
-  static void load() {
+  public static synchronized void load() {
+    if (loaded) {
+      return;
+    }
     Path lib = libraryFile();
     if (!Files.isRegularFile(lib)) {
       throw new IllegalStateException(
@@ -17,6 +22,7 @@ final class NativeLoader {
     }
     Path dir = lib.getParent();
     if (dir != null) {
+      java.util.Set<Path> seen = new java.util.HashSet<>();
       if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
         // Windows LoadLibrary(abs) does not search the DLL folder for dependents.
         for (String dep :
@@ -32,18 +38,31 @@ final class NativeLoader {
           Path p = dir.resolve(dep);
           if (Files.isRegularFile(p)) {
             try {
-              System.load(p.toAbsolutePath().toString());
+              Path real = p.toRealPath();
+              if (seen.add(real)) {
+                System.load(real.toString());
+              }
             } catch (Throwable ignored) {
             }
           }
         }
       } else {
-        // macOS preloads openh264 if bundled
-        for (String dep : new String[] {"libopenh264.dylib", "libopenh264.jnilib"}) {
+        // macOS preloads openh264/SDL2 if bundled
+        for (String dep :
+            new String[] {
+              "libopenh264.dylib",
+              "libopenh264.8.dylib",
+              "libopenh264.jnilib",
+              "libSDL2-2.0.0.dylib",
+              "libSDL2.dylib"
+            }) {
           Path p = dir.resolve(dep);
           if (Files.isRegularFile(p)) {
             try {
-              System.load(p.toAbsolutePath().toString());
+              Path real = p.toRealPath();
+              if (seen.add(real)) {
+                System.load(real.toString());
+              }
             } catch (Throwable ignored) {
             }
           }
@@ -51,6 +70,7 @@ final class NativeLoader {
       }
     }
     System.load(lib.toAbsolutePath().toString());
+    loaded = true;
   }
 
   static Path libraryFile() {
