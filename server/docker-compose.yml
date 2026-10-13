@@ -23,12 +23,15 @@ services:
       - ./kamailio:/etc/kamailio
     restart: unless-stopped
 
-  # 阶段 5 再配 MCU。默认不启动，避免空目录覆盖镜像配置。
-  # 启用：docker compose --profile mcu up -d
+  # 阶段 4：只对外提供 ESL。不要把本目录挂到 /etc/freeswitch，空目录会盖掉镜像配置。
+  # 阶段 5 才把 room-* 从 Kamailio 转到这里。一对一仍不进这个容器。
   freeswitch:
-    image: safarov/freeswitch:latest
+    image: safarov/freeswitch:1.10.12
     container_name: freeswitch
-    profiles: ["mcu"]
+    # 镜像默认听 :: ，Docker 里没有 IPv6，event_socket 会绑失败。这个脚本改成 0.0.0.0。
+    entrypoint: ["/bin/sh", "/lab-entrypoint.sh"]
+    volumes:
+      - ./freeswitch/lab-entrypoint.sh:/lab-entrypoint.sh:ro
     ports:
       - "5080:5080/udp"
       - "5080:5080/tcp"

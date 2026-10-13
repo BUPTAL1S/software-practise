@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 客户端 SIP + 音视频 | [pjsip/pjproject](https://github.com/pjsip/pjproject) | **2.17**（[tag](https://github.com/pjsip/pjproject/releases/tag/2.17)） | 源码不入库；预编译放到 `native/<平台>/`（git 忽略） |
 | SIP 代理 | [kamailio/kamailio](https://github.com/kamailio/kamailio) | **5.8.3**，镜像 `ghcr.io/kamailio/kamailio-ci:5.8.3-alpine`（与 compose 一致） | `server/kamailio/` 只放我们的 cfg |
-| 房间 MCU | FreeSWITCH `mod_conference` | 阶段 1 未启用；compose profile `mcu`，镜像 `safarov/freeswitch:latest`（阶段 5 再钉 tag） | `server/freeswitch/` 只放会议相关说明/片段 |
+| 房间 MCU | FreeSWITCH `mod_conference` | **1.10.12**，镜像 `safarov/freeswitch:1.10.12`。阶段 4 只开 ESL；阶段 5 再把 `room-*` 转进来 | `server/freeswitch/` 只放会议相关说明 |
 | ESL | Maven `org.freeswitch.esl.client:esl-client-netty4`（或 compose 文档指定的坐标） | 跟后台 POM 钉死一版 | 只在 `admin` 依赖里引用 |
 | 后台 | Spring Boot **3.3.x** + Java **17** | POM 锁定 | `admin/` |
 | UI | JavaFX（与 JDK 17 匹配的 OpenJFX） | POM 锁定 | `client/` |
@@ -30,4 +30,4 @@ PJSIP Java 绑定：用发行源码里 `pjsip-apps/src/swig/java` 按官方文�
 ## 镜像（阶段 1 已钉）
 
 - Kamailio：`ghcr.io/kamailio/kamailio-ci:5.8.3-alpine`
-- FreeSWITCH：阶段 5 再用；不要三个人各拉各的 latest 当 Kamailio。
+- FreeSWITCH：`safarov/freeswitch:1.10.12`
