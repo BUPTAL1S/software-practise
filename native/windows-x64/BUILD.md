@@ -6,9 +6,9 @@
 
 ## 编解码器约定（双端对齐）
 
-全组统一采用 **H.264** 编解码（SDP 编码名 `H264`，时钟率 90000，Packetization-Mode 1）：
+全组统一采用 **H.264** 编解码（SDP 编码名 `H264`，时钟率 90000，Packetization-Mode 1，载荷类型 97）：
 - **Windows**：编译依赖 Cisco `openh264`，由 MSYS2 MinGW-w64 提供；
-- **macOS**：系统自带硬件加速 `VideoToolbox` H.264，亦支持 `openh264`；
+- **macOS**：统一通过 Homebrew `openh264` 编译 Cisco OpenH264（载荷类型 97），关闭 VideoToolbox，确保与 Windows 双端 payload type 97 严格一致；
 - **Kamailio**：透传 SDP 视频 m-line，不转码；
 - **FreeSWITCH MCU**：阶段 5 会议室默认接受 H.264。
 

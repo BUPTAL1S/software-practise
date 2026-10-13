@@ -16,6 +16,9 @@ public class Cdr {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "call_id")
+    private String callId;
+
     @Column(nullable = false)
     private String caller;
 
@@ -34,6 +37,14 @@ public class Cdr {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public String getCallId() {
+        return callId;
+    }
+
+    public void setCallId(String callId) {
+        this.callId = callId;
     }
 
     public String getCaller() {

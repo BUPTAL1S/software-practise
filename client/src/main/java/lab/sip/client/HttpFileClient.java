@@ -1,0 +1,478 @@
+package lab.sip.client;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Objects;
+import java.net.URLEncoder;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * HTTP client for uploading/downloading files and reporting/querying CDR
+ * through the Spring Boot backend (POST /api/files, POST /api/cdr, GET /api/cdr, etc.).
+ */
+public final class HttpFileClient {
+  public record CdrRecord(
+      Long id,
+      String caller,
+      String calleeOrRoom,
+      Instant startedAt,
+      long durationSec
+  ) {}
+
+  public record CdrStats(
+      long totalCalls,
+      long totalDurationSec,
+      double averageDurationSec,
+      int peakRoomMembers
+  ) {}
+
+  private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
+  private static final Pattern URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern NAME_PATTERN = Pattern.compile("\"(?:name|fileName|filename)\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern SIZE_PATTERN = Pattern.compile("\"size\"\\s*:\\s*(\\d+)");
+  private static final Pattern TOKEN_PATTERN = Pattern.compile("\"token\"\\s*:\\s*\"([^\"]+)\"");
+
+  private static final Pattern CALLER_PATTERN = Pattern.compile("\"caller\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern CALLEE_PATTERN = Pattern.compile("\"(?:callee_or_room|calleeOrRoom)\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern STARTED_AT_PATTERN = Pattern.compile("\"(?:started_at|startedAt)\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern DURATION_PATTERN = Pattern.compile("\"(?:duration_sec|durationSec)\"\\s*:\\s*(\\d+)");
+
+  private static final Pattern TOTAL_CALLS_PATTERN = Pattern.compile("\"totalCalls\"\\s*:\\s*(\\d+)");
+  private static final Pattern TOTAL_DURATION_PATTERN = Pattern.compile("\"totalDurationSec\"\\s*:\\s*(\\d+)");
+  private static final Pattern AVG_DURATION_PATTERN = Pattern.compile("\"averageDurationSec\"\\s*:\\s*([0-9.]+)");
+  private static final Pattern PEAK_MEMBERS_PATTERN = Pattern.compile("\"peakRoomMembers\"\\s*:\\s*(\\d+)");
+
+  private final HttpClient httpClient;
+  private volatile String baseUrl;
+  private volatile String authToken;
+
+  public HttpFileClient(String baseUrl) {
+    this.baseUrl = normalizeBaseUrl(baseUrl);
+    this.httpClient =
+        HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
+  }
+
+  public String getBaseUrl() {
+    return baseUrl;
+  }
+
+  public void setBaseUrl(String baseUrl) {
+    this.baseUrl = normalizeBaseUrl(baseUrl);
+  }
+
+  public String getAuthToken() {
+    return authToken;
+  }
+
+  public void setAuthToken(String authToken) {
+    this.authToken = authToken;
+  }
+
+  private static String normalizeBaseUrl(String url) {
+    if (url == null || url.trim().isEmpty()) {
+      return "http://localhost:8080";
+    }
+    String s = url.trim();
+    if (!s.startsWith("http://") && !s.startsWith("https://")) {
+      s = "http://" + s;
+    }
+    if (s.endsWith("/")) {
+      s = s.substring(0, s.length() - 1);
+    }
+    return s;
+  }
+
+  /**
+   * Performs backend authentication via POST /api/login.
+   */
+  public String login(String username, String password) throws IOException, InterruptedException {
+    String json = "{\"username\":\"" + escapeJson(username) + "\",\"password\":\"" + escapeJson(password) + "\"}";
+    HttpRequest req =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/login"))
+            .header("Content-Type", "application/json")
+            .timeout(Duration.ofSeconds(5))
+            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
+            .build();
+    HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() == 200) {
+      Matcher m = TOKEN_PATTERN.matcher(resp.body());
+      if (m.find()) {
+        String token = m.group(1);
+        this.authToken = token;
+        return token;
+      }
+      return "";
+    } else if (resp.statusCode() == 401) {
+      throw new IOException("后台鉴权失败 (HTTP 401 unauthorized)");
+    } else {
+      throw new IOException("登录后台失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+  }
+
+  private static String escapeJson(String s) {
+    if (s == null) return "";
+    return s.replace("\\", "\\\\").replace("\"", "\\\"");
+  }
+
+  /**
+   * Probes the backend health endpoint (GET /api/health).
+   */
+  public boolean isHealthy() {
+    try {
+      HttpRequest req =
+          HttpRequest.newBuilder()
+              .uri(URI.create(baseUrl + "/api/health"))
+              .timeout(Duration.ofSeconds(2))
+              .GET()
+              .build();
+      HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+      return resp.statusCode() == 200;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /**
+   * Uploads a local file to the backend via POST /api/files.
+   *
+   * @param localFile      the file on disk
+   * @param fromUser       sender SIP username
+   * @param toUserOrRoom   receiver SIP username or room URI
+   * @return FileMessage metadata containing file name, size, and absolute download URL
+   */
+  public FileMessage uploadFile(Path localFile, String fromUser, String toUserOrRoom)
+      throws IOException, InterruptedException {
+    Objects.requireNonNull(localFile, "localFile");
+    if (!Files.isRegularFile(localFile)) {
+      throw new IllegalArgumentException("文件不存在或不是普通文件: " + localFile);
+    }
+
+    String fileName = localFile.getFileName().toString();
+    long fileSize = Files.size(localFile);
+    String contentType = Files.probeContentType(localFile);
+    if (contentType == null || contentType.isBlank()) {
+      contentType = "application/octet-stream";
+    }
+
+    String boundary = "----SipClientBoundary" + System.currentTimeMillis() + Long.toHexString(System.nanoTime());
+    byte[] body = buildMultipartBody(boundary, localFile, fileName, contentType, fromUser, toUserOrRoom);
+
+    URI uploadUri = URI.create(baseUrl + "/api/files");
+    HttpRequest.Builder uploadReqBuilder =
+        HttpRequest.newBuilder()
+            .uri(uploadUri)
+            .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+            .timeout(Duration.ofSeconds(30))
+            .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+    if (authToken != null && !authToken.isBlank()) {
+      uploadReqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpRequest req = uploadReqBuilder.build();
+
+    HttpResponse<String> resp;
+    try {
+      resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    } catch (IOException e) {
+      throw new IOException(
+          "连接后台文件服务失败 (" + uploadUri + ")，请确认 Spring Boot 后台已启动: " + e.getMessage(), e);
+    }
+
+    int code = resp.statusCode();
+    if (code < 200 || code >= 300) {
+      throw new IOException("文件上传失败，后台返回 HTTP " + code + ": " + resp.body());
+    }
+
+    String respBody = resp.body() == null ? "" : resp.body().trim();
+    String downloadUrl = resolveDownloadUrl(respBody);
+    if (downloadUrl == null || downloadUrl.isBlank()) {
+      throw new IOException("无法从后台返回的响应解析下载地址: " + respBody);
+    }
+
+    // Extract size and name from response if present, otherwise use local values
+    Matcher mSize = SIZE_PATTERN.matcher(respBody);
+    long finalSize = mSize.find() ? Long.parseLong(mSize.group(1)) : fileSize;
+
+    Matcher mName = NAME_PATTERN.matcher(respBody);
+    String finalName = mName.find() ? mName.group(1) : fileName;
+
+    return new FileMessage(finalName, finalSize, downloadUrl);
+  }
+
+  /**
+   * Downloads a file from the given URL and saves it to targetFile.
+   */
+  public Path downloadFile(String downloadUrl, Path targetFile)
+      throws IOException, InterruptedException {
+    Objects.requireNonNull(downloadUrl, "downloadUrl");
+    Objects.requireNonNull(targetFile, "targetFile");
+
+    String absUrl = downloadUrl;
+    if (absUrl.startsWith("/")) {
+      absUrl = baseUrl + absUrl;
+    } else if ((absUrl.startsWith("http://localhost:") || absUrl.startsWith("http://127.0.0.1:"))
+        && !baseUrl.contains("localhost") && !baseUrl.contains("127.0.0.1")) {
+      int slashIdx = absUrl.indexOf("/", 8);
+      if (slashIdx != -1) {
+        absUrl = baseUrl + absUrl.substring(slashIdx);
+      }
+    }
+
+    HttpRequest.Builder downloadReqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(absUrl))
+            .timeout(Duration.ofSeconds(60))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      downloadReqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpRequest req = downloadReqBuilder.build();
+
+    if (targetFile.getParent() != null) {
+      Files.createDirectories(targetFile.getParent());
+    }
+
+    HttpResponse<Path> resp;
+    try {
+      resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(targetFile));
+    } catch (IOException e) {
+      throw new IOException("下载文件连接失败 (" + absUrl + "): " + e.getMessage(), e);
+    }
+
+    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+      try {
+        Files.deleteIfExists(targetFile);
+      } catch (Exception ignored) {
+      }
+      throw new IOException("文件下载失败，HTTP " + resp.statusCode() + " (" + absUrl + ")");
+    }
+
+    return targetFile;
+  }
+
+  private String resolveDownloadUrl(String responseJson) {
+    if (responseJson == null || responseJson.isEmpty()) {
+      return null;
+    }
+
+    Matcher mUrl = URL_PATTERN.matcher(responseJson);
+    if (mUrl.find()) {
+      String rawUrl = mUrl.group(1).trim();
+      if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+        return rawUrl;
+      }
+      if (rawUrl.startsWith("/")) {
+        return baseUrl + rawUrl;
+      }
+      return baseUrl + "/" + rawUrl;
+    }
+
+    Matcher mId = ID_PATTERN.matcher(responseJson);
+    if (mId.find()) {
+      return baseUrl + "/api/files/" + mId.group(1);
+    }
+
+    return null;
+  }
+
+  private static byte[] buildMultipartBody(
+      String boundary,
+      Path file,
+      String fileName,
+      String contentType,
+      String fromUser,
+      String toUser)
+      throws IOException {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    String crlf = "\r\n";
+
+    // Field: from
+    if (fromUser != null && !fromUser.isBlank()) {
+      out.write(("--" + boundary + crlf).getBytes(StandardCharsets.UTF_8));
+      out.write(("Content-Disposition: form-data; name=\"from\"" + crlf + crlf).getBytes(StandardCharsets.UTF_8));
+      out.write((fromUser.trim() + crlf).getBytes(StandardCharsets.UTF_8));
+    }
+
+    // Field: to
+    if (toUser != null && !toUser.isBlank()) {
+      out.write(("--" + boundary + crlf).getBytes(StandardCharsets.UTF_8));
+      out.write(("Content-Disposition: form-data; name=\"to\"" + crlf + crlf).getBytes(StandardCharsets.UTF_8));
+      out.write((toUser.trim() + crlf).getBytes(StandardCharsets.UTF_8));
+    }
+
+    // Field: file
+    out.write(("--" + boundary + crlf).getBytes(StandardCharsets.UTF_8));
+    out.write(
+        ("Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"" + crlf)
+            .getBytes(StandardCharsets.UTF_8));
+    out.write(("Content-Type: " + contentType + crlf + crlf).getBytes(StandardCharsets.UTF_8));
+    Files.copy(file, out);
+    out.write(crlf.getBytes(StandardCharsets.UTF_8));
+
+    // End boundary
+    out.write(("--" + boundary + "--" + crlf).getBytes(StandardCharsets.UTF_8));
+    return out.toByteArray();
+  }
+
+  /**
+   * Reports call detail record (CDR) to backend via POST /api/cdr with optional SIP Call-ID.
+   */
+  public CdrRecord reportCdr(String callId, String caller, String calleeOrRoom, Instant startedAt, long durationSec)
+      throws IOException, InterruptedException {
+    String startIso = (startedAt != null ? startedAt : Instant.now()).toString();
+    StringBuilder sb = new StringBuilder("{");
+    sb.append("\"caller\":\"").append(escapeJson(caller)).append("\",");
+    sb.append("\"callee_or_room\":\"").append(escapeJson(calleeOrRoom)).append("\",");
+    if (callId != null && !callId.isBlank()) {
+      sb.append("\"call_id\":\"").append(escapeJson(callId.trim())).append("\",");
+    }
+    sb.append("\"started_at\":\"").append(startIso).append("\",");
+    sb.append("\"duration_sec\":").append(durationSec).append("}");
+    String json = sb.toString();
+
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/cdr"))
+            .header("Content-Type", "application/json")
+            .timeout(Duration.ofSeconds(10))
+            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+      throw new IOException("CDR 上报失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseCdrRecord(resp.body());
+  }
+
+  /**
+   * Reports call detail record (CDR) to backend via POST /api/cdr.
+   */
+  public CdrRecord reportCdr(String caller, String calleeOrRoom, Instant startedAt, long durationSec)
+      throws IOException, InterruptedException {
+    return reportCdr(null, caller, calleeOrRoom, startedAt, durationSec);
+  }
+
+  /**
+   * Fetches CDR history list via GET /api/cdr.
+   */
+  public List<CdrRecord> fetchCdrList(String callerFilter, int limit)
+      throws IOException, InterruptedException {
+    StringBuilder url = new StringBuilder(baseUrl).append("/api/cdr?limit=").append(limit > 0 ? limit : 100);
+    if (callerFilter != null && !callerFilter.isBlank()) {
+      url.append("&caller=").append(URLEncoder.encode(callerFilter.trim(), StandardCharsets.UTF_8));
+    }
+
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(url.toString()))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取通话历史失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseCdrList(resp.body());
+  }
+
+  /**
+   * Fetches overall call statistics via GET /api/cdr/stats.
+   */
+  public CdrStats fetchStats() throws IOException, InterruptedException {
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/cdr/stats"))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取通话统计失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseCdrStats(resp.body());
+  }
+
+  public static CdrRecord parseCdrRecord(String json) {
+    if (json == null || json.isEmpty()) return null;
+    Matcher mId = ID_PATTERN.matcher(json);
+    Long id = mId.find() ? Long.parseLong(mId.group(1)) : null;
+
+    Matcher mCaller = CALLER_PATTERN.matcher(json);
+    String caller = mCaller.find() ? mCaller.group(1) : "";
+
+    Matcher mCallee = CALLEE_PATTERN.matcher(json);
+    String callee = mCallee.find() ? mCallee.group(1) : "";
+
+    Matcher mTime = STARTED_AT_PATTERN.matcher(json);
+    Instant startedAt = null;
+    if (mTime.find()) {
+      try {
+        startedAt = Instant.parse(mTime.group(1));
+      } catch (Exception ignored) {}
+    }
+    if (startedAt == null) startedAt = Instant.now();
+
+    Matcher mDur = DURATION_PATTERN.matcher(json);
+    long dur = mDur.find() ? Long.parseLong(mDur.group(1)) : 0;
+
+    return new CdrRecord(id, caller, callee, startedAt, dur);
+  }
+
+  public static List<CdrRecord> parseCdrList(String json) {
+    List<CdrRecord> list = new ArrayList<>();
+    if (json == null || json.isEmpty()) return list;
+    Matcher m = Pattern.compile("\\{[^{}]+\\}").matcher(json);
+    while (m.find()) {
+      CdrRecord rec = parseCdrRecord(m.group());
+      if (rec != null && !rec.caller().isEmpty()) {
+        list.add(rec);
+      }
+    }
+    return list;
+  }
+
+  public static CdrStats parseCdrStats(String json) {
+    if (json == null || json.isEmpty()) return new CdrStats(0, 0, 0.0, 0);
+    Matcher mCalls = TOTAL_CALLS_PATTERN.matcher(json);
+    long calls = mCalls.find() ? Long.parseLong(mCalls.group(1)) : 0;
+
+    Matcher mDur = TOTAL_DURATION_PATTERN.matcher(json);
+    long dur = mDur.find() ? Long.parseLong(mDur.group(1)) : 0;
+
+    Matcher mAvg = AVG_DURATION_PATTERN.matcher(json);
+    double avg = mAvg.find() ? Double.parseDouble(mAvg.group(1)) : 0.0;
+
+    Matcher mPeak = PEAK_MEMBERS_PATTERN.matcher(json);
+    int peak = mPeak.find() ? Integer.parseInt(mPeak.group(1)) : 0;
+
+    return new CdrStats(calls, dur, avg, peak);
+  }
+}
+

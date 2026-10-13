@@ -1,63 +1,286 @@
+diff --git a/aconfigure b/aconfigure
+index d8a4574..fabbcbf 100755
+--- a/aconfigure
++++ b/aconfigure
+@@ -863,6 +863,7 @@ with_openh264
+ enable_openh264
+ with_vpx
+ enable_vpx
++enable_vtoolbox
+ enable_ipp
+ with_ipp
+ with_ipp_samples
+@@ -1554,6 +1555,7 @@ Optional Features:
+   --disable-ffmpeg        Disable ffmpeg (default: not disabled)
+   --disable-v4l2          Disable Video4Linux2 (default: not disabled)
+   --disable-openh264      Disable OpenH264 (default: not disabled)
++  --disable-vtoolbox      Disable VideoToolbox (default: not disabled)
+   --disable-vpx           Disable VPX (default: not disabled)
+   --enable-ipp            Enable Intel IPP support. Specify the Intel IPP
+                           package and samples location using IPPROOT and
+@@ -7946,8 +7948,11 @@ fi
+ rm -f core conftest.err conftest.$ac_objext conftest.beam \
+     conftest$ac_exeext conftest.$ac_ext
+ 
+-            LIBS="-framework VideoToolbox"
+-            cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++            if test "$enable_vtoolbox" = "no"; then
++                ac_pjmedia_video_has_vtoolbox=no
++            else
++                LIBS="-framework VideoToolbox"
++                cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+ int
+@@ -7967,6 +7972,7 @@ esac
+ fi
+ rm -f core conftest.err conftest.$ac_objext conftest.beam \
+     conftest$ac_exeext conftest.$ac_ext
++            fi
+ 
+             LIBS="-framework Metal"
+             cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+diff --git a/aconfigure.ac b/aconfigure.ac
+index 2e12733..47e8dd4 100644
+--- a/aconfigure.ac
++++ b/aconfigure.ac
+@@ -1245,11 +1245,15 @@ else
+                [ac_pjmedia_video_has_darwin=no]
+             )
+ 
+-            LIBS="-framework VideoToolbox"
+-            AC_LINK_IFELSE(
+-                [AC_LANG_PROGRAM([[]], [])],
+-                [ac_pjmedia_video_has_vtoolbox=yes],
+-                [ac_pjmedia_video_has_vtoolbox=no])
++            if test "$enable_vtoolbox" = "no"; then
++                ac_pjmedia_video_has_vtoolbox=no
++            else
++                LIBS="-framework VideoToolbox"
++                AC_LINK_IFELSE(
++                    [AC_LANG_PROGRAM([[]], [])],
++                    [ac_pjmedia_video_has_vtoolbox=yes],
++                    [ac_pjmedia_video_has_vtoolbox=no])
++            fi
+ 
+             LIBS="-framework Metal"
+             AC_LINK_IFELSE(
 diff --git a/pjmedia/src/pjmedia-videodev/metal_dev.m b/pjmedia/src/pjmedia-videodev/metal_dev.m
-index b908c8b..c76762e 100644
+index b908c8b..0430514 100644
 --- a/pjmedia/src/pjmedia-videodev/metal_dev.m
 +++ b/pjmedia/src/pjmedia-videodev/metal_dev.m
-@@ -472,7 +472,15 @@ - (void)update_image
-     id<MTLTexture> texture;
-     MTLTextureDescriptor *textureDescriptor;
-     MTLRegion region;
--    unsigned width = stream->size.w, height = stream->size.h;
-+    unsigned width, height;
+@@ -94,8 +94,16 @@ @interface MetalRenderer : NSObject<MTKViewDelegate>
+ 
+     NSWindow               *window;
+ 
++#define METAL_FRAME_QUEUE_CAP 16
 +
+     pj_bool_t               is_running;
+     pj_bool_t               is_rendering;
++    pj_mutex_t             *buf_mutex;
++    void                   *queue_bufs[METAL_FRAME_QUEUE_CAP];
++    pj_size_t               queue_sizes[METAL_FRAME_QUEUE_CAP];
++    unsigned                queue_head;
++    unsigned                queue_tail;
++    unsigned                queue_count;
+     void                   *render_buf;
+     pj_size_t               render_buf_size;
+ 
+@@ -316,6 +324,7 @@ @implementation MetalRenderer
+     id<MTLRenderPipelineState>  pipelineState;
+     id<MTLBuffer>               vertexBuffer;
+     id<MTLBuffer>               textureCoordBuffer;
++    id<MTLTexture>              texture;
+ 
+ @public
+     struct metal_stream        *stream;    
+@@ -439,6 +448,10 @@ - (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)mtkView
+ }
+ 
+ - (void)dealloc {
++    if (texture) {
++        [texture release];
++        texture = nil;
++    }
+     if (vertexBuffer) {
+         [vertexBuffer release];
+         vertexBuffer = nil;
+@@ -464,32 +477,117 @@ - (void)dealloc {
+ }
+ 
+ - (void)update_image
++{
 +    if (!stream || !stream->is_running || !_view) {
 +        if (stream) stream->is_rendering = PJ_FALSE;
 +        return;
 +    }
 +
-+    width = stream->size.w;
-+    height = stream->size.h;
- 
-     /* Place the buffer into a texture */
-     textureDescriptor = [MTLTextureDescriptor
-@@ -484,12 +492,23 @@ - (void)update_image
-     [texture replaceRegion:region mipmapLevel:0 withBytes:stream->render_buf
-              bytesPerRow:stream->bytes_per_row];
- 
-+    /* Get the drawable that will be presented at the end of the frame */
-+    drawable = _view.currentDrawable;
-+    if (drawable == nil) {
-+        [texture release];
-+        stream->is_rendering = PJ_FALSE;
++    [_view draw];
++}
++
++
++/* Called whenever the view needs to render a frame. */
++- (void)drawInMTKView:(nonnull MTKView *)view
+ {
+     MTLRenderPassDescriptor *renderPassDescriptor;
+     id<MTLCommandBuffer> commandBuffer;
+     id<MTLRenderCommandEncoder> renderEncoder;
+-    id<MTLDrawable> drawable;
+-    id<MTLTexture> texture;
+-    MTLTextureDescriptor *textureDescriptor;
++    id<CAMetalDrawable> drawable;
+     MTLRegion region;
+-    unsigned width = stream->size.w, height = stream->size.h;
++    unsigned width, height;
++    pj_bool_t had_frame = PJ_FALSE;
++
++    if (!stream || !stream->is_running || !_view) {
++        if (stream && stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            stream->queue_count = 0;
++            stream->queue_head = 0;
++            stream->queue_tail = 0;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
 +        return;
 +    }
 +
-     /* The render pass descriptor references the texture into which Metal
-      * should draw.
-      */
-     renderPassDescriptor = _view.currentRenderPassDescriptor;
++    if (stream->buf_mutex) {
++        pj_mutex_lock(stream->buf_mutex);
++        if (stream->queue_count > 0) {
++            unsigned slot = stream->queue_head;
++            void *tmp = stream->render_buf;
++            stream->render_buf = stream->queue_bufs[slot];
++            stream->queue_bufs[slot] = tmp;
++
++            stream->queue_head = (stream->queue_head + 1) % METAL_FRAME_QUEUE_CAP;
++            stream->queue_count--;
++            had_frame = PJ_TRUE;
++        }
++        pj_mutex_unlock(stream->buf_mutex);
++    }
++
++    if (!had_frame && !stream->render_buf) {
++        if (stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
++        return;
++    }
+ 
+-    /* Place the buffer into a texture */
+-    textureDescriptor = [MTLTextureDescriptor
+-        texture2DDescriptorWithPixelFormat:stream->format
+-        width:width height:height mipmapped:NO];
++    width = stream->size.w;
++    height = stream->size.h;
++    if (width == 0 || height == 0) {
++        if (stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
++        return;
++    }
++
++    if (!texture || [texture width] != width || [texture height] != height || [texture pixelFormat] != stream->format) {
++        if (texture) {
++            [texture release];
++            texture = nil;
++        }
++        MTLTextureDescriptor *textureDescriptor = [MTLTextureDescriptor
++            texture2DDescriptorWithPixelFormat:stream->format
++            width:width height:height mipmapped:NO];
++        texture = [device newTextureWithDescriptor:textureDescriptor];
++    }
++
++    if (texture == nil) {
++        if (stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
++        return;
++    }
+ 
+-    texture = [device newTextureWithDescriptor:textureDescriptor];
+     region = MTLRegionMake2D(0, 0, width, height);
+     [texture replaceRegion:region mipmapLevel:0 withBytes:stream->render_buf
+              bytesPerRow:stream->bytes_per_row];
+ 
+-    /* The render pass descriptor references the texture into which Metal
+-     * should draw.
+-     */
+-    renderPassDescriptor = _view.currentRenderPassDescriptor;
 -    if (renderPassDescriptor == nil)
++    drawable = view.currentDrawable;
++    if (drawable == nil) {
++        if (stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
++        return;
++    }
++
++    renderPassDescriptor = view.currentRenderPassDescriptor;
 +    if (renderPassDescriptor == nil) {
-+        [texture release];
-        stream->is_rendering = PJ_FALSE;
++        if (stream->buf_mutex) {
++            pj_mutex_lock(stream->buf_mutex);
++            stream->is_rendering = PJ_FALSE;
++            pj_mutex_unlock(stream->buf_mutex);
++        }
          return;
 +    }
  
      commandBuffer = [commandQueue commandBuffer];
  
-@@ -505,12 +524,6 @@ - (void)update_image
+@@ -504,25 +602,28 @@ - (void)update_image
+                    vertexCount:4];
  
      [renderEncoder endEncoding];
-     
+-    
 -    /* Get the drawable that will be presented at the end of the frame */
 -    drawable = _view.currentDrawable;
--
+ 
 -    /* Request that the drawable texture be presented by the windowing system
 -     * once drawing is done.
 -     */
      [commandBuffer presentDrawable:drawable];
      [commandBuffer commit];
  
-@@ -553,7 +566,7 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
+-    [texture release];
+-
+-    stream->is_rendering = PJ_FALSE;
+-}
+-
++    /* Check if more frames are waiting in the queue */
++    pj_bool_t more_frames = PJ_FALSE;
++    if (stream->buf_mutex) {
++        pj_mutex_lock(stream->buf_mutex);
++        if (stream->queue_count > 0 && stream->is_running) {
++            more_frames = PJ_TRUE;
++        } else {
++            stream->is_rendering = PJ_FALSE;
++        }
++        pj_mutex_unlock(stream->buf_mutex);
++    } else {
++        stream->is_rendering = PJ_FALSE;
++    }
+ 
+-/* Called whenever the view needs to render a frame. */
+-- (void)drawInMTKView:(nonnull MTKView *)view
+-{
++    if (more_frames && _view) {
++        /* Re-trigger drawing immediately on the main thread so pending frames are never dropped */
++        [_view draw];
++    }
+ }
+ 
+ /* Called whenever view changes orientation or is resized */
+@@ -553,7 +654,7 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
          return PJMEDIA_EVID_SYSERR;
  
      strm->view.enableSetNeedsDisplay = NO;
@@ -66,7 +289,7 @@ index b908c8b..c76762e 100644
      strm->view.device = MTLCreateSystemDefaultDevice();
      strm->view.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
      strm->param.window.info.window = strm->view;
-@@ -582,6 +595,8 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
+@@ -582,6 +683,8 @@ static pj_status_t metal_init_view(struct metal_stream *strm)
          if (!strm->window)
              return PJMEDIA_EVID_SYSERR;
  
@@ -75,29 +298,134 @@ index b908c8b..c76762e 100644
          /* Make the window visible */
          [strm->window.contentView addSubview:strm->view];
          [strm->window makeKeyAndOrderFront:strm->window];
-@@ -919,9 +934,18 @@ static pj_status_t metal_stream_stop(pjmedia_vid_dev_stream *strm)
+@@ -666,8 +769,18 @@ static pj_status_t metal_factory_create_stream(
+             metal_init_view(strm);
+         });
+                 
++        unsigned i;
+         strm->render_buf = pj_pool_alloc(pool, strm->frame_size);
++        for (i = 0; i < METAL_FRAME_QUEUE_CAP; i++) {
++            strm->queue_bufs[i] = pj_pool_alloc(pool, strm->frame_size);
++            strm->queue_sizes[i] = 0;
++        }
+         strm->render_buf_size = strm->frame_size;
++        strm->queue_head = 0;
++        strm->queue_tail = 0;
++        strm->queue_count = 0;
++        strm->is_rendering = PJ_FALSE;
++        pj_mutex_create_simple(pool, "metal_buf", &strm->buf_mutex);
  
+         PJ_LOG(4, (THIS_FILE, "Metal renderer initialized"));
+     }
+@@ -751,9 +864,19 @@ static pj_status_t metal_stream_set_cap(pjmedia_vid_dev_stream *s,
+             strm->bytes_per_row = strm->size.w * vfi->bpp / 8;
+             strm->frame_size = strm->bytes_per_row * strm->size.h;
+             if (strm->render_buf_size < strm->frame_size) {
++                unsigned i;
+                 /* Realloc only when needed */
++                if (strm->buf_mutex) pj_mutex_lock(strm->buf_mutex);
+                 strm->render_buf = pj_pool_alloc(strm->pool, strm->frame_size);
++                for (i = 0; i < METAL_FRAME_QUEUE_CAP; i++) {
++                    strm->queue_bufs[i] = pj_pool_alloc(strm->pool, strm->frame_size);
++                    strm->queue_sizes[i] = 0;
++                }
+                 strm->render_buf_size = strm->frame_size;
++                strm->queue_head = 0;
++                strm->queue_tail = 0;
++                strm->queue_count = 0;
++                if (strm->buf_mutex) pj_mutex_unlock(strm->buf_mutex);
+             }
+             
+             return PJ_SUCCESS;
+@@ -891,20 +1014,42 @@ static pj_status_t metal_stream_put_frame(pjmedia_vid_dev_stream *strm,
+ 
+     if (!stream->is_running)
+         return PJ_EINVALIDOP;
+-    
+-    /* Prevent more than one async rendering task. */
+-    if (stream->is_rendering)
+-        return PJ_EIGNORED;
+-
+-    if (stream->frame_size >= frame->size)
+-        pj_memcpy(stream->render_buf, frame->buf, frame->size);
+-    else
+-        pj_memcpy(stream->render_buf, frame->buf, stream->frame_size);
+-    
+-    /* Perform video display in the main thread */
+-    stream->is_rendering = PJ_TRUE;
+-    [stream->renderer performSelectorOnMainThread:@selector(update_image)
+-                      withObject:nil waitUntilDone:NO];
++
++    pj_bool_t need_schedule = PJ_FALSE;
++
++    if (stream->buf_mutex) pj_mutex_lock(stream->buf_mutex);
++
++    if (stream->is_running) {
++        pj_size_t copy_size = (stream->render_buf_size >= frame->size) ?
++                              frame->size : stream->render_buf_size;
++        if (copy_size > 0) {
++            unsigned target_slot;
++            if (stream->queue_count < METAL_FRAME_QUEUE_CAP) {
++                target_slot = stream->queue_tail;
++                stream->queue_tail = (stream->queue_tail + 1) % METAL_FRAME_QUEUE_CAP;
++                stream->queue_count++;
++            } else {
++                /* Queue is full: advance head to drop oldest frame and append at tail */
++                target_slot = stream->queue_tail;
++                stream->queue_head = (stream->queue_head + 1) % METAL_FRAME_QUEUE_CAP;
++                stream->queue_tail = (stream->queue_tail + 1) % METAL_FRAME_QUEUE_CAP;
++            }
++            pj_memcpy(stream->queue_bufs[target_slot], frame->buf, copy_size);
++            stream->queue_sizes[target_slot] = copy_size;
++        }
++
++        if (!stream->is_rendering) {
++            stream->is_rendering = PJ_TRUE;
++            need_schedule = PJ_TRUE;
++        }
++    }
++    if (stream->buf_mutex) pj_mutex_unlock(stream->buf_mutex);
++
++    /* Perform video display in the main thread if not already in flight */
++    if (need_schedule && stream->renderer) {
++        [stream->renderer performSelectorOnMainThread:@selector(update_image)
++                          withObject:nil waitUntilDone:NO];
++    }
+ 
+     return PJ_SUCCESS;
+ }
+@@ -917,11 +1062,27 @@ static pj_status_t metal_stream_stop(pjmedia_vid_dev_stream *strm)
+     
+     PJ_LOG(4, (THIS_FILE, "Stopping Metal video stream"));
+ 
++    if (stream->buf_mutex) pj_mutex_lock(stream->buf_mutex);
      stream->is_running = PJ_FALSE;
- 
--    /* Wait until the rendering finishes */
--    for (i = 0; i < 15; i++) pj_thread_sleep(10);
--    while (stream->is_rendering);
++    stream->queue_count = 0;
++    stream->queue_head = 0;
++    stream->queue_tail = 0;
++    if (stream->buf_mutex) pj_mutex_unlock(stream->buf_mutex);
++
 +    if (stream->renderer) {
 +        dispatch_sync_on_main_queue(^{
 +            [NSObject cancelPreviousPerformRequestsWithTarget:stream->renderer
 +                      selector:@selector(update_image) object:nil];
 +        });
 +    }
-+
+ 
+-    /* Wait until the rendering finishes */
+-    for (i = 0; i < 15; i++) pj_thread_sleep(10);
+-    while (stream->is_rendering);
 +    /* Wait until the rendering finishes if not on main thread */
 +    if (![NSThread isMainThread]) {
 +        for (i = 0; i < 15 && stream->is_rendering; i++) pj_thread_sleep(10);
 +    }
++    if (stream->buf_mutex) pj_mutex_lock(stream->buf_mutex);
 +    stream->is_rendering = PJ_FALSE;
++    if (stream->buf_mutex) pj_mutex_unlock(stream->buf_mutex);
      
      return PJ_SUCCESS;
  }
-@@ -936,24 +960,30 @@ static pj_status_t metal_stream_destroy(pjmedia_vid_dev_stream *strm)
+@@ -936,27 +1097,38 @@ static pj_status_t metal_stream_destroy(pjmedia_vid_dev_stream *strm)
  
      metal_stream_stop(strm);
  
@@ -109,14 +437,26 @@ index b908c8b..c76762e 100644
 +        if (stream->renderer) {
 +            [NSObject cancelPreviousPerformRequestsWithTarget:stream->renderer];
 +        }
-+
+ 
+-    if (stream->view) {
+-        [stream->view
+-            performSelectorOnMainThread:@selector(removeFromSuperview)
+-            withObject:nil waitUntilDone:YES];
+-        [stream->view release];
+-        stream->view = nil;
+-    }
 +        if (stream->view) {
 +            stream->view.delegate = nil;
 +            [stream->view removeFromSuperview];
 +            [stream->view release];
 +            stream->view = nil;
 +        }
-+
+ 
+-    if (stream->window) {
+-        [stream->window performSelectorOnMainThread:@selector(close)
+-                        withObject:nil waitUntilDone:YES];
+-        stream->window = nil;
+-    }
 +        if (stream->renderer) {
 +            [stream->renderer release];
 +            stream->renderer = nil;
@@ -132,3 +472,11 @@ index b908c8b..c76762e 100644
      
      pjmedia_vid_dev_conv_destroy_converter(&stream->conv);
  
++    if (stream->buf_mutex) {
++        pj_mutex_destroy(stream->buf_mutex);
++        stream->buf_mutex = NULL;
++    }
++
+     pj_pool_release(stream->pool);
+ 
+     return PJ_SUCCESS;

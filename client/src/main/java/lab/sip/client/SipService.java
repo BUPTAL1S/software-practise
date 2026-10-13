@@ -32,13 +32,20 @@ import org.pjsip.pjsua2.VideoPreview;
 import org.pjsip.pjsua2.VideoPreviewOpParam;
 import org.pjsip.pjsua2.VideoWindow;
 import org.pjsip.pjsua2.pj_log_decoration;
+import java.util.HashMap;
+import java.util.Map;
+import org.pjsip.pjsua2.Buddy;
+import org.pjsip.pjsua2.BuddyConfig;
+import org.pjsip.pjsua2.OnInstantMessageParam;
+import org.pjsip.pjsua2.OnInstantMessageStatusParam;
+import org.pjsip.pjsua2.SendInstantMessageParam;
 import org.pjsip.pjsua2.pjmedia_type;
 import org.pjsip.pjsua2.pjsip_inv_state;
 import org.pjsip.pjsua2.pjsip_status_code;
 import org.pjsip.pjsua2.pjsip_transport_type_e;
 import org.pjsip.pjsua2.pjsua_call_media_status;
 
-/** PJSUA2 wrapper: REGISTER + audio and video. */
+/** PJSUA2 wrapper: REGISTER + audio and video + instant messaging. */
 final class SipService {
   interface Events {
     void log(String msg);
@@ -48,7 +55,20 @@ final class SipService {
     void sip(boolean outgoing, String summary, String raw);
 
     void stateChanged();
+
+    default void instantMessageReceived(String fromUri, String toUri, String body, String contentType) {}
+
+    default void instantMessageStatus(String toUri, String body, int statusCode, String reason) {}
+
+    default void callEnded(
+        String callId, String caller, String calleeOrRoom, java.time.Instant startedAt, long durationSec, boolean wasConnected) {
+      callEnded(caller, calleeOrRoom, startedAt, durationSec, wasConnected);
+    }
+
+    default void callEnded(
+        String caller, String calleeOrRoom, java.time.Instant startedAt, long durationSec, boolean wasConnected) {}
   }
+
 
   private final Events events;
   private final ScheduledExecutorService hangupWatch =
@@ -72,6 +92,7 @@ final class SipService {
   private int hangupWatchSeq;
   private boolean byeAnswered;
   private ScheduledFuture<?> hangupWatchTask;
+  private final Map<String, Buddy> buddies = new HashMap<>();
 
   SipService(Events events) {
     this.events = events;
@@ -409,8 +430,9 @@ final class SipService {
     if (password != null && !password.isEmpty()) {
       cfg.getSipConfig().getAuthCreds().add(new AuthCredInfo("digest", "*", user, 0, password));
     }
-    ClientAccount next = new ClientAccount();
+    ClientAccount next = new ClientAccount(user);
     synchronized (this) {
+      clearBuddiesLocked();
       account = next;
       lastRegCode = 0;
       outboundProxy = sipTarget;
@@ -448,11 +470,12 @@ final class SipService {
         throw new IllegalStateException("尚未注册成功");
       }
       acc = account;
-      next = new ClientCall(acc);
+      next = new ClientCall(acc, dst);
       activeCall = next;
       proxy = outboundProxy;
     }
     CallOpParam prm = new CallOpParam(true);
+    prm.getOpt().setTextCount(0);
     if (!video) {
       prm.getOpt().setVideoCount(0);
     }
@@ -506,8 +529,9 @@ final class SipService {
         && state != pjsip_inv_state.PJSIP_INV_STATE_EARLY) {
       throw new IllegalStateException("当前不是来电：" + info.getStateText());
     }
-    CallOpParam prm = new CallOpParam();
+    CallOpParam prm = new CallOpParam(true);
     prm.setStatusCode(pjsip_status_code.PJSIP_SC_OK);
+    prm.getOpt().setTextCount(0);
     if (!video) {
       prm.getOpt().setVideoCount(0);
     }
@@ -527,6 +551,7 @@ final class SipService {
     hangupQuiet();
     ClientAccount acc;
     synchronized (this) {
+      clearBuddiesLocked();
       acc = account;
       account = null;
     }
@@ -552,6 +577,66 @@ final class SipService {
     }
     hangupWatch.shutdownNow();
     events.stateChanged();
+  }
+
+  synchronized void sendMessage(String peerUser, String domain, String content) throws Exception {
+    if (!isRegistered()) {
+      throw new IllegalStateException("尚未注册成功，无法发送消息");
+    }
+    if (peerUser == null || peerUser.trim().isEmpty()) {
+      throw new IllegalArgumentException("接收方不能为空");
+    }
+    if (content == null || content.isEmpty()) {
+      throw new IllegalArgumentException("消息内容不能为空");
+    }
+    String p = peerUser.trim();
+    String targetUri;
+    if (p.startsWith("sip:")) {
+      targetUri = p;
+    } else if (p.contains("@")) {
+      targetUri = "sip:" + p;
+    } else {
+      String dom = (domain == null || domain.trim().isEmpty()) ? "lab" : domain.trim();
+      targetUri = "sip:" + p + "@" + dom;
+    }
+
+    Buddy buddy = buddies.get(targetUri);
+    if (buddy == null || !buddy.isValid()) {
+      if (buddy != null) {
+        try {
+          buddy.delete();
+        } catch (Exception ignored) {
+        }
+      }
+      BuddyConfig bCfg = new BuddyConfig();
+      bCfg.setUri(targetUri);
+      bCfg.setSubscribe(false);
+      buddy = new Buddy();
+      buddy.create(account, bCfg);
+      bCfg.delete();
+      buddies.put(targetUri, buddy);
+    }
+
+    SendInstantMessageParam prm = new SendInstantMessageParam();
+    prm.setContent(content);
+    prm.setContentType("text/plain");
+    try {
+      buddy.sendInstantMessage(prm);
+    } finally {
+      prm.delete();
+    }
+    String logContent = content.startsWith("[FILE]") ? "[文件通知]" : content;
+    events.log("消息", "向 " + targetUri + " 发送：" + logContent);
+  }
+
+  private void clearBuddiesLocked() {
+    for (Buddy b : buddies.values()) {
+      try {
+        b.delete();
+      } catch (Exception ignored) {
+      }
+    }
+    buddies.clear();
   }
 
   private void openEndpoint(int port, String publicIp) throws Exception {
@@ -773,6 +858,16 @@ final class SipService {
   }
 
   private final class ClientAccount extends Account {
+    private final String username;
+
+    ClientAccount(String username) {
+      this.username = username != null ? username : "";
+    }
+
+    String getUsername() {
+      return username;
+    }
+
     @Override
     public void onRegState(OnRegStateParam prm) {
       synchronized (SipService.this) {
@@ -826,24 +921,62 @@ final class SipService {
               + "，点接听");
       events.stateChanged();
     }
+
+    @Override
+    public void onInstantMessage(OnInstantMessageParam prm) {
+      String fromUri = nullToEmpty(prm.getFromUri());
+      String toUri = nullToEmpty(prm.getToUri());
+      String body = nullToEmpty(prm.getMsgBody());
+      String contentType = nullToEmpty(prm.getContentType());
+      String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;
+      events.log("消息", "收到来自 " + fromUri + " 的消息：" + logBody);
+      events.instantMessageReceived(fromUri, toUri, body, contentType);
+    }
+
+    @Override
+    public void onInstantMessageStatus(OnInstantMessageStatusParam prm) {
+      String toUri = nullToEmpty(prm.getToUri());
+      String body = nullToEmpty(prm.getMsgBody());
+      int code = prm.getCode();
+      String reason = nullToEmpty(prm.getReason());
+      String cat = code == pjsip_status_code.PJSIP_SC_OK ? "消息" : "警告";
+      String desc = code == pjsip_status_code.PJSIP_SC_OK ? "送达成功" : ("发送未送达(" + code + " " + reason + ")");
+      events.log(cat, "向 " + toUri + " 消息 " + desc);
+      events.instantMessageStatus(toUri, body, code, reason);
+    }
   }
 
   private final class ClientCall extends Call {
+    private final java.time.Instant initiateTime = java.time.Instant.now();
+    private volatile java.time.Instant connectTime;
+    private final boolean isOutgoing;
+    private final String dialedDst;
     private volatile boolean localHangup;
+    private volatile boolean callEndedDispatched;
 
-    ClientCall(Account acc) {
+    ClientCall(Account acc, String dialedDst) {
       super(acc);
+      this.isOutgoing = true;
+      this.dialedDst = dialedDst != null ? dialedDst : "";
     }
 
     ClientCall(Account acc, int callId) {
       super(acc, callId);
+      this.isOutgoing = false;
+      this.dialedDst = "";
     }
 
     @Override
     public void onCallState(OnCallStateParam prm) {
       try {
         CallInfo ci = getInfo();
-        if (ci.getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
+        int state = ci.getState();
+        if (state == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED) {
+          if (connectTime == null) {
+            connectTime = java.time.Instant.now();
+            events.log("通话", "通话已接通确认 (开始计时)");
+          }
+        } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
           boolean local = localHangup;
           synchronized (SipService.this) {
             if (activeCall == this) {
@@ -859,6 +992,38 @@ final class SipService {
             cancelHangupWatch();
             events.log("通话", "对端已挂断 " + detail);
           }
+
+          if (!callEndedDispatched) {
+            callEndedDispatched = true;
+            boolean connected = (connectTime != null);
+            java.time.Instant startAt = connected ? connectTime : initiateTime;
+            long durationSec =
+                connected
+                    ? Math.max(0, java.time.Duration.between(connectTime, java.time.Instant.now()).getSeconds())
+                    : 0;
+
+            String callerUser;
+            String calleeUser;
+            String myUser = "";
+            synchronized (SipService.this) {
+              if (account != null) {
+                myUser = account.getUsername();
+              }
+            }
+            if (isOutgoing) {
+              callerUser = !myUser.isEmpty() ? myUser : extractUser(ci.getLocalUri());
+              calleeUser = !dialedDst.isEmpty() ? extractUser(dialedDst) : extractUser(ci.getRemoteUri());
+            } else {
+              callerUser = extractUser(ci.getRemoteUri());
+              calleeUser = !myUser.isEmpty() ? myUser : extractUser(ci.getLocalUri());
+            }
+            if (callerUser.isEmpty()) callerUser = "unknown";
+            if (calleeUser.isEmpty()) calleeUser = "unknown";
+
+            String callId = nullToEmpty(ci.getCallIdString());
+            events.callEnded(callId, callerUser, calleeUser, startAt, durationSec, connected);
+          }
+
           Platform.runLater(
               () -> {
                 try {
@@ -876,6 +1041,7 @@ final class SipService {
       }
     }
 
+
     @Override
     public void onCallMediaState(OnCallMediaStateParam prm) {
       try {
@@ -887,6 +1053,7 @@ final class SipService {
             endpoint.audDevManager().getCaptureDevMedia().startTransmit(audio);
             audio.startTransmit(endpoint.audDevManager().getPlaybackDevMedia());
             events.log("通话", "音频已接通");
+
           } else if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
             if (media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
               int winId = media.getVideoIncomingWindowId();
@@ -915,5 +1082,57 @@ final class SipService {
         events.log("错误", "媒体连接处理失败：" + e.getMessage());
       }
     }
+
+    @Override
+    public void onInstantMessage(OnInstantMessageParam prm) {
+      String fromUri = nullToEmpty(prm.getFromUri());
+      String toUri = nullToEmpty(prm.getToUri());
+      String body = nullToEmpty(prm.getMsgBody());
+      String contentType = nullToEmpty(prm.getContentType());
+      String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;
+      events.log("消息", "收到通话内来自 " + fromUri + " 的消息：" + logBody);
+      events.instantMessageReceived(fromUri, toUri, body, contentType);
+    }
+
+    @Override
+    public void onInstantMessageStatus(OnInstantMessageStatusParam prm) {
+      String toUri = nullToEmpty(prm.getToUri());
+      String body = nullToEmpty(prm.getMsgBody());
+      int code = prm.getCode();
+      String reason = nullToEmpty(prm.getReason());
+      String cat = code == pjsip_status_code.PJSIP_SC_OK ? "消息" : "警告";
+      String desc = code == pjsip_status_code.PJSIP_SC_OK ? "送达成功" : ("发送未送达(" + code + " " + reason + ")");
+      events.log(cat, "向 " + toUri + " 消息 " + desc);
+      events.instantMessageStatus(toUri, body, code, reason);
+    }
+  }
+
+  static String extractUser(String uri) {
+    if (uri == null || uri.isBlank()) {
+      return "";
+    }
+    String s = uri.trim();
+    int sipIdx = s.indexOf("sip:");
+    if (sipIdx != -1) {
+      s = s.substring(sipIdx + 4);
+    }
+    int atIdx = s.indexOf('@');
+    if (atIdx != -1) {
+      s = s.substring(0, atIdx);
+    }
+    int semiIdx = s.indexOf(';');
+    if (semiIdx != -1) {
+      s = s.substring(0, semiIdx);
+    }
+    int colonIdx = s.indexOf(':');
+    if (colonIdx != -1) {
+      s = s.substring(0, colonIdx);
+    }
+    int gtIdx = s.indexOf('>');
+    if (gtIdx != -1) {
+      s = s.substring(0, gtIdx);
+    }
+    return s.trim();
   }
 }
+

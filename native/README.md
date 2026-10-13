@@ -11,7 +11,7 @@ SWIG 生成的 Java 在 `client/src/main/java/org/pjsip/pjsua2/`，两平台共�
 
 ## 视频编解码约定
 
-跨端（Win / Mac / MCU）统一采用 **H.264**（RFC 6184，时钟 90000）：
+跨端（Win / Mac / MCU）统一采用 **H.264**（RFC 6184，时钟 90000，统一 Cisco OpenH264，载荷类型 97）：
 - Windows 使用 MSYS2 MinGW OpenH264（`mingw-w64-x86_64-openh264`）；
-- macOS 使用硬件加速 VideoToolbox 或 OpenH264；
-- Kamailio 透传 SDP，FreeSWITCH 会议室接收 H.264。
+- macOS 编译 Cisco OpenH264（Homebrew `openh264`），确保两端 payload type 97 与 profile-level-id 一致，避免非对称 SDP 协商失败导致自动挂断；
+- Kamailio 透传 SDP，不转码；FreeSWITCH 会议室接收 H.264。
