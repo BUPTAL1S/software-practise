@@ -52,44 +52,54 @@ token 只放在进程内存里。同一用户再次登录会再发一个 token�
 
 ## 文件上传与下载（阶段 3）
 
-文件二进制存 `uploads/` 目录，索引存数据库 `files` 表。
+字段与客户端 `HttpFileClient` 一致。文件二进制存运行目录下的 `uploads/`（从本目录启动时就是 `admin/uploads/`，已 gitignore），索引存 `files` 表。通话记录和统计见下方阶段 4，本阶段文件接口不含 CDR。
 
-### 上传文件
+`POST http://localhost:8080/api/files`，`multipart/form-data`。
 
-`POST http://localhost:8080/api/files`
-`Content-Type: multipart/form-data`
+- 字段 `file`（必填）、`from`（发送方用户名）、`to`（接收方用户名或房间）
+- 有登录时带 `Authorization: Bearer <token>`；没有 token 时仍用表单里的 `from`
+- `from` 为空且 token 合法时，记成该用户；两者都没有时用 `anonymous`
+- `to` 为空时用 `broadcast`
+- 表单写了 `from` 时以表单为准，即使也带了别人的 token
 
-请求头：
-- `Authorization: Bearer <token>`（可选）：若携带此头，必须为有效 token（将解析对应用户为 `from`）；若 token 格式错误或已失效返回 `401 {"error":"unauthorized"}`。不带此头则以表单参数 `from` 为准。
+成功 `200`，JSON 必有 `id`、`url`（`/api/files/{id}`）、`name`、`size`：
 
-请求字段：
-- `file`：二进制文件内容（必填）
-- `from`：发送者用户名（可选，默认 `anonymous`）
-- `to`：接收方用户名或房间号（可选，默认 `broadcast`）
-
-成功 `200`：
 ```json
 {
   "id": 1,
-  "name": "example.png",
-  "size": 10240,
+  "name": "hello.txt",
+  "size": 12,
   "url": "/api/files/1",
   "from": "1001",
   "to": "1002"
 }
 ```
 
-缺文件或文件为空：`400`
+缺文件或空文件：`400`
+
 ```json
 {"error":"file is required"}
 ```
 
-### 下载文件
+带了 `Authorization` 但 token 无效：`401`
 
-`GET http://localhost:8080/api/files/{id}`
+```json
+{"error":"unauthorized"}
+```
 
-- 成功 `200`：二进制流，带 `Content-Disposition: attachment; filename="<原文件名>"` 与对应 `Content-Type`。
-- 文件不存在：`404 Not Found`。
+`GET http://localhost:8080/api/files/{id}` 返回文件字节，`Content-Disposition` 里是原始文件名。id 不存在或磁盘文件丢了：`404`。
+
+```bash
+# 上传
+curl.exe -s -F "file=@hello.txt" -F "from=1001" -F "to=1002" http://localhost:8080/api/files
+
+# 先登录再上传（不传 from 时记成 1001）
+TOKEN=$(curl.exe -s -H "Content-Type: application/json" -d "{\"username\":\"1001\",\"password\":\"1001\"}" http://localhost:8080/api/login | python -c "import sys,json; print(json.load(sys.stdin)['token'])")
+curl.exe -s -H "Authorization: Bearer $TOKEN" -F "file=@hello.txt" -F "to=1002" http://localhost:8080/api/files
+
+# 下载（把 1 换成返回的 id）
+curl.exe -OJ http://localhost:8080/api/files/1
+```
 
 ## 通话记录与统计（阶段 4）
 

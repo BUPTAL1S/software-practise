@@ -5,70 +5,79 @@ import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.FileIndexRepository;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api")
 public class FileController {
 
+    static final String FILE_REQUIRED = "file is required";
+
     private final FileIndexRepository fileRepo;
     private final UserRepository userRepo;
     private final LoginTokens tokens;
-    private final Path uploadDir = Paths.get("uploads");
+    private final Path uploadDir;
 
-    public FileController(FileIndexRepository fileRepo, UserRepository userRepo, LoginTokens tokens) {
+    public FileController(
+            FileIndexRepository fileRepo,
+            UserRepository userRepo,
+            LoginTokens tokens,
+            @Value("${sipim.upload-dir:uploads}") String uploadDir) {
         this.fileRepo = fileRepo;
         this.userRepo = userRepo;
         this.tokens = tokens;
+        this.uploadDir = Paths.get(uploadDir);
     }
 
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> upload(
-            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "file", required = false) MultipartFile file,
             @RequestParam(value = "from", required = false) String fromUser,
             @RequestParam(value = "to", required = false) String toUserOrRoom,
-            @RequestHeader(value = "Authorization", required = false) String authorization) throws IOException {
+            @RequestHeader(value = "Authorization", required = false) String authorization)
+            throws IOException {
 
         if (file == null || file.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
+            return ResponseEntity.badRequest().body(Map.of("error", FILE_REQUIRED));
         }
 
-        String finalFrom = fromUser;
+        String finalFrom = blank(fromUser) ? null : fromUser.trim();
         if (authorization != null && !authorization.isBlank()) {
-            String token = MeController.bearerToken(authorization);
-            if (token == null) {
-                return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
+            Optional<User> user = userFromAuthorization(authorization);
+            if (user.isEmpty()) {
+                return unauthorized();
             }
-            Optional<Long> uid = tokens.userIdOf(token);
-            if (uid.isEmpty()) {
-                return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
-            }
-            Optional<User> u = userRepo.findById(uid.get());
-            if (u.isEmpty()) {
-                return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
-            }
-            if (finalFrom == null || finalFrom.isBlank()) {
-                finalFrom = u.get().getUsername();
+            if (finalFrom == null) {
+                finalFrom = user.get().getUsername();
             }
         }
-        if (finalFrom == null || finalFrom.isBlank()) {
+        if (finalFrom == null) {
             finalFrom = "anonymous";
         }
-        String finalTo = (toUserOrRoom != null && !toUserOrRoom.isBlank()) ? toUserOrRoom.trim() : "broadcast";
+        String finalTo = blank(toUserOrRoom) ? "broadcast" : toUserOrRoom.trim();
 
         Files.createDirectories(uploadDir);
         String originalName = file.getOriginalFilename();
@@ -96,7 +105,6 @@ public class FileController {
         resp.put("url", "/api/files/" + saved.getId());
         resp.put("from", saved.getFromUser());
         resp.put("to", saved.getToUserOrRoom());
-
         return ResponseEntity.ok(resp);
     }
 
@@ -133,5 +141,25 @@ public class FileController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + downloadName + "\"")
                 .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(index.getSize()))
                 .body(resource);
+    }
+
+    private Optional<User> userFromAuthorization(String authorization) {
+        String token = MeController.bearerToken(authorization);
+        if (token == null) {
+            return Optional.empty();
+        }
+        Optional<Long> uid = tokens.userIdOf(token);
+        if (uid.isEmpty()) {
+            return Optional.empty();
+        }
+        return userRepo.findById(uid.get());
+    }
+
+    private static ResponseEntity<Map<String, String>> unauthorized() {
+        return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 }
