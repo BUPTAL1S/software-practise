@@ -5,16 +5,20 @@ import com.lab.sipim.domain.Room;
 import com.lab.sipim.repo.CdrRepository;
 import com.lab.sipim.repo.RoomRepository;
 import com.lab.sipim.security.LoginTokens;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.Map;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-
-import java.time.Instant;
-import java.util.Map;
 
 import static org.hamcrest.Matchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -24,7 +28,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "SIPIM_DB=./target/test-cdr.db")
 public class CdrApiTest {
+
+    private static final Path TEST_DB = Path.of("target/test-cdr.db");
+
+    static {
+        try {
+            Files.deleteIfExists(TEST_DB);
+        } catch (IOException ex) {
+            throw new ExceptionInInitializerError(ex);
+        }
+    }
+
+    @AfterAll
+    static void deleteTestStore() {
+        try {
+            Files.deleteIfExists(TEST_DB);
+        } catch (IOException ignored) {
+            // Hikari/SQLite still holds the file on Windows until the JVM exits.
+        }
+    }
 
     @Autowired
     private MockMvc mvc;

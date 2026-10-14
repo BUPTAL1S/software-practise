@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>后台统计</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #f6f8fa;
+      color: #1f2328;
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    .hint {
+      margin: 0 0 16px;
+      color: #59636e;
+    }
+    button {
+      border: 1px solid #d0d7de;
+      background: #fff;
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 16px 0 24px;
+    }
+    .card, section {
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+    }
+    .card {
+      padding: 12px 14px;
+    }
+    .card span {
+      display: block;
+      color: #59636e;
+      font-size: 13px;
+    }
+    .card strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 22px;
+    }
+    section {
+      margin-top: 16px;
+      padding: 12px 14px 16px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid #d0d7de;
+      font-size: 14px;
+    }
+    .error {
+      color: #cf222e;
+      min-height: 1.2em;
+    }
+    @media (max-width: 720px) {
+      .stats {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>后台统计</h1>
+    <p class="hint">通话次数、时长、房间人数峰值，以及 CDR 和用户列表。数据来自已有接口，不需要登录。</p>
+    <button type="button" id="refresh">刷新</button>
+    <p class="error" id="error"></p>
+    <div class="stats">
+      <div class="card"><span>通话次数</span><strong id="totalCalls">-</strong></div>
+      <div class="card"><span>总时长（秒）</span><strong id="totalDurationSec">-</strong></div>
+      <div class="card"><span>平均时长（秒）</span><strong id="averageDurationSec">-</strong></div>
+      <div class="card"><span>房间人数峰值</span><strong id="peakRoomMembers">-</strong></div>
+    </div>
+    <section>
+      <h2>通话记录</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>主叫</th>
+            <th>被叫或房间</th>
+            <th>开始时间</th>
+            <th>时长（秒）</th>
+          </tr>
+        </thead>
+        <tbody id="cdr"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>用户</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>用户名</th>
+            <th>SIP ID</th>
+          </tr>
+        </thead>
+        <tbody id="users"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const errorEl = document.getElementById("error");
+
+    function cell(text) {
+      const td = document.createElement("td");
+      td.textContent = text == null ? "" : String(text);
+      return td;
+    }
+
+    function fillRows(tbody, rows, columns) {
+      tbody.replaceChildren();
+      if (rows.length === 0) {
+        const tr = document.createElement("tr");
+        const td = cell("暂无记录");
+        td.colSpan = columns.length;
+        tr.append(td);
+        tbody.append(tr);
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        for (const key of columns) {
+          tr.append(cell(row[key]));
+        }
+        tbody.append(tr);
+      }
+    }
+
+    async function loadJson(url) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(url + " 返回 " + response.status);
+      }
+      return response.json();
+    }
+
+    async function refresh() {
+      errorEl.textContent = "";
+      try {
+        const [stats, cdr, users] = await Promise.all([
+          loadJson("/api/cdr/stats"),
+          loadJson("/api/cdr?limit=100"),
+          loadJson("/api/users")
+        ]);
+        document.getElementById("totalCalls").textContent = stats.totalCalls;
+        document.getElementById("totalDurationSec").textContent = stats.totalDurationSec;
+        document.getElementById("averageDurationSec").textContent = stats.averageDurationSec;
+        document.getElementById("peakRoomMembers").textContent = stats.peakRoomMembers;
+        fillRows(document.getElementById("cdr"), cdr, ["caller", "callee_or_room", "started_at", "duration_sec"]);
+        fillRows(document.getElementById("users"), users, ["username", "sipId"]);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+    refresh();
+  </script>
+</body>
+</html>
