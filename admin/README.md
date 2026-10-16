@@ -11,6 +11,7 @@ mvn spring-boot:run
 ```
 
 - 健康检查：`GET http://localhost:8080/api/health`
+- 统计页：`GET http://localhost:8080/`
 - 用户列表：`GET http://localhost:8080/api/users`
 - 库文件：`admin/sipim.db`（已 gitignore）
 - 首次启动会插入测试用户 `1001`–`1008`（`sip_id` 同名，与 Kamailio 静态账号对齐）。
@@ -103,7 +104,7 @@ curl.exe -OJ http://localhost:8080/api/files/1
 
 ## 通话记录与统计（阶段 4）
 
-客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。
+客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。浏览器打开 `http://localhost:8080/` 可看通话次数、总时长、平均时长、房间人数峰值，以及 CDR 和用户列表。页面只读已有 GET 接口，不要求登录。ESL 留给阶段 5。
 
 ### 1. 通话记录上报
 
@@ -172,6 +173,15 @@ curl.exe -OJ http://localhost:8080/api/files/1
 - `averageDurationSec`：平均单次通话时长（秒）
 - `peakRoomMembers`：房间最大同时在会人数峰值（基于通话时段 `[startedAt, startedAt + durationSec]` 的真实时间区间重叠扫描算法计算，反映瞬时并发参会人数，而非历史上不同账号的累计总数；结合各房间的当前在会人数 `rooms.memberCount` 取最大值）
 
+```bash
+# 上报一条通话
+curl.exe -s -H "Content-Type: application/json" -d "{\"caller\":\"1001\",\"callee_or_room\":\"1002\",\"started_at\":\"2026-10-13T10:00:00Z\",\"duration_sec\":45}" http://localhost:8080/api/cdr
+
+# 列表与统计
+curl.exe -s "http://localhost:8080/api/cdr?caller=1001&limit=50"
+curl.exe -s http://localhost:8080/api/cdr/stats
+```
+
 ## 四张表
 
 | 表 | 字段（最少） |
@@ -188,4 +198,4 @@ curl.exe -OJ http://localhost:8080/api/files/1
 - Spring Web
 - Spring Data JPA + SQLite（文件 `sipim.db`，不入库）
 - `spring-security-crypto`：只做 BCrypt，不启用 Spring Security 过滤链
-- ESL：阶段 4 再加，本阶段不接 FreeSWITCH
+- ESL：阶段 5 再加，本阶段不接 FreeSWITCH
