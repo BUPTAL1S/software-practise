@@ -13,6 +13,8 @@ import org.pjsip.pjsua2.Call;
 import org.pjsip.pjsua2.CallInfo;
 import org.pjsip.pjsua2.CallMediaInfo;
 import org.pjsip.pjsua2.CallOpParam;
+import org.pjsip.pjsua2.CallVidSetStreamParam;
+import org.pjsip.pjsua2.pjsua_call_vid_strm_op;
 import org.pjsip.pjsua2.Endpoint;
 import org.pjsip.pjsua2.EpConfig;
 import org.pjsip.pjsua2.LogEntry;
@@ -31,6 +33,7 @@ import org.pjsip.pjsua2.VideoDevInfo;
 import org.pjsip.pjsua2.VideoPreview;
 import org.pjsip.pjsua2.VideoPreviewOpParam;
 import org.pjsip.pjsua2.VideoWindow;
+import org.pjsip.pjsua2.VideoWindowInfo;
 import org.pjsip.pjsua2.pj_log_decoration;
 import java.util.HashMap;
 import java.util.Map;
@@ -263,9 +266,12 @@ final class SipService {
         sz.setH(320);
         try {
           win.setSize(sz);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+          events.log("警告", "设置预览窗口分辨率失败: " + t.getMessage());
         }
         win.Show(true);
+
+        // 方案 A：针对本地摄像头预览应用渲染层水平镜像变换（符合照镜子直觉，远端发送流不受影响）
         if (previewMirrorEnabled) {
           try {
             VideoWindowInfo winInfo = win.getInfo();
@@ -321,6 +327,124 @@ final class SipService {
     }
   }
 
+  private volatile String mockTarget = null;
+  private volatile Boolean mockVideo = null;
+  private volatile VideoWindow testNativeVideoWindow = null;
+
+  synchronized void setMockCallStateForTest(String target, boolean isVideo) {
+    this.mockTarget = target;
+    this.mockVideo = isVideo;
+    events.stateChanged();
+  }
+
+  synchronized void clearMockCallStateForTest() {
+    this.mockTarget = null;
+    this.mockVideo = null;
+    events.stateChanged();
+  }
+
+  synchronized void attachActiveVideoWindowForTest(VideoWindow win) {
+    this.testNativeVideoWindow = win;
+    if (activeCall != null) {
+      activeCall.attachVideoWindow(win);
+    }
+  }
+
+  synchronized VideoWindow getActiveVideoWindowForTest() {
+    if (activeCall != null) {
+      return activeCall.getActiveVideoWindow();
+    }
+    return testNativeVideoWindow;
+  }
+
+  synchronized boolean isInCall() {
+    return activeCall != null || mockTarget != null;
+  }
+
+  synchronized String currentCallTarget() {
+    if (mockTarget != null) {
+      return mockTarget;
+    }
+    if (activeCall == null) {
+      return "";
+    }
+    String dst = activeCall.dialedDst;
+    if (dst != null && !dst.isBlank()) {
+      return dst.trim();
+    }
+    try {
+      CallInfo info = activeCall.getInfo();
+      String remote = info.getRemoteUri();
+      return remote != null ? remote.trim() : "";
+    } catch (Exception e) {
+      return dst != null ? dst.trim() : "";
+    }
+  }
+
+  synchronized boolean isCurrentRoom(String roomSipUri) {
+    if (mockTarget != null) {
+      if (roomSipUri == null || roomSipUri.isBlank()) {
+        return false;
+      }
+      String u1 = extractUser(mockTarget);
+      String u2 = extractUser(roomSipUri);
+      return !u1.isEmpty() && u1.equalsIgnoreCase(u2);
+    }
+    if (activeCall == null || roomSipUri == null || roomSipUri.isBlank()) {
+      return false;
+    }
+    String cur = currentCallTarget();
+    if (cur.isEmpty()) {
+      return false;
+    }
+    String u1 = extractUser(cur);
+    String u2 = extractUser(roomSipUri);
+    return !u1.isEmpty() && u1.equalsIgnoreCase(u2);
+  }
+
+  synchronized boolean isInRoomCall() {
+    if (mockTarget != null) {
+      String u = extractUser(mockTarget);
+      return u.startsWith("room-");
+    }
+    if (activeCall == null) {
+      return false;
+    }
+    String cur = currentCallTarget();
+    String u = extractUser(cur);
+    return u.startsWith("room-");
+  }
+
+  synchronized boolean isCurrentCallVideo() {
+    if (mockVideo != null) {
+      return mockVideo;
+    }
+    if (testNativeVideoWindow != null) {
+      return true;
+    }
+    if (activeCall == null) {
+      return false;
+    }
+    return activeCall.isVideoActive();
+  }
+
+  synchronized void closeActiveVideoWindow() {
+    if (testNativeVideoWindow != null) {
+      try {
+        testNativeVideoWindow.Show(false);
+      } catch (Throwable ignored) {
+      }
+      try {
+        testNativeVideoWindow.delete();
+      } catch (Throwable ignored) {
+      }
+      testNativeVideoWindow = null;
+    }
+    if (activeCall != null) {
+      activeCall.closeVideoWindow();
+    }
+  }
+
   String statusText() {
     ClientCall call;
     boolean on;
@@ -334,6 +458,16 @@ final class SipService {
       proxy = outboundProxy;
       reg = lastRegCode;
     }
+    if (mockTarget != null) {
+      String remote = mockTarget;
+      boolean isRoom = remote.contains("room-");
+      if (isRoom) {
+        boolean hasVideo = isCurrentCallVideo();
+        String mode = hasVideo ? "视频会议 (3×3 混流)" : "语音会议 (纯音频)";
+        return "在会中 · " + mode + "  " + remote;
+      }
+      return "通话中  " + remote;
+    }
     if (!on) {
       return "引擎未启动";
     }
@@ -343,6 +477,29 @@ final class SipService {
         String remote = info.getRemoteUri();
         if (remote == null || remote.isBlank()) {
           remote = "";
+        }
+        boolean isRoom =
+            (remote.contains("room-")
+                || (call.dialedDst != null && call.dialedDst.contains("room-")));
+        if (isRoom) {
+          boolean hasVideo = false;
+          try {
+            for (int i = 0; i < info.getMedia().size(); i++) {
+              if (info.getMedia().get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO
+                  && info.getMedia().get(i).getStatus()
+                      == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
+                hasVideo = true;
+                break;
+              }
+            }
+          } catch (Exception ignored) {
+          }
+          String stateStr =
+              (info.getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
+                  ? "在会中"
+                  : info.getStateText();
+          String mode = hasVideo ? "视频会议 (3×3 混流)" : "语音会议 (纯音频)";
+          return stateStr + " · " + mode + (remote.isEmpty() ? "" : "  " + remote);
         }
         return info.getStateText() + (remote.isEmpty() ? "" : "  " + remote);
       } catch (Exception e) {
@@ -364,7 +521,11 @@ final class SipService {
       return boundPort;
     }
     NativeLoader.load();
-    int port = preferredPort <= 0 ? 5060 : preferredPort;
+    int port = preferredPort <= 0 ? 5062 : preferredPort;
+    if (port == 5060 && CampusLan.probeTcp("127.0.0.1")) {
+      events.log("系统", "本机 5060 端口已有 SIP 代理服务 (Kamailio)，客户端自动切换至 5062 端口以避免冲突");
+      port = 5062;
+    }
     Exception last = null;
     for (int i = 0; i < 6; i++) {
       int tryPort = port + i * 2;
@@ -408,24 +569,6 @@ final class SipService {
       throws Exception {
     if (!isStarted()) {
       throw new IllegalStateException("先启动引擎");
-    }
-    ClientAccount previous;
-    synchronized (this) {
-      previous = account;
-      account = null;
-      lastRegCode = 0;
-    }
-    if (previous != null) {
-      try {
-        previous.shutdown();
-      } catch (Exception ignored) {
-        // replacing account
-      }
-      try {
-        previous.delete();
-      } catch (Exception ignored) {
-        // replacing account
-      }
     }
     CampusLan.Target target = CampusLan.parseServer(server);
     if (target.host.isEmpty()) {
@@ -473,6 +616,46 @@ final class SipService {
     if (password != null && !password.isEmpty()) {
       cfg.getSipConfig().getAuthCreds().add(new AuthCredInfo("digest", "*", user, 0, password));
     }
+
+    ClientAccount current;
+    synchronized (this) {
+      current = account;
+    }
+
+    // 若当前账号对象有效且用户一致，使用 modify 原地更新并调用 setRegistration(true) 触发重注册
+    if (current != null && current.isValid() && user.equals(current.getUsername())) {
+      try {
+        current.modify(cfg);
+        synchronized (this) {
+          outboundProxy = sipTarget;
+        }
+        current.setRegistration(true);
+        events.log("注册", "正在重新发起 REGISTER " + cfg.getIdUri() + " → " + sipTarget);
+        events.stateChanged();
+        return;
+      } catch (Exception ex) {
+        String msg = ex.getMessage() != null ? ex.getMessage() : "";
+        if (msg.contains("EBUSY") || msg.toLowerCase().contains("busy")) {
+          events.log("注册", "注册请求已在处理中，无需重复发起");
+          events.stateChanged();
+          return;
+        }
+        events.log("系统", "复用账号配置更新失败 (" + msg + ")，将尝试重建账号");
+      }
+    }
+
+    if (current != null) {
+      try {
+        current.delete();
+      } catch (Exception ignored) {
+      }
+      synchronized (this) {
+        if (account == current) {
+          account = null;
+        }
+      }
+    }
+
     ClientAccount next = new ClientAccount(user);
     synchronized (this) {
       clearBuddiesLocked();
@@ -480,8 +663,13 @@ final class SipService {
       lastRegCode = 0;
       outboundProxy = sipTarget;
     }
-    next.create(cfg);
-    events.log("注册", "正在 REGISTER " + cfg.getIdUri() + " → " + sipTarget);
+    try {
+      next.create(cfg);
+      events.log("注册", "正在 REGISTER " + cfg.getIdUri() + " → " + sipTarget);
+    } catch (Exception ex) {
+      events.log("警告", "发起注册异常：" + ex.getMessage() + "，若显示 busy 请稍候重试");
+      throw ex;
+    }
     events.stateChanged();
   }
 
@@ -513,7 +701,7 @@ final class SipService {
         throw new IllegalStateException("尚未注册成功");
       }
       acc = account;
-      next = new ClientCall(acc, dst);
+      next = new ClientCall(acc, dst, video);
       activeCall = next;
       proxy = outboundProxy;
     }
@@ -523,24 +711,53 @@ final class SipService {
       prm.getOpt().setVideoCount(0);
     }
     next.makeCall(dst, prm);
-    events.log(
-        "通话",
-        "正在发起" + (video ? "视频" : "语音") + "呼叫 " + dst + (proxy.isEmpty() ? "" : " 经 " + proxy));
+    boolean isRoom = dst.contains("room-");
+    if (isRoom) {
+      if (video) {
+        events.log(
+            "通话",
+            "正在发起【视频参会】接入 MCU 会议室 "
+                + dst
+                + " (拉起 3×3 混流画布)"
+                + (proxy.isEmpty() ? "" : " 经 " + proxy));
+      } else {
+        events.log(
+            "通话",
+            "正在发起【语音参会】接入 MCU 会议室 "
+                + dst
+                + " (纯音频通话，无视频窗)"
+                + (proxy.isEmpty() ? "" : " 经 " + proxy));
+      }
+    } else {
+      events.log(
+          "通话",
+          "正在发起" + (video ? "视频" : "语音") + "呼叫 " + dst + (proxy.isEmpty() ? "" : " 经 " + proxy));
+    }
     events.stateChanged();
   }
 
   void hangup() {
     ClientCall call;
     String proxy;
+    String mock;
     synchronized (this) {
       call = activeCall;
       proxy = outboundProxy;
+      mock = mockTarget;
     }
     if (call == null) {
+      if (mock != null) {
+        clearMockCallStateForTest();
+        closeActiveVideoWindow();
+        events.log("通话", "已退出会议/挂断");
+        events.stateChanged();
+        return;
+      }
       events.log("通话", "当前没有通话");
       events.stateChanged();
       return;
     }
+    closeActiveVideoWindow();
     events.log("通话", "正在发送 BYE" + (proxy.isEmpty() ? "" : " 经 " + proxy));
     armHangupWatch(call);
     hangupQuiet(false);
@@ -566,6 +783,7 @@ final class SipService {
       events.log("系统", "正在接听呼叫，自动停止本地摄像头预览以释放设备");
       stopPreview();
     }
+    call.setVideoConfigured(video);
     CallInfo info = call.getInfo();
     int state = info.getState();
     if (state != pjsip_inv_state.PJSIP_INV_STATE_INCOMING
@@ -750,6 +968,7 @@ final class SipService {
     if (call == null) {
       return null;
     }
+    call.closeVideoWindow();
     try {
       call.hangup(new CallOpParam());
     } catch (Exception ignored) {
@@ -926,21 +1145,39 @@ final class SipService {
 
     @Override
     public void onIncomingCall(OnIncomingCallParam prm) {
-      ClientCall previous;
       ClientCall incoming;
       synchronized (SipService.this) {
-        previous = activeCall;
+        if (activeCall != null) {
+          // 当前已有正在进行的通话（或振铃），向第二路新来电直接回复 486 Busy Here
+          ClientCall busyCall = new ClientCall(this, prm.getCallId());
+          try {
+            CallOpParam busyParam = new CallOpParam();
+            busyParam.setStatusCode(pjsip_status_code.PJSIP_SC_BUSY_HERE);
+            busyCall.hangup(busyParam);
+          } catch (Exception e) {
+            events.log("警告", "回 486 Busy 失败：" + e.getMessage());
+          }
+          try {
+            Platform.runLater(
+                () -> {
+                  try {
+                    busyCall.delete();
+                  } catch (Exception ignored) {
+                  }
+                });
+          } catch (IllegalStateException e) {
+            // Toolkit not initialized (e.g. headless unit tests)
+            try {
+              busyCall.delete();
+            } catch (Exception ignored) {
+            }
+          }
+          events.log("通话", "当前已有正在进行的通话，已向新来电回复 486 Busy Here (callId=" + prm.getCallId() + ")");
+          return;
+        }
         incoming = new ClientCall(this, prm.getCallId());
         activeCall = incoming;
         incomingRinging = true;
-      }
-      if (previous != null) {
-        previous.localHangup = true;
-        try {
-          previous.hangup(new CallOpParam());
-        } catch (Exception ignored) {
-          // previous call going away
-        }
       }
       String remote = "";
       String callId = "";
@@ -994,19 +1231,77 @@ final class SipService {
     private volatile java.time.Instant connectTime;
     private final boolean isOutgoing;
     private final String dialedDst;
+    private volatile boolean videoConfigured;
+    private volatile boolean videoStreamActive;
+    private volatile VideoWindow activeVideoWindow;
     private volatile boolean localHangup;
     private volatile boolean callEndedDispatched;
 
-    ClientCall(Account acc, String dialedDst) {
+    ClientCall(Account acc, String dialedDst, boolean videoConfigured) {
       super(acc);
       this.isOutgoing = true;
       this.dialedDst = dialedDst != null ? dialedDst : "";
+      this.videoConfigured = videoConfigured;
+    }
+
+    ClientCall(Account acc, String dialedDst) {
+      this(acc, dialedDst, false);
     }
 
     ClientCall(Account acc, int callId) {
       super(acc, callId);
       this.isOutgoing = false;
       this.dialedDst = "";
+      this.videoConfigured = false;
+    }
+
+    synchronized void setVideoConfigured(boolean video) {
+      this.videoConfigured = video;
+    }
+
+    synchronized boolean isVideoActive() {
+      if (videoStreamActive || activeVideoWindow != null) {
+        return true;
+      }
+      if (videoConfigured) {
+        return true;
+      }
+      try {
+        CallInfo ci = getInfo();
+        for (int i = 0; i < ci.getMedia().size(); i++) {
+          CallMediaInfo media = ci.getMedia().get(i);
+          if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO
+              && media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
+            return true;
+          }
+        }
+      } catch (Throwable ignored) {
+      }
+      return false;
+    }
+
+    synchronized void attachVideoWindow(VideoWindow win) {
+      this.activeVideoWindow = win;
+      this.videoStreamActive = (win != null);
+    }
+
+    synchronized VideoWindow getActiveVideoWindow() {
+      return this.activeVideoWindow;
+    }
+
+    synchronized void closeVideoWindow() {
+      if (activeVideoWindow != null) {
+        try {
+          activeVideoWindow.Show(false);
+        } catch (Throwable ignored) {
+        }
+        try {
+          activeVideoWindow.delete();
+        } catch (Throwable ignored) {
+        }
+        activeVideoWindow = null;
+      }
+      videoStreamActive = false;
     }
 
     @Override
@@ -1070,6 +1365,10 @@ final class SipService {
           Platform.runLater(
               () -> {
                 try {
+                  closeVideoWindow();
+                } catch (Throwable ignored) {
+                }
+                try {
                   delete();
                 } catch (Exception ignored) {
                   // already gone
@@ -1103,15 +1402,73 @@ final class SipService {
               if (winId >= 0) {
                 try {
                   VideoWindow vidWin = new VideoWindow(winId);
+                  synchronized (this) {
+                    if (this.activeVideoWindow != null && this.activeVideoWindow != vidWin) {
+                      try {
+                        this.activeVideoWindow.Show(false);
+                        this.activeVideoWindow.delete();
+                      } catch (Throwable ignored) {
+                      }
+                    }
+                    this.activeVideoWindow = vidWin;
+                    this.videoStreamActive = true;
+                  }
+                  boolean isRoom = (dialedDst != null && dialedDst.contains("room-"))
+                      || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
                   MediaSize sz = new MediaSize();
-                  sz.setW(640);
-                  sz.setH(360);
+                  if (isRoom) {
+                    sz.setW(1280);
+                    sz.setH(720);
+                  } else {
+                    sz.setW(640);
+                    sz.setH(360);
+                  }
+                  boolean sizeSet = false;
                   try {
                     vidWin.setSize(sz);
-                  } catch (Throwable ignored) {
+                    sizeSet = true;
+                  } catch (Throwable t) {
+                    events.log("警告", "设置视频窗口分辨率失败: " + t.getMessage());
                   }
                   vidWin.Show(true);
-                  events.log("通话", "双向视频流已接通，已拉起独立原生视频窗口 (窗口 ID=" + winId + ")");
+                  if (isRoom) {
+                    boolean hasCap = hasCaptureDevice();
+                    if (hasCap && media.getVideoCapDev() < 0) {
+                      try {
+                        int devId = findDefaultCaptureDev();
+                        if (devId >= 0) {
+                          CallVidSetStreamParam vParam = new CallVidSetStreamParam();
+                          vParam.setMedIdx(i);
+                          vParam.setCapDev(devId);
+                          vidSetStream(
+                              pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT, vParam);
+                        }
+                      } catch (Throwable ignored) {
+                      }
+                    }
+                    String capNote =
+                        hasCap ? "本地摄像头推流已启动" : "本地无可用摄像头，仅接收混流画面";
+                    if (sizeSet) {
+                      events.log(
+                          "通话",
+                          "MCU 会议室 720p 视频流已接通，正在渲染 3×3 九宫格混流画布 (窗口 ID="
+                              + winId
+                              + ", 分辨率=1280×720，"
+                              + capNote
+                              + "。若会议室其他成员未开启视频推流，其余宫格显示为黑底)");
+                    } else {
+                      events.log(
+                          "通话",
+                          "MCU 会议室视频流已接通，使用系统默认分辨率 (窗口 ID="
+                              + winId
+                              + "，"
+                              + capNote
+                              + "。若无远端画面其余宫格显示为黑底)");
+                    }
+                  } else {
+                    String resStr = sizeSet ? ", 分辨率=640×360" : "";
+                    events.log("通话", "点对点双向视频流已接通，已拉起独立原生视频窗口 (窗口 ID=" + winId + resStr + ")");
+                  }
                 } catch (Exception ve) {
                   events.log("警告", "视频窗口显示异常: " + ve.getMessage());
                 }

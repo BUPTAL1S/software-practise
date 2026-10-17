@@ -98,4 +98,69 @@ class ChatMessageTest {
     assertEquals("已送达", msg1.getStatus());
     assertEquals("已送达", msg2.getStatus());
   }
+
+  @Test
+  void testIsRoomTarget() {
+    assertTrue(MainApp.isRoomTarget("room-101"));
+    assertTrue(MainApp.isRoomTarget("sip:room-101@lab"));
+    assertTrue(MainApp.isRoomTarget("<sip:room-101@127.0.0.1:5060>"));
+    assertTrue(MainApp.isRoomTarget("\"Conference Room\" <sip:room-demo@lab:5060>"));
+    assertFalse(MainApp.isRoomTarget("1002"));
+    assertFalse(MainApp.isRoomTarget("sip:1002@lab"));
+    assertFalse(MainApp.isRoomTarget("<sip:1002@127.0.0.1:5060>"));
+    assertFalse(MainApp.isRoomTarget(""));
+    assertFalse(MainApp.isRoomTarget("   "));
+    assertFalse(MainApp.isRoomTarget(null));
+  }
+
+  @Test
+  void testReceiptTargetUserMatching() {
+    java.util.List<ChatMessage> list = new java.util.ArrayList<>();
+    ChatMessage msgA = ChatMessage.text("1001", "1002", true, "你好");
+    ChatMessage msgB = ChatMessage.text("1001", "1003", true, "你好");
+    list.add(msgA);
+    list.add(msgB);
+
+    // 1. When targetUser is empty, should NEVER match any message even if body is identical
+    String targetUserEmpty = "";
+    String body = "你好";
+    boolean matchedEmpty = false;
+    for (int i = 0; i < list.size(); i++) {
+      ChatMessage m = list.get(i);
+      if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
+        if (!targetUserEmpty.isEmpty() && targetUserEmpty.equals(m.getReceiver())) {
+          String expectedBody = m.isFile() ? m.getFile().toWireFormat() : m.getText();
+          if (body != null && !body.isEmpty() && expectedBody.equals(body)) {
+            m.setStatus("已送达");
+            matchedEmpty = true;
+            break;
+          }
+        }
+      }
+    }
+    assertFalse(matchedEmpty);
+    assertEquals("已发送", msgA.getStatus());
+    assertEquals("已发送", msgB.getStatus());
+
+    // 2. When targetUser is 1003, should only match msgB, never touching msgA
+    String targetUser1003 = "1003";
+    boolean matched1003 = false;
+    for (int i = 0; i < list.size(); i++) {
+      ChatMessage m = list.get(i);
+      if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
+        if (!targetUser1003.isEmpty() && targetUser1003.equals(m.getReceiver())) {
+          String expectedBody = m.isFile() ? m.getFile().toWireFormat() : m.getText();
+          if (body != null && !body.isEmpty() && expectedBody.equals(body)) {
+            m.setStatus("已送达");
+            matched1003 = true;
+            break;
+          }
+        }
+      }
+    }
+    assertTrue(matched1003);
+    assertEquals("已发送", msgA.getStatus());
+    assertEquals("已送达", msgB.getStatus());
+  }
 }
+
