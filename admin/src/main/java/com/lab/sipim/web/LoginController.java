@@ -1,10 +1,13 @@
 package com.lab.sipim.web;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,11 +33,15 @@ public class LoginController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<Map<String, String>> login(@RequestBody LoginRequest request) {
+    public ResponseEntity<Map<String, String>> login(@RequestBody(required = false) LoginRequest request) {
         if (request == null || blank(request.username()) || blank(request.password())) {
             return ResponseEntity.badRequest().body(Map.of("error", MISSING));
         }
-        Optional<User> found = users.findByUsername(request.username());
+        String trimmedUser = request.username().trim();
+        Optional<User> found = users.findByUsername(trimmedUser);
+        if (found.isEmpty()) {
+            found = users.findBySipId(trimmedUser);
+        }
         if (found.isEmpty() || !passwordEncoder.matches(request.password(), found.get().getPasswordHash())) {
             return ResponseEntity.status(401).body(Map.of("error", UNAUTHORIZED));
         }
@@ -46,10 +53,50 @@ public class LoginController {
                 "sipId", user.getSipId()));
     }
 
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
+        if (request == null || blank(request.username()) || blank(request.password())) {
+            return ResponseEntity.badRequest().body(Map.of("error", MISSING));
+        }
+        String username = request.username().trim();
+        String password = request.password().trim();
+        String sipId = (request.sipId() != null && !request.sipId().isBlank())
+                ? request.sipId().trim()
+                : username;
+
+        if (users.findByUsername(username).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "username already exists"));
+        }
+        if (users.findBySipId(sipId).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "sipId already exists"));
+        }
+
+        User user = new User();
+        user.setUsername(username);
+        user.setSipId(sipId);
+        user.setPasswordHash(passwordEncoder.encode(password));
+        User saved = users.save(user);
+
+        String token = tokens.issue(saved.getId());
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("id", saved.getId());
+        resp.put("username", saved.getUsername());
+        resp.put("sipId", saved.getSipId());
+        resp.put("token", token);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
     private static boolean blank(String value) {
         return value == null || value.isBlank();
     }
 
     public record LoginRequest(String username, String password) {
+    }
+
+    public record RegisterRequest(
+            String username,
+            String password,
+            @JsonAlias({"sip_id", "sipId"}) String sipId) {
     }
 }

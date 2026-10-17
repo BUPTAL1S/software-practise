@@ -28,7 +28,6 @@ public interface CdrRepository extends JpaRepository<Cdr, Long> {
     @Query("SELECT COALESCE(SUM(c.durationSec), 0) FROM Cdr c")
     long sumTotalDurationSec();
 
-    @Query("SELECT DISTINCT c.calleeOrRoom FROM Cdr c WHERE c.calleeOrRoom LIKE 'room%'")
+    @Query("SELECT DISTINCT c.calleeOrRoom FROM Cdr c WHERE c.calleeOrRoom LIKE 'room%' OR c.calleeOrRoom LIKE '%room-%'")
     List<String> findDistinctRoomUris();
 }
-

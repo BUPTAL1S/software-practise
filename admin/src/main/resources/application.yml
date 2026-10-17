@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8088}
 
 spring:
   datasource:
@@ -21,3 +21,11 @@ sipim:
 logging:
   level:
     com.lab.sipim: INFO
+
+freeswitch:
+  esl:
+    enabled: ${ESL_ENABLED:true}
+    host: ${ESL_HOST:127.0.0.1}
+    port: ${ESL_PORT:8021}
+    password: ${ESL_PASSWORD:ClueCon}
+    reconnect-interval-sec: 5

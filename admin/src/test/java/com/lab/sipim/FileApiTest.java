@@ -215,4 +215,24 @@ class FileApiTest {
             });
         }
     }
+
+    @Test
+    void listFilesReturnsMetadataArray() throws Exception {
+        byte[] content = "Listable test file".getBytes(StandardCharsets.UTF_8);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "list_doc.txt", "text/plain", content);
+
+        mvc.perform(multipart("/api/files")
+                        .file(file)
+                        .param("from", "1003")
+                        .param("to", "room-101"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/files?from=1003"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("list_doc.txt"))
+                .andExpect(jsonPath("$[0].from").value("1003"))
+                .andExpect(jsonPath("$[0].to").value("room-101"))
+                .andExpect(jsonPath("$[0].url").isNotEmpty());
+    }
 }
