@@ -73,4 +73,37 @@ class DashboardApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.username").value("1088"));
     }
+
+    @Test
+    void onlineUsersCountsDistinctLogins() throws Exception {
+        mvc.perform(post("/api/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"1099\",\"password\":\"p1099\"}"))
+                .andExpect(status().isCreated());
+
+        String afterRegister = mvc.perform(get("/api/users/online"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.users", org.hamcrest.Matchers.hasItem("1099")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        int countAfterRegister = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(afterRegister)
+                .get("count")
+                .asInt();
+
+        mvc.perform(post("/api/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"1099\",\"password\":\"p1099\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/users/online"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(countAfterRegister))
+                .andExpect(jsonPath("$.users", org.hamcrest.Matchers.hasItem("1099")));
+
+        mvc.perform(get("/index.html"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("statOnlineUsers")));
+    }
 }

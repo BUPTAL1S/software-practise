@@ -2,7 +2,11 @@ package com.lab.sipim.web;
 
 import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.UserRepository;
+import com.lab.sipim.security.LoginTokens;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -13,10 +17,25 @@ public class UserController {
 
     private final UserRepository users;
     private final LoginController loginController;
+    private final LoginTokens tokens;
 
-    public UserController(UserRepository users, LoginController loginController) {
+    public UserController(UserRepository users, LoginController loginController, LoginTokens tokens) {
         this.users = users;
         this.loginController = loginController;
+        this.tokens = tokens;
+    }
+
+    @GetMapping("/online")
+    public Map<String, Object> online() {
+        List<String> names = new ArrayList<>();
+        for (Long userId : tokens.onlineUserIds()) {
+            users.findById(userId).map(User::getUsername).ifPresent(names::add);
+        }
+        names.sort(String::compareTo);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("count", names.size());
+        body.put("users", names);
+        return body;
     }
 
     @GetMapping

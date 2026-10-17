@@ -11,7 +11,7 @@ mvn spring-boot:run
 ```
 
 - **管理与统计大盘（Web）**：打开浏览器访问 `http://localhost:8080/`（或 `/index.html`、`/admin.html`）
-  - 实时指标：总通话次数、总时长、平均时长、房间并发峰值人数
+  - 实时指标：当前在线用户、总通话次数、总时长、平均时长、房间并发峰值人数
   - 数据面板：通话记录 (CDR)、会议房间 (Rooms)、注册用户 (Users)、文件传输 (Files)
   - 快捷操作：创建房间、快速注册用户、按主被叫筛选通话、文件直接下载
 - 健康检查：`GET http://localhost:8080/api/health`
@@ -70,6 +70,16 @@ mvn spring-boot:run
 `GET http://localhost:8080/api/me`，请求头 `Authorization: Bearer <token>`。
 - 成功 `200`：`{"username":"1001","sipId":"1001"}`
 - 无效或缺头：`401 {"error":"unauthorized"}`
+
+### 4. 当前在线用户
+`GET http://localhost:8080/api/users/online`
+
+成功 `200`：
+```json
+{"count":1,"users":["1002"]}
+```
+
+`count` 是当前进程里仍持有登录 token 的不同用户数。同一个人再次登录不会加一。后台重启后 token 清空，人数回到 0。这不是 Kamailio 的 SIP 注册人数。
 
 ## 房间管理（阶段 2 / 阶段 4 / 阶段 5 联动）
 
@@ -177,7 +187,7 @@ curl.exe -OJ http://localhost:8080/api/files/1
 
 ## 通话记录与统计（阶段 4）
 
-客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。浏览器打开 `http://localhost:8080/` 可看通话次数、总时长、平均时长、房间人数峰值，以及 CDR 和用户列表。页面只读已有 GET 接口，不要求登录。ESL 留给阶段 5。
+客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。浏览器打开 `http://localhost:8080/` 可看当前在线用户、通话次数、总时长、平均时长、房间人数峰值，以及 CDR 和用户列表。页面只读已有 GET 接口，不要求登录。房间当前在会人数由阶段 5 的 ESL 写入。
 
 ### 1. 通话记录上报
 
@@ -244,7 +254,7 @@ curl.exe -s http://localhost:8080/api/cdr/stats
 
 ## 房间 MCU 与 ESL 事件监听（阶段 5）
 
-后台用纯 Java 连接 FreeSWITCH ESL（默认 `127.0.0.1:8021`，密码 `ClueCon`）。容器没起来时按 5 秒重试，不挡住启动。
+后台用纯 Java 连接 FreeSWITCH ESL（默认 `127.0.0.1:8021`，密码 `ClueCon`，与 `server/freeswitch/autoload_configs/event_socket.conf.xml` 一致）。`8021` 只绑在跑 FreeSWITCH 的那台机器的回环地址上，校园网其他电脑连不进这个端口，所以不要把 `ESL_HOST` 改成同学的校园网 IP。后台必须和 FreeSWITCH 在同一台机器上跑。容器没起来时按 5 秒重试，不挡住启动。
 
 - 订阅 `conference::maintenance`。入会、离会时把 `Conference-Size` 写入该房间的 `member_count`，这是当前在会人数。
 - 历史峰值由 CDR 扫线现算，不写回 `member_count`。
@@ -265,7 +275,7 @@ freeswitch:
 | 表 | 字段（最少） | 说明 |
 |---|---|---|
 | users | id, username, password_hash, sip_id | 存储用户及 BCrypt 密码散列 |
-| rooms | id, name, sip_uri (`room-<id>`), max_members=8, member_count | 存储研讨/会议室与当前峰值人数 |
+| rooms | id, name, sip_uri (`room-<id>`), max_members=8, member_count | 存储研讨/会议室与 ESL 写入的当前在会人数 |
 | cdr | id, call_id, caller, callee_or_room, started_at, duration_sec | 通话记录与时长 |
 | files | id, from_user, to_user_or_room, path, size, created_at | 文件索引元数据 |
 
