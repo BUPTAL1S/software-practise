@@ -1,8 +1,10 @@
 package com.lab.sipim.security;
 
 import java.security.SecureRandom;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
@@ -25,5 +27,10 @@ public class LoginTokens {
             return Optional.empty();
         }
         return Optional.ofNullable(tokens.get(token));
+    }
+
+    /** Distinct users who still hold a login token in this process. */
+    public Set<Long> onlineUserIds() {
+        return new HashSet<>(tokens.values());
     }
 }

@@ -265,6 +265,14 @@
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-label">
+        <span>当前在线用户</span>
+        <span>🟢</span>
+      </div>
+      <div class="stat-value" id="statOnlineUsers">0</div>
+      <div class="stat-desc" id="statOnlineUsersDesc">已登录后台且 token 仍有效</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">
         <span>总通话次数</span>
         <span>📞</span>
       </div>
@@ -546,6 +554,22 @@
       return '📄';
     }
 
+    async function loadOnlineUsers() {
+      try {
+        const res = await fetch('/api/users/online');
+        if (!res.ok) throw new Error('拉取在线用户失败');
+        const data = await res.json();
+        const names = Array.isArray(data.users) ? data.users : [];
+        document.getElementById('statOnlineUsers').innerText = data.count ?? names.length;
+        document.getElementById('statOnlineUsersDesc').innerText =
+          names.length > 0 ? names.join('、') : '还没有人登录后台';
+        return new Set(names);
+      } catch (err) {
+        console.error('Online users error:', err);
+        return new Set();
+      }
+    }
+
     async function loadStats() {
       try {
         const res = await fetch('/api/cdr/stats');
@@ -687,6 +711,7 @@
         const res = await fetch('/api/users');
         if (!res.ok) throw new Error('拉取用户失败');
         const list = await res.json();
+        const online = await loadOnlineUsers();
         document.getElementById('userCountBadge').innerText = `${list.length} 人`;
 
         const tbody = document.getElementById('usersTableBody');
@@ -700,7 +725,7 @@
             <td><span class="badge badge-gray">#${u.id}</span></td>
             <td><strong>${u.username}</strong></td>
             <td><span class="badge badge-primary text-mono">${u.sipId || u.sip_id || u.username}</span></td>
-            <td><span class="badge badge-success">正常 (Kamailio / HTTP)</span></td>
+            <td><span class="badge ${online.has(u.username) ? 'badge-success' : 'badge-gray'}">${online.has(u.username) ? '在线' : '未登录'}</span></td>
           </tr>
         `).join('');
       } catch (err) {
@@ -782,7 +807,7 @@
               eslBadge.innerText = '● FreeSWITCH ESL 在线';
             } else {
               eslBadge.className = 'badge badge-gray';
-              eslBadge.innerText = '● ESL 监听中 (' + esl.target + ')';
+              eslBadge.innerText = '● ESL 未连接 ' + esl.target;
             }
           }
         }
@@ -792,6 +817,7 @@
 
     function loadAllData() {
       checkHealth();
+      loadOnlineUsers();
       loadStats();
       loadCdrList();
       loadRooms();
