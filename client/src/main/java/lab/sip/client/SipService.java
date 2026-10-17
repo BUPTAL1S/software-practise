@@ -207,8 +207,39 @@ final class SipService {
     return queryVideoDetails().captureDevId;
   }
 
+  private volatile boolean previewMirrorEnabled = true;
+
   synchronized boolean isPreviewActive() {
     return videoPreview != null;
+  }
+
+  synchronized boolean isPreviewMirrorEnabled() {
+    return previewMirrorEnabled;
+  }
+
+  synchronized void togglePreviewMirror() {
+    this.previewMirrorEnabled = !this.previewMirrorEnabled;
+    if (videoPreview != null) {
+      try {
+        VideoWindow win = videoPreview.getVideoWindow();
+        if (win != null) {
+          VideoWindowInfo winInfo = win.getInfo();
+          if (winInfo != null && winInfo.getWinHandle() != null
+              && winInfo.getWinHandle().getHandle() != null) {
+            long hwnd = winInfo.getWinHandle().getHandle().getWindow();
+            if (previewMirrorEnabled) {
+              NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+              events.log("系统", "摄像头预览已切换为：镜像模式 (符合照镜子直觉)");
+            } else {
+              NativeMirror.restoreNormal(hwnd, "摄像头预览 (真实)");
+              events.log("系统", "摄像头预览已切换为：真实模式 (非镜像)");
+            }
+          }
+        }
+      } catch (Throwable ignored) {
+      }
+    }
+    events.stateChanged();
   }
 
   synchronized void startPreview() throws Exception {
@@ -235,10 +266,22 @@ final class SipService {
         } catch (Throwable ignored) {
         }
         win.Show(true);
+        if (previewMirrorEnabled) {
+          try {
+            VideoWindowInfo winInfo = win.getInfo();
+            if (winInfo != null && winInfo.getWinHandle() != null
+                && winInfo.getWinHandle().getHandle() != null) {
+              long hwnd = winInfo.getWinHandle().getHandle().getWindow();
+              NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+            }
+          } catch (Throwable t) {
+            events.log("系统", "提示: 原生图层镜像应用: " + t.getMessage());
+          }
+        }
       }
     } catch (Exception ignored) {
     }
-    events.log("系统", "本地摄像头预览已开启 (" + vd.captureDev + ")");
+    events.log("系统", "本地摄像头预览已开启 (" + vd.captureDev + (previewMirrorEnabled ? " · 镜像模式" : " · 真实模式") + ")");
     events.stateChanged();
   }
 
