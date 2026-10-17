@@ -43,7 +43,8 @@ make
 native/windows-x64/pjsua2.dll
 ```
 
-并将 MinGW 依赖 DLL（从 `C:\msys64\mingw64\bin\` 拷贝）：
+并放入相关依赖 DLL 到 `native/windows-x64/` 目录：
+- `winmirror.dll`（原生摄像头预览镜像控制器，双击 `build-winmirror.bat` 或在 Mac/Linux 运行 `build-winmirror.sh` 编译生成）
 - `libwinpthread-1.dll`
 - `libgcc_s_seh-1.dll`
 - `libssp-0.dll`
@@ -53,6 +54,12 @@ native/windows-x64/pjsua2.dll
 拷到 `native/windows-x64/` 同一目录。`NativeLoader` 会在加载 `pjsua2.dll` 前自动预加载这些同级依赖。
 
 SWIG 生成的 Java 若与仓库 `client/src/main/java/org/pjsip/pjsua2/` 不一致，用 2.17 重新生成后覆盖那一份（Win/Mac 共用，不要各改各的）。
+
+### 编译本地镜像组件 winmirror.dll
+
+Windows 端本地摄像头预览的“照镜子”翻转功能由 `winmirror.dll` 提供：
+- **在 Windows 上编译**：直接双击运行 `native/windows-x64/build-winmirror.bat`；
+- **在 macOS/Linux 上交叉编译**：运行 `./native/windows-x64/build-winmirror.sh`（依赖 `mingw-w64`）。
 
 ## 启动
 

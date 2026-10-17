@@ -35,3 +35,14 @@ make
 同时将依赖的 `libopenh264.dylib` 与 `libSDL2-2.0.0.dylib`（或建立软链接 `libSDL2.dylib`）拷入 `native/macos-arm64/` 同级目录。`NativeLoader` 会在加载 `libpjsua2.dylib` 前自动预加载这些同级依赖。
 
 SWIG 生成的 `org.pjsip.pjsua2` Java 覆盖复制到 `client/src/main/java/org/pjsip/pjsua2/`。
+
+## 编译 macOS 原生摄像头镜像翻转动态库（libmacmirror.dylib）
+
+为实现本地摄像头预览的 GPU 渲染层水平镜像（方案 A：自视符合照镜子生理直觉，远端发送流保持光学真实），使用 macOS Cocoa/QuartzCore 编译 `libmacmirror.dylib`：
+
+```bash
+clang -dynamiclib -O2 -fPIC -framework Cocoa -framework QuartzCore \
+  -I/opt/homebrew/opt/openjdk@17/include \
+  -I/opt/homebrew/opt/openjdk@17/include/darwin \
+  native/macos-arm64/NativeMirror.m -o native/macos-arm64/libmacmirror.dylib
+```
