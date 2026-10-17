@@ -1,35 +1,49 @@
-# FreeSWITCH
+# FreeSWITCH MCU 与 ESL 配置
 
-阶段 4 只开 ESL，给后台订房间事件。不做呼叫中心，一对一不进这里。`sip:room-*@lab` 仍由 Kamailio 回 `480`，阶段 5 再把房间 INVITE 转进会议室。
+负责阶段 5 视频会议 MCU 与 ESL 事件通知。
 
-## ESL（后台用这个）
+## 架构与约定
 
-| 项 | 值 |
-| --- | --- |
-| 地址 | `127.0.0.1:8021` |
-| 密码 | `ClueCon` |
-| 订阅 | `CHANNEL_CREATE`、`CHANNEL_DESTROY`、`conference::maintenance` |
+1. **会议应用**：FreeSWITCH `mod_conference`，Profile 名称 `video-mcu-3x3`。
+2. **房间命名**：与 SIP 用户保持严格一致：`room-<id>`（如 `room-101`，由后台创建生成）。
+3. **容量限制**：`max-members=8`，第 9 人进入拒绝（回送忙音/拒绝）。
+4. **视频画布**：视频模式 `video-mode=mux`，布局 `video-layout-name=3x3`，分辨率 720p（1280×720 @ 30fps），支持 H.264 基线协商。
+5. **容器镜像与网络安全端口**：
+   - 镜像版本：`safarov/freeswitch:1.11.3`（阶段 5 锁定版本，与 `docs/deps.md` 一致）。
+   - SIP 端口：`5080 UDP/TCP`（与 Kamailio 的 5060 明确隔离，Kamailio 将 `room-*` 的 INVITE 路由至 `freeswitch:5080`）。
+   - ESL 端口：`127.0.0.1:8021 TCP`，宿主机端口映射仅绑定回环地址 `127.0.0.1`，配合 `acl.conf.xml` 放行私网（`10.0.0.0/8`、`127.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`），供 Docker 网桥访问。宿主机端口只绑在 `127.0.0.1`，校园网其他机器连不进 8021。
+   - 声音目录增量合成：主机自定义 `sounds/` 提示音由 entrypoint 增量注入 `/usr/share/freeswitch/sounds/`，不破坏容器内置音效。
 
-`conference::maintenance` 里看入会 / 离会（`add-member` / `del-member`）。后台只收事件，不要发 `originate` 之类的呼叫命令。
+## 配置文件结构
 
-镜像是 `safarov/freeswitch:1.10.12`。容器第一次启动会把自带 vanilla 配置拷到容器内的 `/etc/freeswitch`，密码就是上面的 `ClueCon`。镜像默认把 ESL 绑在 `::`，这台 Docker 没有 IPv6，所以 `lab-entrypoint.sh` 改成 `0.0.0.0:8021`。从宿主机连进来时，容器看到的是 Docker 网桥地址，默认 ACL 会拒绝，因此同时改成允许 `rfc1918.auto`。不要把空的 `server/freeswitch/` 整目录挂到 `/etc/freeswitch`，否则会盖掉这份配置。
+- `freeswitch.xml`：根配置文件（包含 vars、autoload_configs、dialplan、chatplan、directory、languages）
+- `vars.xml`：全局变量定义（域 `lab`，端口 `5080`，密码 `ClueCon`）
+- `autoload_configs/conference.conf.xml`：MCU 会议室 3×3 布局、8 人上限与 `conference/conf-locked.wav` 满员拒绝提示
+- `autoload_configs/modules.conf.xml`：载入核心模块、`mod_conference`、`mod_av`（H.264 视频编码与混流合成）、`mod_png`、`mod_event_socket`、`mod_opus` 等
+- `autoload_configs/event_socket.conf.xml`：ESL 服务配置（8021 端口与鉴权密码）
+- `autoload_configs/sofia.conf.xml`：Sofia SIP 模块载入
+- `sip_profiles/internal.xml`：SIP 内部 Profile（端口 5080，支持 PCMU/PCMA/H264）
+- `dialplan/default.xml`：拨号方案，正则匹配 `^(room-.*)$` 自动转入 `conference`
 
-## 启动
+## 启动方式
 
-在 `server/`：
+在 `server/` 目录下执行：
 
 ```bash
-docker compose up -d freeswitch
+docker compose --profile mcu up -d
 ```
 
-验收：连上 `127.0.0.1:8021`，发送 `auth ClueCon`，应看到 `+OK accepted`。
+验证容器状态：
+```bash
+docker compose ps
+# 检查 ESL 端口连通性
+nc -zv 127.0.0.1 8021
+```
 
-SIP 对外只映射 `5080`，不占用 Kamailio 的 `5060`。
+## ESL 事件交互说明
 
-## 阶段 5 再做的会议
-
-- 应用：`mod_conference`（镜像里已加载）
-- 房间名与 SIP 用户一致：`room-<id>`
-- `max-members=8`，第 9 人拒绝
-- 视频布局 3×3；分辨率 640×360 或 720p30
-- 两人进房时可用「先直通、再拼画布」，不要额外产品逻辑
+后台 Spring Boot 连接 `8021` 端口，完成文本协议交互：
+1. 建立 TCP 连接，收到 `Content-Type: auth/request`；
+2. 发送 `auth ClueCon\n\n`，收到 `+OK accepted`；
+3. 发送 `event plain CUSTOM conference::maintenance\n\n`，收到 `+OK event listener enabled plain`；
+4. 实时接收 `Action: add-member` 与 `Action: del-member`，自动更新 SQLite `rooms` 表中的 `member_count` 与峰值人数。

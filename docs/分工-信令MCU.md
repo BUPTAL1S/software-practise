@@ -24,7 +24,7 @@
 - 域：`lab`
 - 房间 URI：`sip:room-<id>@lab`（`<id>` 与后台房间主键或短码一致，开工会定时一下）
 - 客户端只连 Kamailio SIP 端口（默认 5060 UDP/TCP）
-- ESL：`127.0.0.1:8021`，密码 `ClueCon`。后台只订 `CHANNEL_CREATE` / `CHANNEL_DESTROY` / `conference::maintenance`（入会、离会）。阶段 4 不把呼叫送进会议室
+- ESL：后台只订 `CHANNEL_CREATE` / `CHANNEL_DESTROY` / conference member 增减
 
 配置意图见 [kamailio/README.md](../server/kamailio/README.md) 与 [freeswitch/README.md](../server/freeswitch/README.md)。
 
@@ -35,7 +35,7 @@
 | 1 通话底座 | compose 起来；两个 UA 能经 Kamailio 音频通话 |
 | 2 视频界面 | 视频 SDP 能过。约定 PJSIP 2.17 OpenH264：`97 H264/90000`，`profile-level-id=42e01e`，`packetization-mode=1`。一对一不改 SDP、不进 MCU |
 | 3 消息文件 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
-| 4 后台统计 | ESL `127.0.0.1:8021` 可登录，密码 `ClueCon`。`room-*` 仍回 480 |
+| 4 后台统计 | ESL 端口通，供后台订房间事件 |
 | 5 房间 MCU | 6–8 路进同一会议室，第 9 人拒绝 |
 | 6 交付 | 演示用一键 `docker compose up` |
 

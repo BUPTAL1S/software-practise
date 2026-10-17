@@ -11,5 +11,5 @@ printf '%s\n' "#!substdef \"!PUBLIC_IP!${IP}!g\"" > kamailio/public-ip.defs
 printf 'PUBLIC_IP=%s\n' "$IP" > .env
 echo "探测到校园网 IP（Kamailio advertise / 客户端应填的 SIP 服务器）：${IP}"
 echo "换 Wi-Fi 后重新跑本脚本。不要把这个地址提交进 git。"
-docker compose up -d kamailio
+docker compose --profile mcu up -d
 docker compose ps

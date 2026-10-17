@@ -1,6 +1,6 @@
 # Kamailio
 
-阶段 1：REGISTER + 一对一音频。域 `lab`，客户端只连本机映射的 **5060 UDP/TCP**。
+阶段 5：REGISTER + 一对一音视频直连 + 一对一 MESSAGE + FreeSWITCH 房间 MCU (room-*) 信令路由。域 `lab`，客户端只连本机映射的 **5060 UDP/TCP**。
 
 ## 测试账号（静态，无鉴权）
 
@@ -53,8 +53,8 @@ docker compose ps
 docker exec kamailio grep -n "PUBLIC_IP" /etc/kamailio/public-ip.defs
 ```
 
-`room-*` 阶段 1 直接回 `480 MCU not ready in phase 1`，不进 FreeSWITCH。  
-MCU 以后：`docker compose --profile mcu up -d`。
+`room-*` 呼叫由 Kamailio 自动路由转发至 FreeSWITCH MCU (`freeswitch:5080`)，进入 3×3 九宫格混流会议室；一对一呼叫走 `lookup("location")` 直连，绝不进入 MCU。  
+启动命令：`docker compose --profile mcu up -d`（启动脚本 `./start-kamailio.sh` 会自动带上）。
 
 ## 客户端 / Linphone 怎么填
 
@@ -78,7 +78,7 @@ JavaFX 客户端默认 TCP，会记住上次代理。本机 IP 只用于 Contact
 
 ## 阶段 2：视频 SDP
 
-一对一仍是 `INVITE sip:<用户>@lab`，经 `lookup` 后原样 `t_relay`。不进 MCU，不加载 rtpengine / sdpops，不改 SDP。`room-*` 仍回 `480 MCU not ready in phase 1`。
+一对一仍是 `INVITE sip:<用户>@lab`，经 `lookup` 后原样 `t_relay`。不进 MCU，不加载 rtpengine / sdpops，不改 SDP。
 
 客户端用 PJSIP **2.17 OpenH264**，Windows 与 macOS 必须是同一套，不要同时再放 ffmpeg / VideoToolbox 的另一套 H.264：
 
@@ -99,9 +99,17 @@ JavaFX 客户端默认 TCP，会记住上次代理。本机 IP 只用于 Contact
 
 `MESSAGE sip:<用户>@lab` 发给已注册用户时原样转发，`text/plain` 正文不改，对端的 200 回到主叫。没注册回 404，Kamailio 不存离线消息。文件、图片、语音条走后台 HTTP，不走 SIP，也不做 MSRP。
 
-`room-*` 仍回 `480 MCU not ready in phase 1`，阶段 5 之前不做群聊。
-
 Contact 里如果写了 `methods` 但没有 `MESSAGE`，REGISTER 时会补上，否则 `method_filtering` 对这条消息回 405。没写 `methods` 的客户端不用改。
+
+## 阶段 5：房间 MCU 会议室路由 (room-*)
+
+1. **信令路由隔离与分流**：
+   - 收到 `INVITE sip:room-<id>@lab`（用户部分正则匹配 `^room-`）时，Kamailio 将目标 URI 改写为 `$du = "sip:freeswitch:5080;transport=" + $proto`，执行 `record_route()` 后调用 `relay()` 发送至 FreeSWITCH MCU 容器；
+   - 一对一通话（如 `INVITE sip:1002@lab`）严格继续走 `lookup("location")`，由两端 UA 直连，**绝对不进入 FreeSWITCH**；
+   - 严格避免架构耦合与串线，保证点对点媒体与 MCU 集中媒体分流清晰。
+2. **媒体协商与画面流向**：
+   - 一对一通话由客户端之间协商 RTP（音视频直连，不消耗服务器编解码资源）；
+   - 多人会议室由 FreeSWITCH MCU 作为 B2BUA 终结媒体，并将最多 8 路参会人画面合成为单路 720p30 H.264 3×3 画面分发给参会端。超额第 9 人进入时直接拒绝。
 
 ## 端口只通 127.0.0.1、不通局域网 IP
 

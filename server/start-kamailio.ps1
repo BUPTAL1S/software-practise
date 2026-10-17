@@ -40,5 +40,5 @@ Set-Content -Path (Join-Path $PSScriptRoot "kamailio\public-ip.defs") -Value $de
 Set-Content -Path (Join-Path $PSScriptRoot ".env") -Value "PUBLIC_IP=$ip" -Encoding ascii
 Write-Host "探测到校园网 IP（Kamailio advertise / 客户端应填的 SIP 服务器）：$ip"
 Write-Host "换 Wi-Fi 后重新跑本脚本。不要把这个地址提交进 git。"
-docker compose up -d kamailio
+docker compose --profile mcu up -d
 docker compose ps
