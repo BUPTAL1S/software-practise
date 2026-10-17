@@ -1,0 +1,11 @@
+<include>
+  <context name="default">
+    <!-- 阶段 5 会议室路由：把 room-* 的呼叫接入 video-mcu-3x3 会议室 -->
+    <extension name="mcu_rooms">
+      <condition field="destination_number" expression="^(room-.*)$">
+        <action application="answer"/>
+        <action application="conference" data="$1@video-mcu-3x3"/>
+      </condition>
+    </extension>
+  </context>
+</include>
