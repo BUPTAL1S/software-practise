@@ -1,12 +1,17 @@
 package lab.sip.client;
 
 import java.awt.Desktop;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import javax.imageio.ImageIO;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
@@ -18,6 +23,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.util.Duration;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
@@ -34,18 +40,23 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.WritableImage;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
-import javafx.scene.image.ImageView;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.SVGPath;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
@@ -110,6 +121,10 @@ public final class MainApp extends Application {
                             + "秒"
                             + (wasConnected ? " (已接通)" : " (未接通)"));
 
+                    if (isRoomTarget(calleeOrRoom) || isRoomTarget(caller)) {
+                      refreshRooms();
+                    }
+
                     String httpUrl = httpServerField.getText().trim();
                     httpFileClient.setBaseUrl(httpUrl);
                     new Thread(
@@ -170,28 +185,44 @@ public final class MainApp extends Application {
                 String toUri, String body, int statusCode, String reason) {
               Platform.runLater(
                   () -> {
+                    String targetUser = extractUser(toUri);
                     String status =
                         (statusCode == 200) ? "已送达" : ("发送未送达(" + statusCode + " " + reason + ")");
                     boolean matched = false;
+                    // 1. 优先尝试在发给 targetUser 且待确认的消息中精确匹配正文
                     for (int i = 0; i < chatMessages.size(); i++) {
                       ChatMessage m = chatMessages.get(i);
                       if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
-                        String expectedBody = m.isFile() ? m.getFile().toWireFormat() : m.getText();
-                        if (body != null && !body.isEmpty() && expectedBody.equals(body)) {
-                          m.setStatus(status);
-                          matched = true;
-                          break;
+                        if (!targetUser.isEmpty() && targetUser.equals(m.getReceiver())) {
+                          String expectedBody = m.isFile() ? m.getFile().toWireFormat() : m.getText();
+                          if (body != null && !body.isEmpty() && expectedBody.equals(body)) {
+                            m.setStatus(status);
+                            matched = true;
+                            break;
+                          }
                         }
                       }
                     }
-                    if (!matched) {
+                    // 2. 匹配不到正文时，只允许落在「发给该用户且仅有唯一一条待确认」的消息上
+                    if (!matched && !targetUser.isEmpty()) {
+                      int candidateIndex = -1;
+                      int candidateCount = 0;
                       for (int i = 0; i < chatMessages.size(); i++) {
                         ChatMessage m = chatMessages.get(i);
                         if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
-                          m.setStatus(status);
-                          break;
+                          if (targetUser.equals(m.getReceiver())) {
+                            candidateIndex = i;
+                            candidateCount++;
+                          }
                         }
                       }
+                      if (candidateCount == 1 && candidateIndex >= 0) {
+                        chatMessages.get(candidateIndex).setStatus(status);
+                        matched = true;
+                      }
+                    }
+                    if (!matched) {
+                      logs.append("消息", "收到未匹配目标气泡的消息回执: to=" + toUri + ", 状态码=" + statusCode + " (" + reason + ")");
                     }
                     if (chatListView != null) {
                       chatListView.refresh();
@@ -234,6 +265,7 @@ public final class MainApp extends Application {
   private Label chatPeerLabel;
 
   private Label fileProgressLabel;
+  private boolean roomRefreshFailed = false;
 
   // CDR and Stats UI elements
   private final ObservableList<HttpFileClient.CdrRecord> cdrRecords = FXCollections.observableArrayList();
@@ -242,9 +274,20 @@ public final class MainApp extends Application {
   private Label totalDurationLabel;
   private Label avgDurationLabel;
   private Label peakMembersLabel;
+
+  // Conference Room (MCU) UI elements
+  private final ObservableList<HttpFileClient.RoomInfo> roomRecords = FXCollections.observableArrayList();
+  private TableView<HttpFileClient.RoomInfo> roomTableView;
+  private Label roomCountBadge;
+  private HBox inRoomBanner;
+  private Label inRoomBannerLabel;
+  private Button inRoomExitBtn;
+
   private TabPane rightTabPane;
   private Tab chatTab;
+  private Tab roomTab;
   private Button loginBtn;
+  private MainViewAssembler assembler;
 
   private String campusIp = "";
 
@@ -252,13 +295,15 @@ public final class MainApp extends Application {
   @Override
   public void start(Stage stage) {
     this.primaryStage = stage;
-    Map<String, String> named = getParameters().getNamed();
+    Map<String, String> named = (getParameters() != null) ? getParameters().getNamed() : Map.of();
     LocalPrefs.load();
     campusIp = CampusLan.detect();
 
     server = new TextField();
     if (!LocalPrefs.server.isEmpty()) {
       server.setText(LocalPrefs.server);
+    } else if (CampusLan.probeTcp("127.0.0.1")) {
+      server.setText("127.0.0.1");
     } else if (!campusIp.isEmpty()) {
       server.setText(campusIp);
     }
@@ -280,7 +325,7 @@ public final class MainApp extends Application {
         password.setText(newV);
       }
     });
-    sipPort = new TextField(named.getOrDefault("port", "5060"));
+    sipPort = new TextField(named.getOrDefault("port", "5062"));
     peer = new TextField(named.getOrDefault("peer", "1002"));
     transport = new ComboBox<>();
     transport.getItems().addAll("tcp", "udp");
@@ -304,22 +349,19 @@ public final class MainApp extends Application {
     callVideo.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
     previewBtn = new Button("摄像头预览");
     answerVideo = new Button("接听(视频)");
-    answerVideo.setStyle("-fx-background-color: #1a7f37; -fx-text-fill: white; -fx-font-weight: bold;");
+    answerVideo.getStyleClass().setAll("btn-success");
     answerAudio = new Button("接听(语音)");
+    answerAudio.getStyleClass().setAll("btn-primary");
     hangup = new Button("挂断");
-    hangup.setStyle("-fx-background-color: #cf222e; -fx-text-fill: white;");
+    hangup.getStyleClass().setAll("btn-danger");
 
     Button testHttpBtn = new Button("测试后台");
     httpStatusBadge = new Label("未检测");
-    httpStatusBadge.setStyle(
-        "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #eaeef2;"
-            + " -fx-text-fill: #57606a; -fx-background-radius: 4; -fx-border-color: #d0d7de; -fx-border-radius: 4;");
+    httpStatusBadge.getStyleClass().setAll("badge-warn");
 
     logs = new LogView();
-    callStatus = new Label();
-    callStatus.setStyle(
-        "-fx-font-size: 13px; -fx-padding: 6 8 6 8; -fx-background-color: #f6f8fa;"
-            + " -fx-background-radius: 6; -fx-border-color: #d0d7de; -fx-border-radius: 6;");
+    callStatus = new Label("状态 引擎未启动");
+    callStatus.getStyleClass().setAll("badge-offline");
     callStatus.setMaxWidth(Double.MAX_VALUE);
     HBox.setHgrow(callStatus, Priority.ALWAYS);
 
@@ -343,10 +385,22 @@ public final class MainApp extends Application {
     testHttpBtn.setOnAction(
         e -> {
           String url = httpServerField.getText().trim();
-          httpFileClient.setBaseUrl(url);
           logs.append("文件", "正在测试后台 HTTP 服务: " + url + "...");
           new Thread(
                   () -> {
+                    String activeUrl = HttpFileClient.discoverBackendUrl(url);
+                    if (activeUrl != null && !activeUrl.equalsIgnoreCase(url)) {
+                      final String switched = activeUrl;
+                      Platform.runLater(
+                          () -> {
+                            httpServerField.setText(switched);
+                            LocalPrefs.save(server.getText(), "tcp", switched);
+                            logs.append("系统", "原后台端口不可达或被占用，已自动发现并切换至: " + switched);
+                          });
+                      httpFileClient.setBaseUrl(switched);
+                    } else {
+                      httpFileClient.setBaseUrl(url);
+                    }
                     boolean healthy = httpFileClient.isHealthy();
                     String authErr = "";
                     try {
@@ -358,22 +412,19 @@ public final class MainApp extends Application {
                       authErr = " (" + ex.getMessage() + ")";
                     }
                     final String authMsg = authErr;
+                    final String finalTarget = httpFileClient.getBaseUrl();
                     Platform.runLater(
                         () -> {
                           if (healthy) {
                             httpStatusBadge.setText("正常" + (authMsg.contains("成功") ? " 已鉴权" : ""));
-                            httpStatusBadge.setStyle(
-                                "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #dafbe1;"
-                                    + " -fx-text-fill: #1a7f37; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #4ac26b; -fx-border-radius: 4;");
-                            logs.append("文件", "后台服务正常 " + url + authMsg);
+                            httpStatusBadge.getStyleClass().setAll("badge-online");
+                            logs.append("文件", "后台服务正常 " + finalTarget + authMsg);
                           } else {
                             httpStatusBadge.setText("不可达");
-                            httpStatusBadge.setStyle(
-                                "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #ffebe9;"
-                                    + " -fx-text-fill: #cf222e; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #ff8182; -fx-border-radius: 4;");
-                            logs.append("警告", "后台 HTTP 连接失败: " + url + "，请确认 Spring Boot 已启动");
+                            httpStatusBadge.getStyleClass().setAll("badge-offline");
+                            logs.append("警告", "后台 HTTP 连接失败: " + finalTarget + "，请确认 Spring Boot 已启动");
                           }
-                          LocalPrefs.save(server.getText(), "tcp", url);
+                          LocalPrefs.save(server.getText(), "tcp", finalTarget);
                         });
                   },
                   "http-probe")
@@ -412,6 +463,17 @@ public final class MainApp extends Application {
     answerVideo.setOnAction(e -> run(() -> sip.answer(true)));
     hangup.setOnAction(e -> run(sip::hangup));
 
+    ContextMenu previewMenu = new ContextMenu();
+    MenuItem mirrorToggleItem = new MenuItem();
+    previewMenu.setOnShowing(
+        e ->
+            mirrorToggleItem.setText(
+                sip.isPreviewMirrorEnabled() ? "切换为真实模式 (非镜像)" : "切换为镜像模式 (照镜子直觉)"));
+    mirrorToggleItem.setOnAction(e -> run(sip::togglePreviewMirror));
+    previewMenu.getItems().add(mirrorToggleItem);
+    previewBtn.setContextMenu(previewMenu);
+    previewBtn.setTooltip(new Tooltip("点击开启/关闭摄像头预览；右键可切换镜像/真实模式"));
+
     previewBtn.setOnAction(
         e ->
             run(
@@ -429,116 +491,44 @@ public final class MainApp extends Application {
     Label peerLabel = new Label("呼叫/聊天:");
     peerLabel.setStyle("-fx-font-weight: bold;");
 
-    Button chip1001 = new Button("1001");
+    Button chip1001 = new Button("1001 (测试账号 1)");
     chip1001.setOnAction(e -> peer.setText("1001"));
-    Button chip1002 = new Button("1002");
+    Button chip1002 = new Button("1002 (测试账号 2)");
     chip1002.setOnAction(e -> peer.setText("1002"));
-    Button chip1003 = new Button("1003");
+    Button chip1003 = new Button("1003 (测试账号 3)");
     chip1003.setOnAction(e -> peer.setText("1003"));
-    Button chipRoom = new Button("room-101");
+    Button chipRoom = new Button("room-101 (MCU 研讨室)");
     chipRoom.setOnAction(e -> peer.setText("room-101"));
-    HBox quickPeers = new HBox(4, new Label("快捷:"), chip1001, chip1002, chip1003, chipRoom);
-    quickPeers.setAlignment(Pos.CENTER_LEFT);
-
-    HBox callActions = new HBox(8, callVideo, callAudio, hangup);
-    callActions.setAlignment(Pos.CENTER_LEFT);
-
-    dialRow.getChildren().addAll(peerLabel, peer, quickPeers, callActions);
-    HBox.setHgrow(peer, Priority.NEVER);
 
     // 来电提示横幅
     incomingNotice = new Label("收到来电");
     incomingNotice.setStyle("-fx-font-weight: bold; -fx-text-fill: #1a7f37;");
     incomingBox = new HBox(10, incomingNotice, answerVideo, answerAudio);
     incomingBox.setAlignment(Pos.CENTER_LEFT);
-    incomingBox.setPadding(new Insets(6, 10, 6, 10));
+    incomingBox.setPadding(new Insets(6, 12, 6, 12));
     incomingBox.setStyle(
         "-fx-background-color: #dafbe1; -fx-background-radius: 6; -fx-border-color: #4ac26b; -fx-border-radius: 6;");
     incomingBox.setVisible(false);
     incomingBox.setManaged(false);
 
     // 视频功能控制与状态行
-    HBox videoTitleRow = new HBox(8);
-    videoTitleRow.setAlignment(Pos.CENTER_LEFT);
-    Label videoTitle = new Label("视频状态:");
-    videoTitle.setStyle("-fx-font-weight: bold;");
     videoBadge = new Label("未检测");
-    videoBadge.setStyle(
-        "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #eaeef2;"
-            + " -fx-text-fill: #57606a; -fx-background-radius: 4; -fx-border-color: #d0d7de; -fx-border-radius: 4;");
+    videoBadge.getStyleClass().setAll("badge-offline");
     videoDetailLabel = new Label("启动引擎后将自动探测 H.264 与采集设备");
-    videoDetailLabel.setStyle("-fx-text-fill: #57606a; -fx-font-size: 11px;");
-    videoTitleRow.getChildren().addAll(videoTitle, videoBadge, videoDetailLabel);
-    HBox.setHgrow(videoTitleRow, Priority.ALWAYS);
-
-    HBox videoRow = new HBox(12, videoTitleRow, previewBtn);
-    videoRow.setAlignment(Pos.CENTER_LEFT);
-    videoRow.setPadding(new Insets(6, 10, 6, 10));
-    videoRow.setStyle(
-        "-fx-background-color: #f6f8fa; -fx-border-color: #d0d7de; -fx-border-radius: 6; -fx-background-radius: 6;");
-
-    VBox callCard = new VBox(8, dialRow, incomingBox, videoRow);
-    callCard.setPadding(new Insets(10));
-    callCard.setStyle(
-        "-fx-background-color: #ffffff; -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8;");
-
-    // 配置折叠栏
-    GridPane cfgGrid = new GridPane();
-    cfgGrid.setHgap(8);
-    cfgGrid.setVgap(8);
-    cfgGrid.setPadding(new Insets(8));
-    int r = 0;
-    cfgGrid.add(new Label("SIP 服务器"), 0, r);
-    HBox serverRow = new HBox(8, server, fillLan);
-    HBox.setHgrow(server, Priority.ALWAYS);
-    cfgGrid.add(serverRow, 1, r++);
-
-    cfgGrid.add(new Label("HTTP 后台"), 0, r);
-    HBox httpRow = new HBox(8, httpServerField, testHttpBtn, httpStatusBadge);
-    httpRow.setAlignment(Pos.CENTER_LEFT);
-    HBox.setHgrow(httpServerField, Priority.ALWAYS);
-    cfgGrid.add(httpRow, 1, r++);
-
-    cfgGrid.add(new Label("传输"), 0, r);
-    cfgGrid.add(transport, 1, r++);
-    cfgGrid.add(new Label("域"), 0, r);
-    cfgGrid.add(domain, 1, r++);
-    cfgGrid.add(new Label("用户"), 0, r);
-    cfgGrid.add(user, 1, r++);
-    cfgGrid.add(new Label("密码"), 0, r);
-    cfgGrid.add(password, 1, r++);
-    cfgGrid.add(new Label("本机 SIP 端口"), 0, r);
-    cfgGrid.add(sipPort, 1, r++);
 
     loginBtn = new Button("登录后台");
-    loginBtn.setStyle("-fx-background-color: #0969da; -fx-text-fill: white; -fx-font-weight: bold;");
+    loginBtn.getStyleClass().setAll("btn-primary");
     loginBtn.setOnAction(e -> performLogin(false));
-
-    HBox cfgButtons = new HBox(8, startEngine, register, loginBtn);
-    cfgGrid.add(cfgButtons, 0, r++, 2, 1);
-
-    GridPane.setHgrow(serverRow, Priority.ALWAYS);
-
-    TitledPane cfgPane = new TitledPane("网络与账号设置 (Kamailio / Spring Boot 后台)", cfgGrid);
-    cfgPane.setExpanded(true);
-
-    // 顶部状态栏
-    HBox topStatus = new HBox(8, callStatus);
-    topStatus.setAlignment(Pos.CENTER_LEFT);
-
-    VBox leftPane = new VBox(10, topStatus, callCard, cfgPane, logs);
-    leftPane.setPadding(new Insets(10));
-    leftPane.setMinWidth(420);
-    VBox.setVgrow(logs, Priority.ALWAYS);
 
     // ======== 右侧面板：消息与文件传输 (SIP MESSAGE + HTTP 文件) ========
     chatPeerLabel = new Label("当前对象: " + peer.getText().trim());
     chatPeerLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #57606a;");
     peer.textProperty().addListener((obs, oldV, newV) -> chatPeerLabel.setText("当前对象: " + newV.trim()));
 
-    Label chatHeaderTitle = new Label("💬 消息与文件传输");
-    chatHeaderTitle.setStyle("-fx-font-weight: bold; -fx-font-size: 14px;");
+    Label chatHeaderTitle = new Label("消息与文件传输");
+    chatHeaderTitle.setStyle("-fx-font-weight: bold; -fx-font-size: 14px; -fx-text-fill: #1E293B;");
     Button clearChatBtn = new Button("清空");
+    clearChatBtn.getStyleClass().setAll("btn-secondary");
     clearChatBtn.setOnAction(e -> chatMessages.clear());
 
     Region chatSpacer = new Region();
@@ -549,6 +539,7 @@ public final class MainApp extends Application {
 
     chatListView = new ListView<>(chatMessages);
     chatListView.setCellFactory(lv -> new ChatMessageCell());
+    chatListView.getStyleClass().add("chat-list-view");
     VBox.setVgrow(chatListView, Priority.ALWAYS);
 
     chatInput = new TextField();
@@ -557,15 +548,15 @@ public final class MainApp extends Application {
     chatInput.setOnAction(e -> sendTextMessage());
 
     sendMsgBtn = new Button("发送");
-    sendMsgBtn.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
+    sendMsgBtn.getStyleClass().setAll("btn-primary");
     sendMsgBtn.setOnAction(e -> sendTextMessage());
 
-    sendFileBtn = new Button("📎 发文件...");
-    sendFileBtn.setStyle("-fx-background-color: #2da44e; -fx-text-fill: white; -fx-font-weight: bold;");
+    sendFileBtn = new Button("发送文件...");
+    sendFileBtn.getStyleClass().setAll("btn-secondary");
     sendFileBtn.setOnAction(e -> sendFile(primaryStage));
 
     fileProgressLabel = new Label();
-    fileProgressLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #0969da;");
+    fileProgressLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #2481CC;");
     fileProgressLabel.setVisible(false);
     fileProgressLabel.setManaged(false);
 
@@ -578,28 +569,129 @@ public final class MainApp extends Application {
     VBox rightPane = new VBox(8, chatHeader, chatListView, chatInputBox);
     rightPane.setPadding(new Insets(10));
     rightPane.setMinWidth(360);
-    rightPane.setStyle(
-        "-fx-background-color: #ffffff; -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8;");
+    rightPane.getStyleClass().add("chat-container");
 
     rightTabPane = new TabPane();
-    chatTab = new Tab("💬 消息与文件", rightPane);
+    rightTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+    chatTab = new Tab("消息与文件", rightPane);
     chatTab.setClosable(false);
 
+    VBox roomPane = buildRoomPane();
+    roomTab = new Tab("会议房间 (MCU)", roomPane);
+    roomTab.setClosable(false);
+
+    Timeline roomPollingTimeline =
+        new Timeline(new KeyFrame(Duration.seconds(4), e -> refreshRooms()));
+    roomPollingTimeline.setCycleCount(Animation.INDEFINITE);
+    roomTab.selectedProperty().addListener((obs, oldVal, newVal) -> {
+      if (Boolean.TRUE.equals(newVal)) {
+        refreshRooms();
+        roomPollingTimeline.play();
+      } else {
+        roomPollingTimeline.stop();
+      }
+    });
+
     VBox cdrPane = buildCdrPane();
-    Tab cdrTab = new Tab("📊 通话记录与统计 (CDR)", cdrPane);
+    Tab cdrTab = new Tab("通话记录与统计", cdrPane);
     cdrTab.setClosable(false);
 
-    rightTabPane.getTabs().addAll(chatTab, cdrTab);
+    StackPane consoleContainer = new StackPane(logs);
+    logs.setupDockHost(consoleContainer, stage);
+    Tab consoleTab = new Tab("信令与控制台", consoleContainer);
+    consoleTab.setClosable(false);
 
-    SplitPane splitPane = new SplitPane();
-    splitPane.setOrientation(Orientation.HORIZONTAL);
-    splitPane.getItems().addAll(leftPane, rightTabPane);
-    splitPane.setDividerPositions(0.48);
+    rightTabPane.getTabs().addAll(chatTab, roomTab, cdrTab, consoleTab);
 
-    stage.setTitle("SIP 客户端 · 阶段 4 后台统计与通话记录");
-    stage.setScene(new Scene(splitPane, 1020, 740));
-    stage.setOnCloseRequest(e -> sip.shutdown());
+    this.assembler = new MainViewAssembler();
+    BorderPane root =
+        assembler.assembleProductUi(
+            stage,
+            callStatus,
+            videoDetailLabel,
+            httpStatusBadge,
+            peer,
+            new Button[] {chip1001, chip1002, chip1003, chipRoom},
+            callVideo,
+            callAudio,
+            hangup,
+            previewBtn,
+            incomingBox,
+            server,
+            fillLan,
+            httpServerField,
+            testHttpBtn,
+            transport,
+            domain,
+            user,
+            password,
+            sipPort,
+            startEngine,
+            register,
+            loginBtn,
+            logs,
+            rightTabPane);
+
+    Scene scene = new Scene(root, 1080, 750);
+    try {
+      scene.getStylesheets().add(getClass().getResource("/modern-theme.css").toExternalForm());
+    } catch (Exception ignored) {
+    }
+    stage.setTitle("SIP 客户端 · 阶段 5 房间 MCU 与音视频会议");
+    stage.setScene(scene);
+    stage.setOnCloseRequest(
+        e -> {
+          if (logs != null) {
+            logs.dockBack();
+          }
+          sip.shutdown();
+        });
     stage.show();
+
+    String snapProp = System.getProperty("ui.snapshot");
+    final String snapshotPath = (snapProp != null && !snapProp.isBlank()) ? snapProp : named.get("snapshot");
+    if (snapshotPath != null && !snapshotPath.isBlank()) {
+      new Thread(() -> {
+        try {
+          Thread.sleep(800);
+          Platform.runLater(() -> {
+            if (!startEngine.isDisabled()) startEngine.fire();
+          });
+          Thread.sleep(600);
+          Platform.runLater(() -> {
+            if (!register.isDisabled()) register.fire();
+          });
+          Thread.sleep(1800);
+          Platform.runLater(() -> {
+            try {
+              WritableImage image = scene.snapshot(null);
+              int w = (int) image.getWidth();
+              int h = (int) image.getHeight();
+              BufferedImage bi = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+              PixelReader pr = image.getPixelReader();
+              for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                  bi.setRGB(x, y, pr.getArgb(x, y));
+                }
+              }
+              File out = new File(snapshotPath);
+              if (out.getParentFile() != null) {
+                out.getParentFile().mkdirs();
+              }
+              ImageIO.write(bi, "png", out);
+              System.out.println("SNAPSHOT_SAVED_SUCCESSFULLY: " + out.getAbsolutePath());
+              sip.shutdown();
+              Platform.exit();
+            } catch (Exception ex) {
+              ex.printStackTrace();
+              Platform.exit();
+            }
+          });
+        } catch (Exception ex) {
+          ex.printStackTrace();
+        }
+      }, "snapshot-thread").start();
+    }
 
     logs.appendApp("SIP 服务器 = Kamailio 校园网 IP；HTTP 后台 = Spring Boot 端口（用于文件与 CDR 统计）。");
     logs.appendApp(
@@ -626,10 +718,11 @@ public final class MainApp extends Application {
                 + "）。");
       }
     }
-    logs.appendApp("阶段 4 后台统计：对接登录鉴权与通话结束自动上报 CDR，支持后台拉历史与通话统计。");
+    logs.appendApp("阶段 5 房间 MCU：支持进入研讨室与 FreeSWITCH 3×3 混流画面，ESL 实时人数同步。");
     logs.appendApp("同机第二窗口：mvn javafx:run -Djavafx.args=\"--user=1002 --port=5062 --peer=1001\"");
     refreshButtons();
     performLogin(true);
+    refreshRooms();
   }
 
 
@@ -639,6 +732,10 @@ public final class MainApp extends Application {
       return;
     }
     String targetPeer = peer.getText().trim();
+    if (isRoomTarget(targetPeer)) {
+      logs.append("警告", "会议房间不能发送文字消息，请改填具体用户账号 (如 1002)");
+      return;
+    }
     String targetDomain = domain.getText().trim();
     String myUser = user.getText().trim();
     run(
@@ -658,6 +755,11 @@ public final class MainApp extends Application {
       logs.append("警告", "尚未注册成功，无法发送文件消息");
       return;
     }
+    String targetPeer = peer.getText().trim();
+    if (isRoomTarget(targetPeer)) {
+      logs.append("警告", "会议房间不能发送文件，请改填具体用户账号 (如 1002)");
+      return;
+    }
     FileChooser chooser = new FileChooser();
     chooser.setTitle("选择要发送的文件");
     File file = chooser.showOpenDialog(owner);
@@ -665,7 +767,6 @@ public final class MainApp extends Application {
       return;
     }
 
-    String targetPeer = peer.getText().trim();
     String targetDomain = domain.getText().trim();
     String myUser = user.getText().trim();
     String httpUrl = httpServerField.getText().trim();
@@ -797,8 +898,49 @@ public final class MainApp extends Application {
       }
     }
 
-    hangup.setDisable(!on);
+    hangup.setDisable(!on && !sip.isInCall());
+    boolean inRoom = sip.isInRoomCall();
+    if (inRoom) {
+      String target = sip.currentCallTarget();
+      String userPart = extractUser(target);
+      String roomName = userPart;
+      for (HttpFileClient.RoomInfo r : roomRecords) {
+        if (extractUser(r.sipUri()).equalsIgnoreCase(userPart)) {
+          roomName = r.name();
+          break;
+        }
+      }
+      boolean isVideo = sip.isCurrentCallVideo();
+      String modeDesc = isVideo ? "视频参会 · 3×3 混流" : "语音参会 · 纯音频";
+      if (inRoomBanner != null && inRoomBannerLabel != null) {
+        inRoomBannerLabel.setText("当前正在研讨室【" + roomName + "】中 (" + target + " · " + modeDesc + ")");
+        inRoomBanner.setVisible(true);
+        inRoomBanner.setManaged(true);
+      }
+      hangup.setText("退出会议");
+    } else {
+      if (inRoomBanner != null) {
+        inRoomBanner.setVisible(false);
+        inRoomBanner.setManaged(false);
+      }
+      hangup.setText("挂断");
+    }
+    if (roomTableView != null) {
+      roomTableView.refresh();
+    }
+
     callStatus.setText("状态  " + sip.statusText());
+    if (reg) {
+      callStatus.getStyleClass().setAll("badge-online");
+    } else if (on) {
+      callStatus.getStyleClass().setAll("badge-warn");
+    } else {
+      callStatus.getStyleClass().setAll("badge-offline");
+    }
+
+    if (assembler != null) {
+      assembler.updateOnlineButton(on, reg);
+    }
 
     if (sendMsgBtn != null) {
       sendMsgBtn.setDisable(!reg);
@@ -808,30 +950,39 @@ public final class MainApp extends Application {
     }
 
     if (!on) {
+      callStatus.getStyleClass().setAll("badge-offline");
       videoBadge.setText("引擎未启动");
-      videoBadge.setStyle(
-          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #eaeef2;"
-              + " -fx-text-fill: #57606a; -fx-background-radius: 4; -fx-border-color: #d0d7de; -fx-border-radius: 4;");
+      videoBadge.getStyleClass().setAll("badge-offline");
       videoDetailLabel.setText("启动引擎后将自动探测 H.264 编解码器与视频输入输出设备。");
-    } else if (videoSupported) {
-      videoBadge.setText("视频就绪 (" + vd.codec + ")");
-      videoBadge.setStyle(
-          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #dafbe1;"
-              + " -fx-text-fill: #1a7f37; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #4ac26b; -fx-border-radius: 4;");
-      String capDesc = hasCapture ? vd.captureDev : "无可用摄像头（仅可接收画面）";
-      videoDetailLabel.setText("采集: " + capDesc + " | 渲染: " + vd.renderDev + " | 接通后拉起独立原生低延迟窗口");
+    } else if (reg) {
+      callStatus.getStyleClass().setAll("badge-online");
+      if (videoSupported) {
+        videoBadge.setText("视频就绪 (" + vd.codec + ")");
+        videoBadge.getStyleClass().setAll("badge-online");
+        String capDesc = hasCapture ? vd.captureDev : "无可用摄像头（仅可接收画面）";
+        videoDetailLabel.setText("采集: " + capDesc + " | 渲染: " + vd.renderDev + " | 接通后拉起独立原生低延迟窗口");
+      } else {
+        videoBadge.setText("阶段 1 纯音频模式");
+        videoBadge.getStyleClass().setAll("badge-warn");
+        videoDetailLabel.setText("底层未启用 H.264；呼叫与接听已自动降级为语音通话。");
+      }
     } else {
-      videoBadge.setText("阶段 1 纯音频模式");
-      videoBadge.setStyle(
-          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #fff8c5;"
-              + " -fx-text-fill: #9a6700; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #d4a72c; -fx-border-radius: 4;");
-      videoDetailLabel.setText("底层动态库未启用 H.264（见 native/ 编译指南）；呼叫与接听已自动降级为语音通话。");
+      callStatus.getStyleClass().setAll("badge-warn");
+      if (videoSupported) {
+        videoBadge.setText("视频就绪 (" + vd.codec + ")");
+        videoBadge.getStyleClass().setAll("badge-online");
+        String capDesc = hasCapture ? vd.captureDev : "无可用摄像头（仅可接收画面）";
+        videoDetailLabel.setText("采集: " + capDesc + " | 渲染: " + vd.renderDev + " | 引擎已启动，等待 SIP 注册上线");
+      } else {
+        videoBadge.setText("阶段 1 纯音频模式");
+        videoBadge.getStyleClass().setAll("badge-warn");
+        videoDetailLabel.setText("底层未启用 H.264；引擎已启动，等待 SIP 注册上线。");
+      }
     }
   }
 
   private void performLogin(boolean silent) {
     String url = httpServerField.getText().trim();
-    httpFileClient.setBaseUrl(url);
     String u = user.getText().trim();
     String p = password.getText();
     if (!silent) {
@@ -839,32 +990,40 @@ public final class MainApp extends Application {
     }
     new Thread(
             () -> {
+              String activeUrl = HttpFileClient.discoverBackendUrl(url);
+              if (activeUrl != null && !activeUrl.equalsIgnoreCase(url)) {
+                final String switched = activeUrl;
+                Platform.runLater(
+                    () -> {
+                      httpServerField.setText(switched);
+                      LocalPrefs.save(server.getText(), "tcp", switched);
+                      logs.append("系统", "原后台端口不可达或被占用，已自动发现并切换至: " + switched);
+                    });
+                httpFileClient.setBaseUrl(switched);
+              } else {
+                httpFileClient.setBaseUrl(url);
+              }
               try {
                 String token = httpFileClient.login(u, p);
                 Platform.runLater(
                     () -> {
                       httpStatusBadge.setText("已登录 (" + u + ")");
-                      httpStatusBadge.setStyle(
-                          "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #dafbe1;"
-                              + " -fx-text-fill: #1a7f37; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #4ac26b; -fx-border-radius: 4;");
+                      httpStatusBadge.getStyleClass().setAll("badge-online");
                       String tokenSample = (token != null && token.length() > 8) ? token.substring(0, 8) + "..." : token;
                       logs.append("系统", "后台登录成功: " + u + " (Token: " + tokenSample + ")");
                       refreshCdrAndStats();
+                      refreshRooms();
                     });
               } catch (Exception ex) {
                 Platform.runLater(
                     () -> {
                       if (!silent) {
                         httpStatusBadge.setText("登录失败");
-                        httpStatusBadge.setStyle(
-                            "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #ffebe9;"
-                                + " -fx-text-fill: #cf222e; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #ff8182; -fx-border-radius: 4;");
+                        httpStatusBadge.getStyleClass().setAll("badge-offline");
                         logs.append("警告", "后台登录失败: " + ex.getMessage());
                       } else {
                         httpStatusBadge.setText("未登录");
-                        httpStatusBadge.setStyle(
-                            "-fx-font-size: 11px; -fx-padding: 2 6 2 6; -fx-background-color: #fff8c5;"
-                                + " -fx-text-fill: #9a6700; -fx-font-weight: bold; -fx-background-radius: 4; -fx-border-color: #d4a72c; -fx-border-radius: 4;");
+                        httpStatusBadge.getStyleClass().setAll("badge-warn");
                         logs.append("提示", "后台静默登录未成功 (" + ex.getMessage() + ")，可确认密码后点击【登录后台】");
                       }
                     });
@@ -922,37 +1081,37 @@ public final class MainApp extends Application {
   }
 
   private VBox buildCdrPane() {
+    totalCallsLabel = new Label("通话总数: 0 次");
+    totalDurationLabel = new Label("总通话时长: 0 秒");
+    avgDurationLabel = new Label("平均时长: 0.0 秒");
+    peakMembersLabel = new Label("房间峰值: 0 人");
+
     HBox statsCard = new HBox(12);
     statsCard.setAlignment(Pos.CENTER_LEFT);
-    statsCard.setPadding(new Insets(8, 12, 8, 12));
-    statsCard.setStyle(
-        "-fx-background-color: #f6f8fa; -fx-border-color: #d0d7de; -fx-border-radius: 6; -fx-background-radius: 6;");
+    for (Label statLabel :
+        new Label[] {totalCallsLabel, totalDurationLabel, avgDurationLabel, peakMembersLabel}) {
+      statLabel.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: #1E293B;");
+      HBox card = new HBox(statLabel);
+      card.getStyleClass().add("metric-card");
+      card.setAlignment(Pos.CENTER);
+      HBox.setHgrow(card, Priority.ALWAYS);
+      statsCard.getChildren().add(card);
+    }
 
-    totalCallsLabel = new Label("通话总数: 0 次");
-    totalCallsLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #0969da;");
-
-    totalDurationLabel = new Label("总通话时长: 0 秒");
-    totalDurationLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #1a7f37;");
-
-    avgDurationLabel = new Label("平均时长: 0.0 秒");
-    avgDurationLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #8250df;");
-
-    peakMembersLabel = new Label("房间峰值: 0 人");
-    peakMembersLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #cf222e;");
-
-    statsCard.getChildren().addAll(totalCallsLabel, totalDurationLabel, avgDurationLabel, peakMembersLabel);
-
-    Button refreshCdrBtn = new Button("🔄 刷新记录");
+    Button refreshCdrBtn = new Button("刷新记录");
+    refreshCdrBtn.getStyleClass().setAll("btn-secondary");
     refreshCdrBtn.setOnAction(e -> refreshCdrAndStats());
 
     Button filterMineBtn = new Button("只看我");
+    filterMineBtn.getStyleClass().setAll("btn-secondary");
     filterMineBtn.setOnAction(e -> fetchCdrHistory(user.getText().trim()));
 
     Button filterAllBtn = new Button("查看全部");
+    filterAllBtn.getStyleClass().setAll("btn-secondary");
     filterAllBtn.setOnAction(e -> fetchCdrHistory(""));
 
     Label hintLabel = new Label("通话结束自动上报并持久化到后台 SQLite 数据库");
-    hintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #57606a;");
+    hintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B;");
 
     Region spacer = new Region();
     HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -962,18 +1121,23 @@ public final class MainApp extends Application {
     actionsRow.setPadding(new Insets(4, 0, 4, 0));
 
     cdrTableView = new TableView<>(cdrRecords);
+    cdrTableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
     VBox.setVgrow(cdrTableView, Priority.ALWAYS);
 
     TableColumn<HttpFileClient.CdrRecord, Long> colId = new TableColumn<>("ID");
     colId.setCellValueFactory(data -> new SimpleObjectProperty<>(data.getValue().id()));
-    colId.setPrefWidth(55);
+    colId.setMinWidth(45);
+    colId.setPrefWidth(50);
+    colId.setMaxWidth(60);
 
     TableColumn<HttpFileClient.CdrRecord, String> colCaller = new TableColumn<>("主叫");
     colCaller.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().caller()));
+    colCaller.setMinWidth(75);
     colCaller.setPrefWidth(90);
 
     TableColumn<HttpFileClient.CdrRecord, String> colCallee = new TableColumn<>("被叫/房间");
     colCallee.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().calleeOrRoom()));
+    colCallee.setMinWidth(90);
     colCallee.setPrefWidth(110);
 
     TableColumn<HttpFileClient.CdrRecord, String> colTime = new TableColumn<>("开始时间");
@@ -981,29 +1145,48 @@ public final class MainApp extends Application {
       Instant t = data.getValue().startedAt();
       return new SimpleStringProperty(t != null ? t.toString().replace("T", " ").replace("Z", "") : "-");
     });
-    colTime.setPrefWidth(155);
+    colTime.setMinWidth(155);
+    colTime.setPrefWidth(175);
 
     TableColumn<HttpFileClient.CdrRecord, String> colDur = new TableColumn<>("通话时长");
     colDur.setCellValueFactory(data -> {
       long d = data.getValue().durationSec();
       return new SimpleStringProperty(d > 0 ? (d + " 秒") : "0 秒 (未接通)");
     });
-    colDur.setPrefWidth(100);
+    colDur.setMinWidth(85);
+    colDur.setPrefWidth(105);
 
     TableColumn<HttpFileClient.CdrRecord, Void> colActions = new TableColumn<>("快捷操作");
-    colActions.setPrefWidth(125);
+    colActions.setMinWidth(165);
+    colActions.setPrefWidth(175);
+    colActions.setMaxWidth(200);
     colActions.setCellFactory(param -> new TableCell<>() {
-      private final Button chatBtn = new Button("💬");
-      private final Button audioBtn = new Button("📞");
-      private final Button videoBtn = new Button("📹");
+      private final Button chatBtn = new Button("聊天");
+      private final Button audioBtn = new Button("语音");
+      private final Button videoBtn = new Button("视频");
       private final HBox box = new HBox(4, chatBtn, audioBtn, videoBtn);
       {
+        setAlignment(Pos.CENTER);
         box.setAlignment(Pos.CENTER);
-        chatBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 6 2 6;");
+        chatBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 4 2 4;");
+        chatBtn.getStyleClass().setAll("btn-secondary", "action-btn-small");
+        chatBtn.setMinWidth(46);
+        chatBtn.setPrefWidth(46);
+        chatBtn.setMaxWidth(46);
         chatBtn.setTooltip(new Tooltip("切换至消息聊天窗口"));
-        audioBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 6 2 6;");
+
+        audioBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 4 2 4;");
+        audioBtn.getStyleClass().setAll("btn-secondary", "action-btn-small");
+        audioBtn.setMinWidth(46);
+        audioBtn.setPrefWidth(46);
+        audioBtn.setMaxWidth(46);
         audioBtn.setTooltip(new Tooltip("发起语音呼叫"));
-        videoBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 6 2 6;");
+
+        videoBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 4 2 4;");
+        videoBtn.getStyleClass().setAll("btn-secondary", "action-btn-small");
+        videoBtn.setMinWidth(46);
+        videoBtn.setPrefWidth(46);
+        videoBtn.setMaxWidth(46);
         videoBtn.setTooltip(new Tooltip("发起视频呼叫"));
 
         chatBtn.setOnAction(e -> {
@@ -1031,25 +1214,46 @@ public final class MainApp extends Application {
       @Override
       protected void updateItem(Void item, boolean empty) {
         super.updateItem(item, empty);
-        setGraphic(empty ? null : box);
+        if (empty) {
+          setGraphic(null);
+        } else {
+          videoBtn.setDisable(!sip.hasVideoSupport());
+          setGraphic(box);
+        }
       }
     });
 
     cdrTableView.getColumns().addAll(colId, colCaller, colCallee, colTime, colDur, colActions);
-    cdrTableView.setPlaceholder(new Label("暂无通话记录 (通话结束后将自动显示并同步后台)"));
+
+    VBox emptyPlaceholder = new VBox(10);
+    emptyPlaceholder.setAlignment(Pos.CENTER);
+    SVGPath emptyIcon = new SVGPath();
+    emptyIcon.setContent(
+        "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0"
+            + " 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0"
+            + " 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573"
+            + " 2.81.7A2 2 0 0 1 22 16.92z");
+    emptyIcon.setStyle(
+        "-fx-fill: none; -fx-stroke: #94A3B8; -fx-stroke-width: 2; -fx-scale-x: 1.6; -fx-scale-y: 1.6;");
+    Label emptyTitle = new Label("暂无通话记录");
+    emptyTitle.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #475569;");
+    Label emptySub = new Label("通话结束后将自动显示并同步至后台 SQLite 数据库");
+    emptySub.setStyle("-fx-font-size: 12px; -fx-text-fill: #94A3B8;");
+    emptyPlaceholder.getChildren().addAll(emptyIcon, emptyTitle, emptySub);
+    cdrTableView.setPlaceholder(emptyPlaceholder);
 
     cdrTableView.setRowFactory(tv -> {
       TableRow<HttpFileClient.CdrRecord> row = new TableRow<>();
       ContextMenu menu = new ContextMenu();
 
-      MenuItem chatItem = new MenuItem("💬 切换至消息聊天");
+      MenuItem chatItem = new MenuItem("切换至消息聊天");
       chatItem.setOnAction(e -> {
         if (!row.isEmpty()) {
           selectAndChatWith(row.getItem());
         }
       });
 
-      MenuItem callAudioItem = new MenuItem("📞 发起语音呼叫");
+      MenuItem callAudioItem = new MenuItem("发起语音呼叫");
       callAudioItem.setOnAction(e -> {
         if (!row.isEmpty()) {
           String target = getTargetFromCdr(row.getItem());
@@ -1058,7 +1262,7 @@ public final class MainApp extends Application {
         }
       });
 
-      MenuItem callVideoItem = new MenuItem("📹 发起视频呼叫");
+      MenuItem callVideoItem = new MenuItem("发起视频呼叫");
       callVideoItem.setOnAction(e -> {
         if (!row.isEmpty()) {
           String target = getTargetFromCdr(row.getItem());
@@ -1067,7 +1271,7 @@ public final class MainApp extends Application {
         }
       });
 
-      MenuItem copyItem = new MenuItem("📋 复制对方号码/房间");
+      MenuItem copyItem = new MenuItem("复制对方号码/房间");
       copyItem.setOnAction(e -> {
         if (!row.isEmpty()) {
           String target = getTargetFromCdr(row.getItem());
@@ -1123,6 +1327,331 @@ public final class MainApp extends Application {
     }
   }
 
+  private VBox buildRoomPane() {
+    HBox headerCard = new HBox(12);
+    headerCard.setAlignment(Pos.CENTER_LEFT);
+    headerCard.setPadding(new Insets(8, 12, 8, 12));
+    headerCard.setStyle(
+        "-fx-background-color: #f6f8fa; -fx-border-color: #d0d7de; -fx-border-radius: 6; -fx-background-radius: 6;");
+
+    Label roomTitle = new Label("会议房间清单 (MCU 3×3 视频研讨)");
+    roomTitle.setStyle("-fx-font-weight: bold; -fx-font-size: 13px; -fx-text-fill: #1E293B;");
+
+    roomCountBadge = new Label("0 间");
+    roomCountBadge.getStyleClass().setAll("badge-online");
+
+    Region headerSpacer = new Region();
+    HBox.setHgrow(headerSpacer, Priority.ALWAYS);
+
+    Button refreshRoomBtn = new Button("刷新房间");
+    refreshRoomBtn.getStyleClass().setAll("btn-secondary");
+    refreshRoomBtn.setOnAction(e -> refreshRooms());
+
+    Button createRoomBtn = new Button("新建研讨室...");
+    createRoomBtn.getStyleClass().setAll("btn-primary");
+    createRoomBtn.setOnAction(e -> showCreateRoomDialog());
+
+    headerCard.getChildren().addAll(roomTitle, roomCountBadge, headerSpacer, refreshRoomBtn, createRoomBtn);
+
+    inRoomBanner = new HBox(12);
+    inRoomBanner.setAlignment(Pos.CENTER_LEFT);
+    inRoomBanner.getStyleClass().setAll("active-room-banner");
+    inRoomBanner.setVisible(false);
+    inRoomBanner.setManaged(false);
+
+    inRoomBannerLabel = new Label();
+    inRoomBannerLabel.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: #166534;");
+    HBox.setHgrow(inRoomBannerLabel, Priority.ALWAYS);
+
+    inRoomExitBtn = new Button("退出当前会议");
+    inRoomExitBtn.getStyleClass().setAll("btn-danger");
+    inRoomExitBtn.setStyle(
+        "-fx-font-size: 11px; -fx-padding: 4 12 4 12; -fx-background-color: #EF4444; -fx-text-fill: white; -fx-font-weight: bold;");
+    inRoomExitBtn.setTooltip(new Tooltip("断开与当前研讨室的连接并退出会议"));
+    inRoomExitBtn.setOnAction(e -> run(sip::hangup));
+
+    inRoomBanner.getChildren().addAll(inRoomBannerLabel, inRoomExitBtn);
+
+    Label hintLabel = new Label("提示：房间标识由后台分配。点击【视频参会】拉起 3×3 MCU 混流画布；点击【语音参会】仅通话无视频弹窗。");
+    hintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B; -fx-padding: 2 0 2 0;");
+
+    roomTableView = new TableView<>(roomRecords);
+    roomTableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+    VBox.setVgrow(roomTableView, Priority.ALWAYS);
+
+    TableColumn<HttpFileClient.RoomInfo, Long> colId = new TableColumn<>("ID");
+    colId.setCellValueFactory(data -> new SimpleObjectProperty<>(data.getValue().id()));
+    colId.setMinWidth(45);
+    colId.setMaxWidth(65);
+
+    TableColumn<HttpFileClient.RoomInfo, String> colName = new TableColumn<>("房间名称");
+    colName.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().name()));
+    colName.setMinWidth(110);
+    colName.setPrefWidth(140);
+
+    TableColumn<HttpFileClient.RoomInfo, String> colUri = new TableColumn<>("SIP 标识 (URI)");
+    colUri.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().sipUri()));
+    colUri.setMinWidth(110);
+    colUri.setPrefWidth(140);
+
+    TableColumn<HttpFileClient.RoomInfo, String> colMax = new TableColumn<>("上限人数");
+    colMax.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().maxMembers() + " 人"));
+    colMax.setMinWidth(75);
+    colMax.setMaxWidth(95);
+
+    TableColumn<HttpFileClient.RoomInfo, String> colCount = new TableColumn<>("在会人数");
+    colCount.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().memberCount() + " 人"));
+    colCount.setMinWidth(75);
+    colCount.setMaxWidth(95);
+
+    TableColumn<HttpFileClient.RoomInfo, Void> colAction = new TableColumn<>("操作");
+    colAction.setMinWidth(210);
+    colAction.setMaxWidth(260);
+    colAction.setCellFactory(param -> new TableCell<>() {
+      private final Button joinVideoBtn = new Button("视频参会");
+      private final Button joinAudioBtn = new Button("语音参会");
+      private final Button selectBtn = new Button("选定");
+      private final Button exitBtn = new Button("退出会议");
+      private final HBox defaultBox = new HBox(6, joinVideoBtn, joinAudioBtn, selectBtn);
+      private final HBox inMeetingBox = new HBox(6, exitBtn, selectBtn);
+
+      {
+        defaultBox.setAlignment(Pos.CENTER_LEFT);
+        inMeetingBox.setAlignment(Pos.CENTER_LEFT);
+
+        joinVideoBtn.getStyleClass().setAll("btn-primary");
+        joinVideoBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+        joinVideoBtn.setTooltip(new Tooltip("发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"));
+        joinVideoBtn.setOnAction(e -> {
+          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            run(() -> sip.call(room.sipUri(), domain.getText().trim(), true));
+          }
+        });
+
+        joinAudioBtn.getStyleClass().setAll("btn-secondary");
+        joinAudioBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+        joinAudioBtn.setTooltip(new Tooltip("发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
+        joinAudioBtn.setOnAction(e -> {
+          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            run(() -> sip.call(room.sipUri(), domain.getText().trim(), false));
+          }
+        });
+
+        exitBtn.getStyleClass().setAll("btn-danger");
+        exitBtn.setStyle(
+            "-fx-font-size: 11px; -fx-padding: 4 10 4 10; -fx-background-color: #EF4444; -fx-text-fill: white; -fx-font-weight: bold;");
+        exitBtn.setTooltip(new Tooltip("断开与当前研讨室的连接并退出会议"));
+        exitBtn.setOnAction(e -> run(sip::hangup));
+
+        selectBtn.getStyleClass().setAll("btn-secondary");
+        selectBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+        selectBtn.setTooltip(new Tooltip("填入呼叫目标栏"));
+        selectBtn.setOnAction(e -> {
+          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            logs.append("操作", "已选定会议室目标: " + room.sipUri());
+          }
+        });
+      }
+
+      @Override
+      protected void updateItem(Void item, boolean empty) {
+        super.updateItem(item, empty);
+        if (empty || getIndex() < 0 || getIndex() >= getTableView().getItems().size()) {
+          setGraphic(null);
+        } else {
+          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+          boolean isCurRoom = room != null && sip.isCurrentRoom(room.sipUri());
+          if (isCurRoom) {
+            setGraphic(inMeetingBox);
+          } else {
+            boolean inAnyCall = sip.isInCall();
+            if (inAnyCall) {
+              joinVideoBtn.setDisable(true);
+              joinVideoBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
+              joinAudioBtn.setDisable(true);
+              joinAudioBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
+            } else {
+              joinVideoBtn.setDisable(!sip.hasVideoSupport());
+              joinVideoBtn.setTooltip(new Tooltip("发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"));
+              joinAudioBtn.setDisable(false);
+              joinAudioBtn.setTooltip(new Tooltip("发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
+            }
+            setGraphic(defaultBox);
+          }
+        }
+      }
+    });
+
+    roomTableView.getColumns().addAll(colId, colName, colUri, colMax, colCount, colAction);
+
+    VBox emptyRoomPlaceholder = new VBox(10);
+    emptyRoomPlaceholder.setAlignment(Pos.CENTER);
+    SVGPath emptyRoomIcon = new SVGPath();
+    emptyRoomIcon.setContent(
+        "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M23 21v-2a4 4 0 0"
+            + " 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75");
+    emptyRoomIcon.setStyle(
+        "-fx-fill: none; -fx-stroke: #94A3B8; -fx-stroke-width: 2; -fx-scale-x: 1.6; -fx-scale-y: 1.6;");
+    Label emptyRoomTitle = new Label("暂无研讨室");
+    emptyRoomTitle.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #475569;");
+    Label emptyRoomSub = new Label("可点击右上角【新建研讨室】或【刷新房间】");
+    emptyRoomSub.setStyle("-fx-font-size: 12px; -fx-text-fill: #94A3B8;");
+    emptyRoomPlaceholder.getChildren().addAll(emptyRoomIcon, emptyRoomTitle, emptyRoomSub);
+    roomTableView.setPlaceholder(emptyRoomPlaceholder);
+    roomTableView.setRowFactory(tv -> {
+      TableRow<HttpFileClient.RoomInfo> row = new TableRow<>();
+      ContextMenu menu = new ContextMenu();
+
+      MenuItem exitItem = new MenuItem("离开/退出此会议");
+      exitItem.setStyle("-fx-text-fill: #EF4444; -fx-font-weight: bold;");
+      exitItem.setOnAction(e -> run(sip::hangup));
+
+      MenuItem videoItem = new MenuItem("视频参会 (3×3 画面)");
+      videoItem.setOnAction(e -> {
+        if (!row.isEmpty()) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            run(() -> sip.call(room.sipUri(), domain.getText().trim(), true));
+          }
+        }
+      });
+
+      MenuItem audioItem = new MenuItem("语音参会 (纯音频)");
+      audioItem.setOnAction(e -> {
+        if (!row.isEmpty()) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            run(() -> sip.call(room.sipUri(), domain.getText().trim(), false));
+          }
+        }
+      });
+
+      MenuItem selectItem = new MenuItem("填入呼叫目标栏");
+      selectItem.setOnAction(e -> {
+        if (!row.isEmpty()) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          if (room != null && room.sipUri() != null) {
+            peer.setText(room.sipUri());
+            logs.append("操作", "已选定会议室目标: " + room.sipUri());
+          }
+        }
+      });
+
+      MenuItem copyItem = new MenuItem("复制房间 SIP 标识");
+      copyItem.setOnAction(e -> {
+        if (!row.isEmpty()) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          if (room != null && room.sipUri() != null) {
+            ClipboardContent content = new ClipboardContent();
+            content.putString(room.sipUri());
+            Clipboard.getSystemClipboard().setContent(content);
+            logs.append("操作", "已复制到剪贴板：" + room.sipUri());
+          }
+        }
+      });
+
+      row.emptyProperty().addListener((obs, wasEmpty, isEmpty) -> {
+        if (isEmpty) {
+          row.setContextMenu(null);
+        } else {
+          row.setContextMenu(menu);
+        }
+      });
+
+      row.setOnContextMenuRequested(event -> {
+        if (!row.isEmpty()) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          boolean isCur = room != null && sip.isCurrentRoom(room.sipUri());
+          menu.getItems().clear();
+          if (isCur) {
+            menu.getItems().addAll(exitItem, selectItem, copyItem);
+          } else {
+            menu.getItems().addAll(videoItem, audioItem, selectItem, copyItem);
+          }
+        }
+      });
+
+      row.setOnMouseClicked(event -> {
+        if (event.getClickCount() == 2 && (!row.isEmpty())) {
+          HttpFileClient.RoomInfo room = row.getItem();
+          peer.setText(room.sipUri());
+          logs.append("操作", "已选定会议室: " + room.name() + " (" + room.sipUri() + ")");
+        }
+      });
+      return row;
+    });
+
+    VBox roomBox = new VBox(8, headerCard, inRoomBanner, hintLabel, roomTableView);
+    roomBox.setPadding(new Insets(10));
+    roomBox.setStyle(
+        "-fx-background-color: #ffffff; -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8;");
+    return roomBox;
+  }
+
+  private void refreshRooms() {
+    String httpUrl = httpServerField.getText().trim();
+    httpFileClient.setBaseUrl(httpUrl);
+    new Thread(
+            () -> {
+              try {
+                List<HttpFileClient.RoomInfo> rooms = httpFileClient.fetchRooms();
+                Platform.runLater(
+                    () -> {
+                      if (roomRefreshFailed) {
+                        logs.append("系统", "拉取房间列表已恢复正常");
+                        roomRefreshFailed = false;
+                      }
+                      roomRecords.setAll(rooms);
+                      if (roomCountBadge != null) {
+                        roomCountBadge.setText(rooms.size() + " 间");
+                      }
+                    });
+              } catch (Exception ex) {
+                Platform.runLater(
+                    () -> {
+                      if (!roomRefreshFailed) {
+                        roomRefreshFailed = true;
+                        logs.append("警告", "拉取房间列表失败: " + ex.getMessage());
+                      }
+                    });
+              }
+            },
+            "room-list-fetcher")
+        .start();
+  }
+
+  private void showCreateRoomDialog() {
+    TextInputDialog dialog = new TextInputDialog("技术研讨室");
+    dialog.setTitle("新建研讨室 (MCU)");
+    dialog.setHeaderText("创建 FreeSWITCH MCU 视频会议室 (上限 8 人)");
+    dialog.setContentText("请输入研讨室名称:");
+
+    dialog.showAndWait().ifPresent(name -> {
+      String trimmed = name.trim();
+      if (trimmed.isEmpty()) return;
+      new Thread(() -> {
+        try {
+          HttpFileClient.RoomInfo created = httpFileClient.createRoom(trimmed, 8);
+          Platform.runLater(() -> {
+            logs.append("系统", "研讨室创建成功: " + created.name() + " -> " + created.sipUri());
+            peer.setText(created.sipUri());
+            refreshRooms();
+          });
+        } catch (Exception ex) {
+          Platform.runLater(() -> logs.append("错误", "创建房间失败: " + ex.getMessage()));
+        }
+      }, "create-room").start();
+    });
+  }
+
   private void run(Throwing action) {
     try {
       action.run();
@@ -1160,6 +1689,14 @@ public final class MainApp extends Application {
     return s.trim();
   }
 
+  static boolean isRoomTarget(String uri) {
+    if (uri == null || uri.isBlank()) {
+      return false;
+    }
+    String u = extractUser(uri);
+    return u.startsWith("room-");
+  }
+
   private final class ChatMessageCell extends ListCell<ChatMessage> {
     private final VBox root = new VBox(4);
     private final HBox header = new HBox(8);
@@ -1176,29 +1713,30 @@ public final class MainApp extends Application {
 
     ChatMessageCell() {
       metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px;");
-      statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #57606a;");
+      statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #94A3B8;");
       textLabel.setWrapText(true);
-      textLabel.setStyle("-fx-font-size: 13px; -fx-padding: 4 8 4 8; -fx-background-radius: 6;");
 
-      fileNameLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 12px;");
-      fileSizeLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #57606a;");
+      fileNameLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 12px; -fx-text-fill: #0F172A;");
+      fileSizeLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B;");
       previewImageView.setFitWidth(180);
       previewImageView.setPreserveRatio(true);
       previewImageView.setSmooth(true);
       previewImageView.setVisible(false);
       previewImageView.setManaged(false);
       previewImageView.setStyle(
-          "-fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.12), 4, 0, 0, 1);");
+          "-fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.08), 4, 0, 0, 1);");
 
       fileBox.setStyle(
-          "-fx-background-color: #f6f8fa; -fx-border-color: #d0d7de; -fx-border-radius: 6;"
-              + " -fx-background-radius: 6; -fx-padding: 6 8 6 8;");
+          "-fx-background-color: #FFFFFF; -fx-border-color: #E2E8F0; -fx-border-radius: 8;"
+              + " -fx-background-radius: 8; -fx-padding: 8 10 8 10; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.03), 4, 0, 0, 1);");
+      downloadBtn.getStyleClass().setAll("btn-secondary");
+      openBtn.getStyleClass().setAll("btn-secondary");
       fileActionBox.getChildren().addAll(downloadBtn, openBtn);
       fileBox.getChildren().addAll(fileNameLabel, fileSizeLabel, previewImageView, fileActionBox);
 
       header.getChildren().addAll(metaLabel, statusLabel);
       root.getChildren().addAll(header, textLabel, fileBox);
-      root.setPadding(new Insets(4, 6, 4, 6));
+      root.setPadding(new Insets(3, 6, 3, 6));
     }
 
     @Override
@@ -1212,31 +1750,29 @@ public final class MainApp extends Application {
       String time = item.formatTime();
       if (item.isOutgoing()) {
         metaLabel.setText("我 (" + item.getSender() + ")  " + time);
-        metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #0969da;");
+        metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #2481CC;");
         root.setAlignment(Pos.CENTER_RIGHT);
         header.setAlignment(Pos.CENTER_RIGHT);
-        textLabel.setStyle(
-            "-fx-font-size: 13px; -fx-padding: 6 10 6 10; -fx-background-color: #ddf4ff;"
-                + " -fx-background-radius: 8; -fx-text-fill: #0969da;");
+        textLabel.getStyleClass().setAll("bubble-outgoing");
+        textLabel.setStyle("-fx-font-size: 13px; -fx-text-fill: #0F172A;");
       } else {
         metaLabel.setText(item.getSender() + "  " + time);
-        metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #1a7f37;");
+        metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #475569;");
         metaLabel.setOnMouseClicked(e -> peer.setText(item.getSender()));
         metaLabel.setCursor(javafx.scene.Cursor.HAND);
         root.setAlignment(Pos.CENTER_LEFT);
         header.setAlignment(Pos.CENTER_LEFT);
-        textLabel.setStyle(
-            "-fx-font-size: 13px; -fx-padding: 6 10 6 10; -fx-background-color: #f6f8fa;"
-                + " -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8;");
+        textLabel.getStyleClass().setAll("bubble-incoming");
+        textLabel.setStyle("-fx-font-size: 13px; -fx-text-fill: #0F172A;");
       }
 
       statusLabel.setText(item.getStatus());
       if ("已送达".equals(item.getStatus())) {
-        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #1a7f37;");
+        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #10B981; -fx-font-weight: bold;");
       } else if (item.getStatus().startsWith("发送未送达")) {
-        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #cf222e;");
+        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #EF4444; -fx-font-weight: bold;");
       } else {
-        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #57606a;");
+        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #94A3B8;");
       }
 
       if (item.isFile()) {
@@ -1247,17 +1783,17 @@ public final class MainApp extends Application {
 
         FileMessage fm = item.getFile();
         String lower = fm.getName().toLowerCase();
-        String icon = "📄 ";
+        String icon = "[文档] ";
         boolean isImage = lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
             || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".bmp");
         if (isImage) {
-          icon = "🖼️ ";
+          icon = "[图片] ";
         } else if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".m4a")) {
-          icon = "🎵 ";
+          icon = "[音频] ";
         } else if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv") || lower.endsWith(".avi")) {
-          icon = "🎬 ";
+          icon = "[视频] ";
         } else if (lower.endsWith(".zip") || lower.endsWith(".tar") || lower.endsWith(".gz") || lower.endsWith(".7z")) {
-          icon = "📦 ";
+          icon = "[压缩包] ";
         }
         fileNameLabel.setText(icon + fm.getName());
         fileSizeLabel.setText(FileMessage.formatSize(fm.getSize()) + " · " + fm.getUrl());
@@ -1325,6 +1861,46 @@ public final class MainApp extends Application {
   @FunctionalInterface
   private interface Throwing {
     void run() throws Exception;
+  }
+
+  SipService getSip() {
+    return sip;
+  }
+
+  Button getHangupBtn() {
+    return hangup;
+  }
+
+  HBox getInRoomBanner() {
+    return inRoomBanner;
+  }
+
+  Label getInRoomBannerLabel() {
+    return inRoomBannerLabel;
+  }
+
+  Button getInRoomExitBtn() {
+    return inRoomExitBtn;
+  }
+
+  TableView<HttpFileClient.RoomInfo> getRoomTableView() {
+    return roomTableView;
+  }
+
+  ObservableList<HttpFileClient.RoomInfo> getRoomRecords() {
+    return roomRecords;
+  }
+
+  TabPane getRightTabPane() {
+    return rightTabPane;
+  }
+
+  Tab getRoomTab() {
+    return roomTab;
+  }
+
+  void syncUiState() {
+    refreshButtons();
   }
 
   public static void main(String[] args) {

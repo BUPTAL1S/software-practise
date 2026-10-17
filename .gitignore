@@ -27,4 +27,5 @@ admin/uploads/
 *.db-wal
 *.db-shm
 client/.local-prefs
+admin/.admin.pid
 server/kamailio/public-ip.defs

@@ -1,0 +1,611 @@
+/* ==========================================================================
+   Telegram Desktop Light Theme - Design Tokens & Stylesheet
+   Clean, Elegant, Unified Light Palette with High-Precision Micro-Interactions
+   ========================================================================== */
+
+/* ================= 1. 全局基础与字体规范 ================= */
+.root {
+    -fx-font-size: 13px;
+    -fx-background-color: #F4F4F5;
+    -fx-text-fill: #0F172A;
+}
+
+/* ================= 2. 左侧一级导航栏 (Navigation Rail) ================= */
+.nav-rail {
+    -fx-background-color: #EAECEF;
+    -fx-border-color: #DCE0E5;
+    -fx-border-width: 0 1 0 0;
+    -fx-padding: 16 0 16 0;
+}
+
+.nav-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: #5A6672;
+    -fx-font-size: 11px;
+    -fx-font-weight: normal;
+    -fx-padding: 9 8 9 8;
+    -fx-background-radius: 8;
+    -fx-cursor: hand;
+    -fx-alignment: center;
+    -fx-content-display: top;
+}
+
+.nav-btn:hover {
+    -fx-background-color: #DFE2E6;
+    -fx-text-fill: #1E293B;
+}
+
+.nav-btn-active {
+    -fx-background-color: #FFFFFF;
+    -fx-text-fill: #2481CC;
+    -fx-font-weight: bold;
+    -fx-font-size: 11px;
+    -fx-padding: 9 8 9 8;
+    -fx-background-radius: 8;
+    -fx-alignment: center;
+    -fx-content-display: top;
+    -fx-effect: dropshadow(three-pass-box, rgba(0, 0, 0, 0.05), 4, 0, 0, 1);
+}
+
+/* ================= 3. 二级侧边栏（会话列表与快速拨号） ================= */
+.secondary-sidebar {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-width: 0 1 0 0;
+    -fx-padding: 14 14 14 14;
+}
+
+.section-label {
+    -fx-text-fill: #64748B;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 6 0 2 0;
+}
+
+/* Telegram 风格联系人会话项按钮 */
+.quick-dial-btn {
+    -fx-background-color: #F8FAFC;
+    -fx-text-fill: #1E293B;
+    -fx-font-weight: normal;
+    -fx-alignment: center-left;
+    -fx-padding: 8 10 8 10;
+    -fx-background-radius: 8;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 8;
+    -fx-cursor: hand;
+}
+
+.quick-dial-btn:hover {
+    -fx-background-color: #EFF6FF;
+    -fx-border-color: #BFDBFE;
+    -fx-text-fill: #1D4ED8;
+}
+
+.quick-dial-btn:pressed {
+    -fx-background-color: #DBEAFE;
+    -fx-border-color: #93C5FD;
+}
+
+/* 状态微标 */
+.badge-offline {
+    -fx-background-color: #F1F5F9;
+    -fx-text-fill: #64748B;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 12;
+    -fx-background-radius: 12;
+    -fx-padding: 3 8 3 8;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.badge-online {
+    -fx-background-color: #ECFDF5;
+    -fx-text-fill: #047857;
+    -fx-border-color: #A7F3D0;
+    -fx-border-radius: 12;
+    -fx-background-radius: 12;
+    -fx-padding: 3 8 3 8;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.badge-warn {
+    -fx-background-color: #FFFBEB;
+    -fx-text-fill: #B45309;
+    -fx-border-color: #FDE68A;
+    -fx-border-radius: 12;
+    -fx-background-radius: 12;
+    -fx-padding: 3 8 3 8;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+/* ================= 4. 输入框、选择框与基础按钮 ================= */
+.text-field, .password-field, .combo-box {
+    -fx-background-color: #F8FAFC;
+    -fx-background-insets: 0;
+    -fx-background-radius: 8;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 8;
+    -fx-padding: 7 10 7 10;
+    -fx-text-fill: #0F172A;
+}
+
+.text-field:focused, .password-field:focused, .combo-box:focused {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #2481CC;
+    -fx-effect: dropshadow(three-pass-box, rgba(36, 129, 204, 0.15), 5, 0, 0, 0);
+}
+
+.btn-primary {
+    -fx-background-color: #2481CC;
+    -fx-text-fill: #FFFFFF;
+    -fx-font-weight: bold;
+    -fx-background-radius: 8;
+    -fx-padding: 7 14 7 14;
+    -fx-cursor: hand;
+}
+.btn-primary:hover { -fx-background-color: #1D72B8; }
+.btn-primary:pressed { -fx-background-color: #165D96; }
+.btn-primary:disabled { -fx-background-color: #BAE6FD; -fx-opacity: 0.7; }
+
+.btn-secondary {
+    -fx-background-color: #FFFFFF;
+    -fx-text-fill: #334155;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 6 12 6 12;
+    -fx-cursor: hand;
+}
+.btn-secondary:hover { -fx-background-color: #F8FAFC; -fx-border-color: #94A3B8; }
+.btn-secondary:pressed { -fx-background-color: #F1F5F9; }
+.btn-secondary:disabled { -fx-opacity: 0.55; }
+
+/* 呼叫控制专用按钮（优雅克制配色） */
+.btn-call-video {
+    -fx-background-color: #2481CC;
+    -fx-text-fill: #FFFFFF;
+    -fx-font-weight: bold;
+    -fx-background-radius: 8;
+    -fx-padding: 7 14 7 14;
+    -fx-cursor: hand;
+}
+.btn-call-video:hover { -fx-background-color: #1D72B8; }
+.btn-call-video:disabled { -fx-background-color: #E2E8F0; -fx-text-fill: #94A3B8; -fx-opacity: 0.8; }
+
+.btn-call-audio {
+    -fx-background-color: #10B981;
+    -fx-text-fill: #FFFFFF;
+    -fx-font-weight: bold;
+    -fx-background-radius: 8;
+    -fx-padding: 7 14 7 14;
+    -fx-cursor: hand;
+}
+.btn-call-audio:hover { -fx-background-color: #059669; }
+.btn-call-audio:disabled { -fx-background-color: #E2E8F0; -fx-text-fill: #94A3B8; -fx-opacity: 0.8; }
+
+.btn-hangup, .btn-danger {
+    -fx-background-color: #EF4444;
+    -fx-text-fill: #FFFFFF;
+    -fx-font-weight: bold;
+    -fx-background-radius: 8;
+    -fx-padding: 7 14 7 14;
+    -fx-cursor: hand;
+}
+.btn-hangup:hover, .btn-danger:hover { -fx-background-color: #DC2626; }
+.btn-hangup:pressed, .btn-danger:pressed { -fx-background-color: #B91C1C; }
+.btn-hangup:disabled, .btn-danger:disabled { -fx-background-color: #E2E8F0; -fx-text-fill: #94A3B8; -fx-opacity: 0.8; }
+
+/* ================= 5. 原生 TabPane 现代化扁平改造 ================= */
+.modern-tab-pane > .tab-header-area {
+    -fx-padding: 0 0 0 16;
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-width: 0 0 1 0;
+}
+
+.modern-tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: transparent;
+}
+
+.modern-tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 10 16 10 16;
+    -fx-border-width: 0 0 2 0;
+    -fx-border-color: transparent;
+    -fx-cursor: hand;
+}
+
+.modern-tab-pane > .tab-header-area > .headers-region > .tab .tab-label {
+    -fx-text-fill: #64748B;
+    -fx-font-weight: normal;
+    -fx-font-size: 13px;
+}
+
+.modern-tab-pane > .tab-header-area > .headers-region > .tab:hover .tab-label {
+    -fx-text-fill: #1E293B;
+}
+
+.modern-tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-border-color: #2481CC;
+}
+
+.modern-tab-pane > .tab-header-area > .headers-region > .tab:selected .tab-label {
+    -fx-text-fill: #2481CC;
+    -fx-font-weight: bold;
+}
+
+.modern-tab-pane > .tab-content-area {
+    -fx-background-color: #F8FAFC;
+    -fx-padding: 12;
+}
+
+/* ================= 6. 聊天视区与消息气泡 ================= */
+.chat-container {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+}
+
+.chat-list-view {
+    -fx-background-color: #F8FAFC;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 8;
+}
+
+.chat-list-view .list-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 4 6 4 6;
+}
+.chat-list-view .list-cell:selected {
+    -fx-background-color: transparent;
+}
+
+/* 消息气泡样式 (我方 vs 对方) */
+.bubble-outgoing {
+    -fx-background-color: #E1F2FB;
+    -fx-border-color: #C8E3F8;
+    -fx-border-radius: 12 12 2 12;
+    -fx-background-radius: 12 12 2 12;
+    -fx-padding: 8 12 8 12;
+}
+
+.bubble-incoming {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 12 12 12 2;
+    -fx-background-radius: 12 12 12 2;
+    -fx-padding: 8 12 8 12;
+}
+
+/* ================= 7. CDR 统计指标卡与 TableView 扁平化 ================= */
+.metric-card {
+    -fx-background-color: #FFFFFF;
+    -fx-padding: 12 16 12 16;
+    -fx-background-radius: 10;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 10;
+    -fx-effect: dropshadow(three-pass-box, rgba(15, 23, 42, 0.03), 6, 0, 0, 1);
+}
+
+.table-view {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 8;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 8;
+    -fx-padding: 0;
+    -fx-selection-bar: #E0F2FE;
+    -fx-selection-bar-non-focused: #F1F5F9;
+    -fx-selection-bar-text: #0F172A;
+}
+
+.table-view .column-header-background {
+    -fx-background-color: #F8FAFC;
+    -fx-background-radius: 8 8 0 0;
+    -fx-padding: 2 0 2 0;
+}
+
+.table-view .column-header {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-size: 34px;
+}
+
+.table-view .column-header .label {
+    -fx-text-fill: #475569;
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+    -fx-alignment: center-left;
+}
+
+/* 消除 JavaFX 表头右侧 filler 与列隐藏按钮残留的金属灰方块 */
+.table-view .column-header-background .filler,
+.table-view .column-header-background > .filler,
+.table-view .filler,
+.table-view .show-hide-columns-button,
+.table-view .show-hide-columns-button-background {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+}
+
+.table-row-cell {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: transparent transparent #F1F5F9 transparent;
+    -fx-cell-size: 38px;
+    -fx-text-fill: #1E293B;
+}
+.table-row-cell:hover { -fx-background-color: #F8FAFC; }
+.table-row-cell:filled:selected,
+.table-row-cell:filled:selected:hover,
+.table-row-cell:filled:focused:selected {
+    -fx-background-color: #E0F2FE;
+}
+
+/* 彻底解决点击选中行时文字变成白色的问题 */
+.table-cell {
+    -fx-text-fill: #1E293B;
+}
+.table-cell:filled:selected,
+.table-cell:filled:selected:hover,
+.table-cell:filled:focused:selected,
+.table-row-cell:selected .table-cell,
+.table-row-cell:selected .text {
+    -fx-text-fill: #0F172A;
+    -fx-fill: #0F172A;
+}
+
+/* 保证选中行中的按钮样式不受外部选中态穿透污染 */
+.table-row-cell:selected .btn-secondary {
+    -fx-background-color: #FFFFFF;
+    -fx-text-fill: #334155;
+    -fx-border-color: #CBD5E1;
+}
+.table-row-cell:selected .btn-secondary:hover {
+    -fx-background-color: #F8FAFC;
+    -fx-border-color: #94A3B8;
+}
+.table-row-cell:selected .btn-primary {
+    -fx-background-color: #2481CC;
+    -fx-text-fill: #FFFFFF;
+}
+.table-row-cell:selected .btn-primary:disabled {
+    -fx-background-color: #BAE6FD;
+    -fx-text-fill: #FFFFFF;
+}
+.table-row-cell:selected .btn-danger,
+.table-row-cell:selected .btn-hangup {
+    -fx-background-color: #EF4444;
+    -fx-text-fill: #FFFFFF;
+}
+
+/* 快捷操作小按钮（严格锁定 46px 等宽，消除视觉差异） */
+.action-btn-small {
+    -fx-min-width: 46px;
+    -fx-pref-width: 46px;
+    -fx-max-width: 46px;
+    -fx-font-size: 11px;
+    -fx-padding: 2 4 2 4;
+    -fx-alignment: CENTER;
+}
+
+/* 研讨室在会状态横条 */
+.active-room-banner {
+    -fx-background-color: #F0FDF4;
+    -fx-border-color: #86EFAC;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 8 12 8 12;
+}
+
+/* ================= 8. 信令控制台与独立窗口 (DevTools Light 风格) ================= */
+.console-container {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 10;
+}
+
+.empty-placeholder-card {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 12;
+    -fx-background-radius: 12;
+    -fx-border-style: dashed;
+    -fx-border-width: 1.5;
+}
+
+.table-search-field {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 11.5px;
+}
+.table-search-field:focused {
+    -fx-border-color: #2481CC;
+    -fx-effect: dropshadow(three-pass-box, rgba(36, 129, 204, 0.15), 4, 0, 0, 0);
+}
+
+.signaling-drawer {
+    -fx-background-color: #F8FAFC;
+    -fx-border-color: #E2E8F0;
+    -fx-border-width: 1 0 0 0;
+    -fx-padding: 6 12 8 12;
+}
+
+/* 筛选标签按钮 */
+.drawer-filter-btn {
+    -fx-background-color: #FFFFFF;
+    -fx-text-fill: #475569;
+    -fx-border-color: #CBD5E1;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 3 9 3 9;
+    -fx-font-size: 11px;
+    -fx-cursor: hand;
+}
+.drawer-filter-btn:hover {
+    -fx-background-color: #F1F5F9;
+    -fx-border-color: #94A3B8;
+}
+
+.drawer-filter-btn-active {
+    -fx-background-color: #2481CC;
+    -fx-text-fill: #FFFFFF;
+    -fx-font-weight: bold;
+    -fx-border-color: #2481CC;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 3 9 3 9;
+    -fx-font-size: 11px;
+    -fx-cursor: hand;
+}
+
+/* 清空按钮 */
+.drawer-clear-btn {
+    -fx-background-color: #FEF2F2;
+    -fx-text-fill: #DC2626;
+    -fx-border-color: #FECACA;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 3 9 3 9;
+    -fx-font-size: 11px;
+    -fx-cursor: hand;
+}
+.drawer-clear-btn:hover {
+    -fx-background-color: #FEE2E2;
+    -fx-border-color: #FCA5A5;
+}
+
+/* SplitPane 分割条 */
+.terminal-split-pane {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+    -fx-background-insets: 0;
+}
+.terminal-split-pane > .split-pane-divider {
+    -fx-background-color: #E2E8F0;
+    -fx-padding: 0 2 0 2;
+}
+.terminal-split-pane > .split-pane-divider:hover {
+    -fx-background-color: #2481CC;
+}
+
+/* 终端列表视图 (DevTools 浅色模式) */
+.terminal-list-view {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 4;
+}
+.terminal-list-view .list-cell {
+    -fx-background-color: transparent;
+    -fx-text-fill: #334155;
+    -fx-font-family: "JetBrains Mono", "PingFang SC", "Microsoft YaHei UI", "Consolas", sans-serif;
+    -fx-font-size: 11.5px;
+    -fx-padding: 4 6 4 6;
+    -fx-background-radius: 4;
+}
+.terminal-list-view .list-cell:hover {
+    -fx-background-color: #F8FAFC;
+}
+.terminal-list-view .list-cell:selected {
+    -fx-background-color: #EFF6FF;
+    -fx-text-fill: #0F172A;
+}
+
+/* 原文文本区 */
+.raw-sip-textarea {
+    -fx-background-color: #F8FAFC;
+    -fx-text-fill: #0F172A;
+    -fx-font-family: "JetBrains Mono", "Consolas", "PingFang SC", "Microsoft YaHei UI", monospace;
+    -fx-font-size: 11.5px;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+.raw-sip-textarea .content {
+    -fx-background-color: #F8FAFC;
+    -fx-padding: 6;
+}
+
+/* 详情抽屉容器 */
+.detail-container {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E2E8F0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 4 6 6 6;
+}
+.detail-container .raw-sip-textarea {
+    -fx-border-color: transparent;
+    -fx-background-color: transparent;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 0;
+}
+.detail-container .raw-sip-textarea .content {
+    -fx-background-color: #F8FAFC;
+    -fx-padding: 4;
+}
+
+/* ================= 9. 现代极简 6px 浅色细滚动条 ================= */
+.scroll-bar:vertical,
+.scroll-bar:horizontal {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+.scroll-bar:vertical {
+    -fx-pref-width: 6px;
+    -fx-min-width: 6px;
+    -fx-max-width: 6px;
+}
+.scroll-bar:horizontal {
+    -fx-pref-height: 6px;
+    -fx-min-height: 6px;
+    -fx-max-height: 6px;
+}
+.scroll-bar .track,
+.scroll-bar .corner {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-insets: 0;
+}
+.scroll-bar .thumb {
+    -fx-background-color: #CBD5E1;
+    -fx-background-radius: 3px;
+    -fx-background-insets: 0;
+}
+.scroll-bar .thumb:hover {
+    -fx-background-color: #94A3B8;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-pref-height: 0;
+    -fx-pref-width: 0;
+    -fx-min-height: 0;
+    -fx-min-width: 0;
+    -fx-max-height: 0;
+    -fx-max-width: 0;
+}
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-shape: " ";
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}

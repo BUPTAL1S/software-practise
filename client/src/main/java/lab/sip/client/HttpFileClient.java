@@ -38,6 +38,14 @@ public final class HttpFileClient {
       int peakRoomMembers
   ) {}
 
+  public record RoomInfo(
+      Long id,
+      String name,
+      String sipUri,
+      int maxMembers,
+      int memberCount
+  ) {}
+
   private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
   private static final Pattern URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
   private static final Pattern NAME_PATTERN = Pattern.compile("\"(?:name|fileName|filename)\"\\s*:\\s*\"([^\"]+)\"");
@@ -53,6 +61,12 @@ public final class HttpFileClient {
   private static final Pattern TOTAL_DURATION_PATTERN = Pattern.compile("\"totalDurationSec\"\\s*:\\s*(\\d+)");
   private static final Pattern AVG_DURATION_PATTERN = Pattern.compile("\"averageDurationSec\"\\s*:\\s*([0-9.]+)");
   private static final Pattern PEAK_MEMBERS_PATTERN = Pattern.compile("\"peakRoomMembers\"\\s*:\\s*(\\d+)");
+
+  private static final Pattern ROOM_ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
+  private static final Pattern ROOM_NAME_PATTERN = Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern ROOM_SIP_URI_PATTERN = Pattern.compile("\"(?:sip_uri|sipUri)\"\\s*:\\s*\"([^\"]+)\"");
+  private static final Pattern ROOM_MAX_MEMBERS_PATTERN = Pattern.compile("\"(?:max_members|maxMembers)\"\\s*:\\s*(\\d+)");
+  private static final Pattern ROOM_MEMBER_COUNT_PATTERN = Pattern.compile("\"(?:member_count|memberCount|peak_members|peakMembers)\"\\s*:\\s*(\\d+)");
 
   private final HttpClient httpClient;
   private volatile String baseUrl;
@@ -134,18 +148,55 @@ public final class HttpFileClient {
    * Probes the backend health endpoint (GET /api/health).
    */
   public boolean isHealthy() {
+    return probeHealth(this.baseUrl);
+  }
+
+  /**
+   * Probes whether the candidate base URL hosts a valid SIP backend (status: ok / UP).
+   */
+  public static boolean probeHealth(String candidateBaseUrl) {
+    if (candidateBaseUrl == null || candidateBaseUrl.isBlank()) {
+      return false;
+    }
     try {
+      String url = normalizeBaseUrl(candidateBaseUrl);
+      HttpClient probeClient =
+          HttpClient.newBuilder()
+              .connectTimeout(Duration.ofMillis(800))
+              .followRedirects(HttpClient.Redirect.NORMAL)
+              .build();
       HttpRequest req =
           HttpRequest.newBuilder()
-              .uri(URI.create(baseUrl + "/api/health"))
-              .timeout(Duration.ofSeconds(2))
+              .uri(URI.create(url + "/api/health"))
+              .timeout(Duration.ofMillis(800))
               .GET()
               .build();
-      HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-      return resp.statusCode() == 200;
+      HttpResponse<String> resp = probeClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      return resp.statusCode() == 200
+          && resp.body() != null
+          && resp.body().contains("\"status\"")
+          && resp.body().contains("\"esl\"");
     } catch (Exception e) {
       return false;
     }
+  }
+
+  /**
+   * Discovers an active backend URL. Checks currentUrl first, then falls back to known local ports
+   * (8080, 8088, 8081, 8082, 8083). Returns the reachable URL or null if none found.
+   */
+  public static String discoverBackendUrl(String currentUrl) {
+    if (probeHealth(currentUrl)) {
+      return normalizeBaseUrl(currentUrl);
+    }
+    int[] candidatePorts = {8080, 8088, 8081, 8082, 8083};
+    for (int port : candidatePorts) {
+      String candidate = "http://localhost:" + port;
+      if (!candidate.equalsIgnoreCase(currentUrl) && probeHealth(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   /**
@@ -473,6 +524,83 @@ public final class HttpFileClient {
     int peak = mPeak.find() ? Integer.parseInt(mPeak.group(1)) : 0;
 
     return new CdrStats(calls, dur, avg, peak);
+  }
+
+  /**
+   * Fetches room list from backend via GET /api/rooms.
+   */
+  public List<RoomInfo> fetchRooms() throws IOException, InterruptedException {
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/rooms"))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取房间列表失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseRoomList(resp.body());
+  }
+
+  /**
+   * Creates a new conference room in backend via POST /api/rooms.
+   * Backend returns the standardized room-<id> URI.
+   */
+  public RoomInfo createRoom(String name, Integer maxMembers) throws IOException, InterruptedException {
+    int max = (maxMembers != null && maxMembers > 0) ? maxMembers : 8;
+    String json = "{\"name\":\"" + escapeJson(name) + "\",\"max_members\":" + max + "}";
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/rooms"))
+            .header("Content-Type", "application/json")
+            .timeout(Duration.ofSeconds(10))
+            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200 && resp.statusCode() != 201) {
+      throw new IOException("创建房间失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseRoomInfo(resp.body());
+  }
+
+  public static RoomInfo parseRoomInfo(String json) {
+    if (json == null || json.isEmpty()) return null;
+    Matcher mId = ROOM_ID_PATTERN.matcher(json);
+    Long id = mId.find() ? Long.parseLong(mId.group(1)) : null;
+
+    Matcher mName = ROOM_NAME_PATTERN.matcher(json);
+    String name = mName.find() ? mName.group(1) : "";
+
+    Matcher mUri = ROOM_SIP_URI_PATTERN.matcher(json);
+    String uri = mUri.find() ? mUri.group(1) : "";
+
+    Matcher mMax = ROOM_MAX_MEMBERS_PATTERN.matcher(json);
+    int max = mMax.find() ? Integer.parseInt(mMax.group(1)) : 8;
+
+    Matcher mCount = ROOM_MEMBER_COUNT_PATTERN.matcher(json);
+    int count = mCount.find() ? Integer.parseInt(mCount.group(1)) : 0;
+
+    return new RoomInfo(id, name, uri, max, count);
+  }
+
+  public static List<RoomInfo> parseRoomList(String json) {
+    List<RoomInfo> list = new ArrayList<>();
+    if (json == null || json.isEmpty()) return list;
+    Matcher m = Pattern.compile("\\{[^{}]+\\}").matcher(json);
+    while (m.find()) {
+      RoomInfo r = parseRoomInfo(m.group());
+      if (r != null && r.sipUri() != null && !r.sipUri().isEmpty()) {
+        list.add(r);
+      }
+    }
+    return list;
   }
 }
 
