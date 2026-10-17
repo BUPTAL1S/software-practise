@@ -62,7 +62,7 @@ import javafx.stage.Stage;
 
 public final class MainApp extends Application {
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
-  private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8088");
+  private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
 
   private final SipService sip =
       new SipService(
@@ -312,7 +312,7 @@ public final class MainApp extends Application {
     if (!LocalPrefs.httpServer.isEmpty()) {
       httpServerField.setText(LocalPrefs.httpServer);
     } else {
-      httpServerField.setText("http://localhost:8088");
+      httpServerField.setText("http://localhost:8080");
     }
     httpFileClient.setBaseUrl(httpServerField.getText());
 

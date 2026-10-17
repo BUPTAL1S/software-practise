@@ -24,7 +24,7 @@ if exist "admin\.admin.pid" (
 )
 
 rem 2. 按端口检查残留服务，但严格限制仅终止 Java 进程 (java.exe / javaw.exe)
-for %%P in (8088 8081 8082 8083) do (
+for %%P in (8080 8088 8081 8082 8083) do (
     for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%%P" ^| findstr "LISTENING"') do (
         set "PID_FOUND=%%a"
         if not "!PID_FOUND!"=="" (

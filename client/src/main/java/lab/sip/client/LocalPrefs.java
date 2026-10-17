@@ -12,7 +12,7 @@ final class LocalPrefs {
 
   static String server = "";
   static String transport = "tcp";
-  static String httpServer = "http://localhost:8088";
+  static String httpServer = "http://localhost:8080";
 
   static void load() {
     Path file = file();
@@ -37,7 +37,7 @@ final class LocalPrefs {
     Properties props = new Properties();
     props.setProperty("sip.server", sipServer == null ? "" : sipServer.trim());
     props.setProperty("sip.transport", "tcp");
-    props.setProperty("http.server", httpUrl == null ? "http://localhost:8088" : httpUrl.trim());
+    props.setProperty("http.server", httpUrl == null ? "http://localhost:8080" : httpUrl.trim());
     Path file = file();
     try {
       Files.createDirectories(file.getParent());

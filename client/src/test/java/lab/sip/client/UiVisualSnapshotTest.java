@@ -131,7 +131,7 @@ class UiVisualSnapshotTest {
                     null,
                     new TextField("127.0.0.1"),
                     new Button("填入本机IP"),
-                    new TextField("http://localhost:8088"),
+                    new TextField("http://localhost:8080"),
                     new Button("测试后台"),
                     new javafx.scene.control.ComboBox<>(),
                     new TextField("lab"),

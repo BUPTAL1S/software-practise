@@ -32,8 +32,8 @@ fi
 
 # 2. 检查 Spring Boot 是否已在某端口健康运行
 SPRING_PORT=""
-for P in 8088 8081 8082 8083 8080; do
-  if curl -s -m 1 "http://127.0.0.1:$P/api/health" 2>/dev/null | grep -q '"status"'; then
+for P in 8080 8088 8081 8082 8083; do
+  if curl -s -m 1 "http://127.0.0.1:$P/api/health" 2>/dev/null | grep -q '"status"' && curl -s -m 1 "http://127.0.0.1:$P/api/health" 2>/dev/null | grep -q '"esl"'; then
     SPRING_PORT="$P"
     echo "[INFO] 检测到 Spring Boot 后台已在端口 $P 运行并就绪。"
     break
@@ -43,7 +43,7 @@ done
 # 3. 若未运行，自动寻找未被占用的端口并后台拉起 Spring Boot
 if [[ -z "$SPRING_PORT" ]]; then
   TARGET_PORT=""
-  for P in 8088 8081 8082 8083 8084 8085; do
+  for P in 8080 8088 8081 8082 8083; do
     if ! lsof -i :"$P" >/dev/null 2>&1; then
       TARGET_PORT="$P"
       break
@@ -51,7 +51,7 @@ if [[ -z "$SPRING_PORT" ]]; then
   done
 
   if [[ -z "$TARGET_PORT" ]]; then
-    echo "[ERROR] 未能找到可用端口（8088-8085 均被占用），请检查端口占用。"
+    echo "[ERROR] 未能找到可用端口（8080、8088、8081、8082、8083 均被占用），请检查端口占用。"
     exit 1
   fi
 
@@ -71,7 +71,7 @@ if [[ -z "$SPRING_PORT" ]]; then
   WAITED=0
   READY=0
   while [[ $WAITED -lt $MAX_WAIT ]]; do
-    if curl -s -m 1 "http://127.0.0.1:$TARGET_PORT/api/health" 2>/dev/null | grep -q '"status"'; then
+    if curl -s -m 1 "http://127.0.0.1:$TARGET_PORT/api/health" 2>/dev/null | grep -q '"status"' && curl -s -m 1 "http://127.0.0.1:$TARGET_PORT/api/health" 2>/dev/null | grep -q '"esl"'; then
       READY=1
       break
     fi

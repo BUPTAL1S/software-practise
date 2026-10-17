@@ -15,8 +15,8 @@ if [[ -f "admin/.admin.pid" ]]; then
   fi
 fi
 
-# 检查端口 8088, 8081, 8082 上是否有残留的 java 进程 (Spring Boot)
-for P in 8088 8081 8082; do
+# 检查后台端口上是否有残留的 java 进程 (Spring Boot)
+for P in 8080 8088 8081 8082 8083; do
   PIDS=$(lsof -ti :"$P" 2>/dev/null || true)
   if [[ -n "$PIDS" ]]; then
     for PID in $PIDS; do

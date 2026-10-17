@@ -99,7 +99,7 @@ public final class HttpFileClient {
 
   private static String normalizeBaseUrl(String url) {
     if (url == null || url.trim().isEmpty()) {
-      return "http://localhost:8088";
+      return "http://localhost:8080";
     }
     String s = url.trim();
     if (!s.startsWith("http://") && !s.startsWith("https://")) {
@@ -183,13 +183,13 @@ public final class HttpFileClient {
 
   /**
    * Discovers an active backend URL. Checks currentUrl first, then falls back to known local ports
-   * (8088, 8081, 8082, 8083). Returns the reachable URL or null if none found.
+   * (8080, 8088, 8081, 8082, 8083). Returns the reachable URL or null if none found.
    */
   public static String discoverBackendUrl(String currentUrl) {
     if (probeHealth(currentUrl)) {
       return normalizeBaseUrl(currentUrl);
     }
-    int[] candidatePorts = {8088, 8081, 8082, 8083};
+    int[] candidatePorts = {8080, 8088, 8081, 8082, 8083};
     for (int port : candidatePorts) {
       String candidate = "http://localhost:" + port;
       if (!candidate.equalsIgnoreCase(currentUrl) && probeHealth(candidate)) {
