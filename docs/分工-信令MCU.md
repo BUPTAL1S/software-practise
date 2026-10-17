@@ -7,7 +7,7 @@
 - `server/docker-compose.yml` 能拉起 Kamailio + FreeSWITCH（不要数据库容器）
 - Kamailio：REGISTER / 查找 / 一对一转发
 - Kamailio：用户部分 `room-*` 的 INVITE 转到 FreeSWITCH，其它 INVITE 不进 MCU
-- FreeSWITCH：一个会议室，`max-members=8`，视频 3×3，640×360 或 720p30（不要 1080p）
+- FreeSWITCH：一个会议室，`max-members=8`，视频 3×3，720p30（`1280x720`，不要 1080p）。媒体 UDP `21000-21099`，H.264 与一对一相同：`97`、`42e01e`、`packetization-mode=1`
 - 给后台开 ESL（默认 8021），只用于房间事件
 - 维护测试账号（至少 8 个），写在本目录 README，方便双机多开
 
@@ -36,7 +36,7 @@
 | 2 视频界面 | 视频 SDP 能过。约定 PJSIP 2.17 OpenH264：`97 H264/90000`，`profile-level-id=42e01e`，`packetization-mode=1`。一对一不改 SDP、不进 MCU |
 | 3 消息文件 | 保持稳定；MESSAGE 由 Kamailio 转发即可 |
 | 4 后台统计 | ESL 端口通，供后台订房间事件 |
-| 5 房间 MCU | 6–8 路进同一会议室，第 9 人拒绝 |
+| 5 房间 MCU | 已在 main：6–8 路进 `video-mcu-3x3`，第 9 人拒绝。房间 RTP 为 UDP `21000-21099`。房间 MESSAGE 仍是 405 |
 | 6 交付 | 演示用一键 `docker compose up` |
 
 和客户端对齐端口与账号。和后台对齐房间 id 规则、ESL 密码。

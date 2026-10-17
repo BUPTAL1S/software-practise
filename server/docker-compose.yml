@@ -25,14 +25,20 @@ services:
 
   # 阶段 5 MCU 会议室容器 (FreeSWITCH mod_conference + ESL)
   # 启用：docker compose --profile mcu up -d
+  # RTP 21000-21099/udp 必须发布，否则会议室媒体停在容器里。
   freeswitch:
     image: safarov/freeswitch:1.11.3
     container_name: freeswitch
     profiles: ["mcu"]
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "5080:5080/udp"
       - "5080:5080/tcp"
       - "127.0.0.1:8021:8021"
+      - "21000-21099:21000-21099/udp"
     volumes:
       - ./freeswitch:/tmp/freeswitch-custom:ro
     entrypoint:
@@ -47,6 +53,17 @@ services:
         if [ -d /tmp/freeswitch-custom/sounds ]; then
           mkdir -p /usr/share/freeswitch/sounds
           cp -varf /tmp/freeswitch-custom/sounds/* /usr/share/freeswitch/sounds/
+        fi
+        if [ -n "$$PUBLIC_IP" ]; then
+          sed -i "s/external_rtp_ip=127.0.0.1/external_rtp_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
+          sed -i "s/external_sip_ip=127.0.0.1/external_sip_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
+        fi
+        sed -i 's|<!-- <param name="rtp-start-port" value="16384"/> -->|<param name="rtp-start-port" value="21000"/>|' /etc/freeswitch/autoload_configs/switch.conf.xml
+        sed -i 's|<!-- <param name="rtp-end-port" value="32768"/> -->|<param name="rtp-end-port" value="21099"/>|' /etc/freeswitch/autoload_configs/switch.conf.xml
+        sed -i 's|<!-- <param name="profile" value="baseline"/> -->|<param name="profile" value="baseline"/>|' /etc/freeswitch/autoload_configs/av.conf.xml
+        sed -i 's|<!-- <param name="level" value="41"/> -->|<param name="level" value="30"/>|' /etc/freeswitch/autoload_configs/av.conf.xml
+        if ! grep -q 'option name="bframes"' /etc/freeswitch/autoload_configs/av.conf.xml; then
+          sed -i 's|<option name="preset" value="veryfast"/>|<option name="preset" value="veryfast"/><option name="profile" value="baseline"/><option name="level" value="3.0"/><option name="bframes" value="0"/>|g' /etc/freeswitch/autoload_configs/av.conf.xml
         fi
         exec /entrypoint.sh
     restart: unless-stopped

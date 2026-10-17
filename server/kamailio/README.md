@@ -110,6 +110,7 @@ Contact 里如果写了 `methods` 但没有 `MESSAGE`，REGISTER 时会补上，
 2. **媒体协商与画面流向**：
    - 一对一通话由客户端之间协商 RTP（音视频直连，不消耗服务器编解码资源）；
    - 多人会议室由 FreeSWITCH MCU 作为 B2BUA 终结媒体，并将最多 8 路参会人画面合成为单路 720p30 H.264 3×3 画面分发给参会端。超额第 9 人进入时直接拒绝。
+   - 会议媒体走宿主机 UDP `21000-21099`。FreeSWITCH 在 SDP 里写启动脚本探测到的校园网 IP。本机客户端进房间时有两跳改写：发往 FreeSWITCH 的地址改成 Docker 网关，FreeSWITCH 回答回来的地址改成 `127.0.0.1`。其他电脑保持校园网 IP。一对一仍不改 SDP。
 
 ## 端口只通 127.0.0.1、不通局域网 IP
 
@@ -120,6 +121,7 @@ Docker Desktop + WSL2 常见。对端仍然填 **启动脚本打印的局域网 
 ```text
 netsh advfirewall firewall add rule name="Kamailio SIP 5060 TCP" dir=in action=allow protocol=TCP localport=5060 profile=public
 netsh advfirewall firewall add rule name="Kamailio SIP 5060 UDP" dir=in action=allow protocol=UDP localport=5060 profile=public
+netsh advfirewall firewall add rule name="SIPIM-MCU-RTP-21000-21099" dir=in action=allow protocol=UDP localport=21000-21099 profile=any
 ```
 
 必要时再对脚本打印的地址做 portproxy 到 `127.0.0.1:5060`。

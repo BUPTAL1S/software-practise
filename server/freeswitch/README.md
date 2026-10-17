@@ -11,6 +11,7 @@
 5. **容器镜像与网络安全端口**：
    - 镜像版本：`safarov/freeswitch:1.11.3`（阶段 5 锁定版本，与 `docs/deps.md` 一致）。
    - SIP 端口：`5080 UDP/TCP`（与 Kamailio 的 5060 明确隔离，Kamailio 将 `room-*` 的 INVITE 路由至 `freeswitch:5080`）。
+   - 会议 RTP：`21000-21099/udp` 发布到宿主机。`vars.xml` 里的 `127.0.0.1` 只是占位，容器启动时改成 `PUBLIC_IP`。H.264 编码器钉在 Baseline / Level 3.0。应答为 `97 H264/90000`，`profile-level-id=42e01e`，`packetization-mode=1`。本机客户端看到的 `c=` 由 Kamailio 改成 `127.0.0.1`；其他电脑看到校园网 IP。满员时先完成拨号计划的 `answer`，再记 `Conference room-101 is full` 并播放 `conf-locked.wav`。
    - ESL 端口：`127.0.0.1:8021 TCP`，宿主机端口映射仅绑定回环地址 `127.0.0.1`，配合 `acl.conf.xml` 放行私网（`10.0.0.0/8`、`127.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`），供 Docker 网桥访问。宿主机端口只绑在 `127.0.0.1`，校园网其他机器连不进 8021。
    - 声音目录增量合成：主机自定义 `sounds/` 提示音由 entrypoint 增量注入 `/usr/share/freeswitch/sounds/`，不破坏容器内置音效。
 

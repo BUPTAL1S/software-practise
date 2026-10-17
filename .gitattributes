@@ -1,0 +1,2 @@
+server/freeswitch/*.sh text eol=lf
+server/*.sh text eol=lf
