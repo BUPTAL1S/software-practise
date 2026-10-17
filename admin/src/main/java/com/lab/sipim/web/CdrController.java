@@ -103,7 +103,14 @@ public class CdrController {
                 trimmedCaller, trimmedCallee, startedAt.minusSeconds(3), startedAt.plusSeconds(3));
         for (Cdr existing : duplicates) {
             Instant existingEnd = existing.getStartedAt().plusSeconds(existing.getDurationSec());
-            boolean isSubsequentCall = existing.getDurationSec() > 0 && startedAt.isAfter(existingEnd);
+            boolean isSubsequentCall;
+            if (existing.getDurationSec() > 0) {
+                // A new call that started at or after the previous call ended (startedAt >= existingEnd) is distinct
+                isSubsequentCall = !startedAt.isBefore(existingEnd);
+            } else {
+                // A 0-second call ended at its start time; any call starting strictly after it is distinct
+                isSubsequentCall = startedAt.isAfter(existing.getStartedAt());
+            }
             if (!isSubsequentCall) {
                 if (durationSec > existing.getDurationSec()) {
                     existing.setDurationSec(durationSec);
@@ -122,18 +129,6 @@ public class CdrController {
         cdr.setStartedAt(startedAt);
         cdr.setDurationSec(durationSec);
         Cdr saved = cdrRepo.save(cdr);
-
-        // Keep THIS specific room's memberCount updated with its own peak concurrent attendees
-        if (trimmedCallee.startsWith("room")) {
-            roomRepo.findBySipUri(trimmedCallee).ifPresent(r -> {
-                int thisRoomConcurrent = calculatePeakConcurrentMembersForRoom(trimmedCallee);
-                if (thisRoomConcurrent > r.getMemberCount()) {
-                    r.setMemberCount(thisRoomConcurrent);
-                    roomRepo.save(r);
-                }
-            });
-        }
-
         return ResponseEntity.ok(formatCdr(saved));
     }
 
@@ -188,7 +183,14 @@ public class CdrController {
                 roomUris.add(r.getSipUri());
             }
         }
-        roomUris.addAll(cdrRepo.findDistinctRoomUris());
+        for (String uri : cdrRepo.findDistinctRoomUris()) {
+            String norm = normalizeRoomUri(uri);
+            if (norm != null) {
+                roomUris.add(norm);
+            } else if (uri != null && !uri.isBlank()) {
+                roomUris.add(uri.trim());
+            }
+        }
         for (String uri : roomUris) {
             int concurrentPeak = calculatePeakConcurrentMembersForRoom(uri);
             if (concurrentPeak > peakRoomMembers) {
@@ -205,15 +207,41 @@ public class CdrController {
         return ResponseEntity.ok(stats);
     }
 
+    static String normalizeRoomUri(String target) {
+        if (target == null || target.isBlank()) {
+            return null;
+        }
+        String s = target.trim();
+        if (s.startsWith("sip:")) {
+            s = s.substring(4);
+        }
+        int atIdx = s.indexOf('@');
+        if (atIdx >= 0) {
+            s = s.substring(0, atIdx);
+        }
+        if (s.startsWith("room")) {
+            return s;
+        }
+        return null;
+    }
+
+    int calculatePeakConcurrentMembersForRoom(String roomUri) {
+        return calculatePeakConcurrentMembersForRoom(this.cdrRepo, roomUri);
+    }
+
     /**
      * Calculates peak simultaneous (concurrent) attendees for a specific room
      * by sweeping through the active call intervals [startedAt, startedAt + durationSec].
      */
-    int calculatePeakConcurrentMembersForRoom(String roomUri) {
-        if (roomUri == null || roomUri.isBlank()) {
+    public static int calculatePeakConcurrentMembersForRoom(CdrRepository cdrRepo, String roomUri) {
+        if (roomUri == null || roomUri.isBlank() || cdrRepo == null) {
             return 0;
         }
-        List<Cdr> roomCdrs = cdrRepo.findByCalleeOrRoomOrderByIdDesc(roomUri.trim());
+        String normalized = normalizeRoomUri(roomUri);
+        Set<Cdr> roomCdrs = new LinkedHashSet<>(cdrRepo.findByCalleeOrRoomOrderByIdDesc(roomUri.trim()));
+        if (normalized != null && !normalized.equals(roomUri.trim())) {
+            roomCdrs.addAll(cdrRepo.findByCalleeOrRoomOrderByIdDesc(normalized));
+        }
         if (roomCdrs.isEmpty()) {
             return 0;
         }

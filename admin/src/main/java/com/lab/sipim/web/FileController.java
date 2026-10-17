@@ -108,6 +108,47 @@ public class FileController {
         return ResponseEntity.ok(resp);
     }
 
+    @GetMapping("/files")
+    public ResponseEntity<List<Map<String, Object>>> list(
+            @RequestParam(value = "from", required = false) String fromUser,
+            @RequestParam(value = "to", required = false) String toUserOrRoom,
+            @RequestParam(value = "limit", defaultValue = "100") int limit) {
+
+        List<FileIndex> list;
+        if (fromUser != null && !fromUser.isBlank()) {
+            list = fileRepo.findByFromUserOrderByIdDesc(fromUser.trim());
+        } else if (toUserOrRoom != null && !toUserOrRoom.isBlank()) {
+            list = fileRepo.findByToUserOrRoomOrderByIdDesc(toUserOrRoom.trim());
+        } else {
+            list = fileRepo.findAllByOrderByIdDesc();
+        }
+
+        if (limit > 0 && list.size() > limit) {
+            list = list.subList(0, limit);
+        }
+
+        List<Map<String, Object>> resp = new ArrayList<>();
+        for (FileIndex idx : list) {
+            Path p = Paths.get(idx.getPath());
+            String fileName = p.getFileName().toString();
+            int underscoreIdx = fileName.indexOf('_');
+            String originalName = (underscoreIdx > 0) ? fileName.substring(underscoreIdx + 1) : fileName;
+
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", idx.getId());
+            m.put("name", originalName);
+            m.put("size", idx.getSize());
+            m.put("url", "/api/files/" + idx.getId());
+            m.put("from", idx.getFromUser());
+            m.put("to", idx.getToUserOrRoom());
+            m.put("created_at", idx.getCreatedAt().toString());
+            m.put("createdAt", idx.getCreatedAt().toString());
+            resp.add(m);
+        }
+
+        return ResponseEntity.ok(resp);
+    }
+
     @GetMapping("/files/{id}")
     public ResponseEntity<Resource> download(@PathVariable("id") Long id) {
         Optional<FileIndex> found = fileRepo.findById(id);

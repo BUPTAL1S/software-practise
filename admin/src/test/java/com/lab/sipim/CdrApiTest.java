@@ -363,16 +363,114 @@ public class CdrApiTest {
 
         // room-101 has peak concurrent = 3
         // room-102 has peak concurrent = 1 (even though 3 distinct callers called historically)
-        // Check that room-102 in DB was NOT corrupted with room-101's peak
+        // Check that room memberCount in DB is NOT overwritten by CDR (reserved solely for ESL)
         Room r102 = roomRepo.findBySipUri("room-102").orElseThrow();
-        org.junit.jupiter.api.Assertions.assertEquals(1, r102.getMemberCount());
+        org.junit.jupiter.api.Assertions.assertEquals(0, r102.getMemberCount());
 
         Room r101 = roomRepo.findBySipUri("room-101").orElseThrow();
-        org.junit.jupiter.api.Assertions.assertEquals(3, r101.getMemberCount());
+        org.junit.jupiter.api.Assertions.assertEquals(0, r101.getMemberCount());
+
+        // Check that room-101 format returns dynamic peak_members=3 and room-102 returns peak_members=1
+        mvc.perform(get("/api/rooms/room-101"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.member_count").value(0))
+                .andExpect(jsonPath("$.peak_members").value(3));
+
+        mvc.perform(get("/api/rooms/room-102"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.member_count").value(0))
+                .andExpect(jsonPath("$.peak_members").value(1));
 
         // Overall peak across rooms is 3 (from room-101)
         mvc.perform(get("/api/cdr/stats"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.peakRoomMembers").value(3));
+    }
+
+    @Test
+    void consecutiveCallStartingAfterZeroDurationCallNotMerged() throws Exception {
+        // Call 1: 1001 -> 1002, starts at 10:00:00, duration 0s (cancelled/unanswered)
+        Map<String, Object> req1 = Map.of(
+                "caller", "1001",
+                "callee_or_room", "1002",
+                "started_at", "2026-10-13T10:00:00Z",
+                "duration_sec", 0
+        );
+
+        // Call 2: 1001 -> 1002, redials 1s later at 10:00:01, duration 8s
+        Map<String, Object> req2 = Map.of(
+                "caller", "1001",
+                "callee_or_room", "1002",
+                "started_at", "2026-10-13T10:00:01Z",
+                "duration_sec", 8
+        );
+
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(req1))).andExpect(status().isOk());
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(req2))).andExpect(status().isOk());
+
+        // Both calls must be preserved as 2 separate records
+        org.junit.jupiter.api.Assertions.assertEquals(2, cdrRepo.count());
+    }
+
+    @Test
+    void handoffAtSameSecondCountsBoundaryOverlap() throws Exception {
+        // Call 1: in room-101 from 15:00:00 to 15:00:10 (10s duration)
+        Map<String, Object> call1 = Map.of(
+                "caller", "1001",
+                "callee_or_room", "room-101",
+                "started_at", "2026-10-13T15:00:00Z",
+                "duration_sec", 10
+        );
+
+        // Call 2: in room-101 from 15:00:10 to 15:00:20 (starts at exact second call1 ends)
+        Map<String, Object> call2 = Map.of(
+                "caller", "1002",
+                "callee_or_room", "room-101",
+                "started_at", "2026-10-13T15:00:10Z",
+                "duration_sec", 10
+        );
+
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(call1))).andExpect(status().isOk());
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(call2))).andExpect(status().isOk());
+
+        // Both are saved
+        org.junit.jupiter.api.Assertions.assertEquals(2, cdrRepo.count());
+
+        // At 15:00:10, enter (+1) is sorted before leave (-1), so simultaneous boundary overlap is 2
+        Room r101 = roomRepo.findBySipUri("room-101").orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(0, r101.getMemberCount());
+
+        mvc.perform(get("/api/rooms/room-101"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.member_count").value(0))
+                .andExpect(jsonPath("$.peak_members").value(2));
+
+        mvc.perform(get("/api/cdr/stats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.peakRoomMembers").value(2));
+    }
+
+    @Test
+    void sameSecondCounterpartReportUpdatesZeroDurationCdr() throws Exception {
+        // One side reports 0s at 11:00:00
+        Map<String, Object> req1 = Map.of(
+                "caller", "1001",
+                "callee_or_room", "1002",
+                "started_at", "2026-10-13T11:00:00Z",
+                "duration_sec", 0
+        );
+        // Other side reports 12s at identical second 11:00:00
+        Map<String, Object> req2 = Map.of(
+                "caller", "1001",
+                "callee_or_room", "1002",
+                "started_at", "2026-10-13T11:00:00Z",
+                "duration_sec", 12
+        );
+
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(req1))).andExpect(status().isOk());
+        mvc.perform(post("/api/cdr").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(req2))).andExpect(status().isOk());
+
+        org.junit.jupiter.api.Assertions.assertEquals(1, cdrRepo.count());
+        org.junit.jupiter.api.Assertions.assertEquals(12, cdrRepo.findAll().get(0).getDurationSec());
     }
 }

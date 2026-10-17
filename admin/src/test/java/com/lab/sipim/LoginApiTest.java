@@ -104,6 +104,39 @@ class LoginApiTest {
     }
 
     @Test
+    void registerUserSuccessAndCanLoginImmediately() throws Exception {
+        mvc.perform(post("/api/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"1099\",\"password\":\"secretPass\",\"sipId\":\"1099\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").isNumber())
+                .andExpect(jsonPath("$.username").value("1099"))
+                .andExpect(jsonPath("$.sipId").value("1099"))
+                .andExpect(jsonPath("$.token").isNotEmpty());
+
+        // Can login with the registered credentials
+        login("1099", "secretPass");
+    }
+
+    @Test
+    void registerUserDuplicateReturnsConflict() throws Exception {
+        mvc.perform(post("/api/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"1001\",\"password\":\"any\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("username already exists"));
+    }
+
+    @Test
+    void registerMissingFieldsReturnsBadRequest() throws Exception {
+        mvc.perform(post("/api/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("username and password are required"));
+    }
+
+    @Test
     void userListStaysAnonymousAndHidesPasswords() throws Exception {
         mvc.perform(get("/api/users"))
                 .andExpect(status().isOk())
