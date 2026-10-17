@@ -39,7 +39,7 @@
         <configuration>
           <mainClass>lab.sip.client.MainApp</mainClass>
           <options>
-            <option>-Djava.library.path=${project.basedir}/../native/macos-arm64:${project.basedir}/../native/windows-x64:${project.basedir}/../native/macos-x64</option>
+            <option>-Djava.library.path=../native/macos-arm64:../native/windows-x64:../native/macos-x64</option>
           </options>
         </configuration>
       </plugin>

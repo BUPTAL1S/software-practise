@@ -33,7 +33,7 @@ class HttpFileClientTest {
     server.createContext(
         "/api/health",
         exchange -> {
-          byte[] resp = "{\"status\":\"UP\"}".getBytes(StandardCharsets.UTF_8);
+          byte[] resp = "{\"status\":\"ok\",\"esl\":{\"connected\":true}}".getBytes(StandardCharsets.UTF_8);
           exchange.getResponseHeaders().set("Content-Type", "application/json");
           exchange.sendResponseHeaders(200, resp.length);
           try (OutputStream os = exchange.getResponseBody()) {
@@ -136,6 +136,34 @@ class HttpFileClientTest {
           }
         });
 
+    // /api/rooms (GET list, POST create)
+    server.createContext(
+        "/api/rooms",
+        exchange -> {
+          String method = exchange.getRequestMethod();
+          if ("GET".equalsIgnoreCase(method)) {
+            byte[] resp = "[{\"id\":1,\"name\":\"研讨室101\",\"sip_uri\":\"room-101\",\"max_members\":8,\"member_count\":3}]"
+                .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+              os.write(resp);
+            }
+          } else if ("POST".equalsIgnoreCase(method)) {
+            String reqBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(reqBody.contains("\"name\":\"新研讨室\""));
+            byte[] resp = "{\"id\":2,\"name\":\"新研讨室\",\"sip_uri\":\"room-2\",\"max_members\":8,\"member_count\":0}"
+                .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(201, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+              os.write(resp);
+            }
+          } else {
+            exchange.sendResponseHeaders(405, -1);
+          }
+        });
+
     server.start();
     int port = server.getAddress().getPort();
     serverBaseUrl = "http://127.0.0.1:" + port;
@@ -153,9 +181,20 @@ class HttpFileClientTest {
   void testHealthProbe() {
     HttpFileClient client = new HttpFileClient(serverBaseUrl);
     assertTrue(client.isHealthy());
+    assertTrue(HttpFileClient.probeHealth(serverBaseUrl));
 
     HttpFileClient unreachableClient = new HttpFileClient("http://127.0.0.1:59999");
     assertFalse(unreachableClient.isHealthy());
+    assertFalse(HttpFileClient.probeHealth("http://127.0.0.1:59999"));
+    assertFalse(HttpFileClient.probeHealth(null));
+    assertFalse(HttpFileClient.probeHealth(""));
+
+    assertEquals(serverBaseUrl, HttpFileClient.discoverBackendUrl(serverBaseUrl));
+    String discovered = HttpFileClient.discoverBackendUrl("http://127.0.0.1:59999");
+    assertTrue(discovered == null || HttpFileClient.probeHealth(discovered));
+
+    // Verify non-esl service (e.g. random 8080 service returning only {"status":"UP"}) is rejected
+    assertFalse(HttpFileClient.probeHealth("http://127.0.0.1:59998"));
   }
 
   @Test
@@ -266,6 +305,49 @@ class HttpFileClientTest {
     assertEquals(400, stats.totalDurationSec());
     assertEquals(50.0, stats.averageDurationSec());
     assertEquals(6, stats.peakRoomMembers());
+  }
+
+  @Test
+  void testFetchRooms() throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    java.util.List<HttpFileClient.RoomInfo> rooms = client.fetchRooms();
+    assertNotNull(rooms);
+    assertEquals(1, rooms.size());
+    HttpFileClient.RoomInfo r = rooms.get(0);
+    assertEquals(1L, r.id());
+    assertEquals("研讨室101", r.name());
+    assertEquals("room-101", r.sipUri());
+    assertEquals(8, r.maxMembers());
+    assertEquals(3, r.memberCount());
+  }
+
+  @Test
+  void testCreateRoom() throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    HttpFileClient.RoomInfo created = client.createRoom("新研讨室", 8);
+    assertNotNull(created);
+    assertEquals(2L, created.id());
+    assertEquals("新研讨室", created.name());
+    assertEquals("room-2", created.sipUri());
+    assertEquals(8, created.maxMembers());
+  }
+
+  @Test
+  void testRoomParsers() {
+    String json = "{\"id\":5,\"name\":\"技术讨论室\",\"sip_uri\":\"room-105\",\"max_members\":8,\"member_count\":4}";
+    HttpFileClient.RoomInfo room = HttpFileClient.parseRoomInfo(json);
+    assertNotNull(room);
+    assertEquals(5L, room.id());
+    assertEquals("技术讨论室", room.name());
+    assertEquals("room-105", room.sipUri());
+    assertEquals(8, room.maxMembers());
+    assertEquals(4, room.memberCount());
+
+    String listJson = "[" + json + ",{\"id\":6,\"name\":\"管理室\",\"sip_uri\":\"room-106\",\"max_members\":8,\"member_count\":1}]";
+    java.util.List<HttpFileClient.RoomInfo> list = HttpFileClient.parseRoomList(listJson);
+    assertEquals(2, list.size());
+    assertEquals("room-105", list.get(0).sipUri());
+    assertEquals("room-106", list.get(1).sipUri());
   }
 }
 
