@@ -9,6 +9,7 @@ build/
 *.class
 .DS_Store
 *.log
+!docs/reports/*.log
 hs_err_pid*.log
 
 # PJSIP 预编译，各人本机放置

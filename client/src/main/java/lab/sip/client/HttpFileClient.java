@@ -2,19 +2,24 @@ package lab.sip.client;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Objects;
-import java.net.URLEncoder;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -150,7 +155,7 @@ public final class HttpFileClient {
 
     HttpRequest.Builder builder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/users/avatar"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/users/avatar"))
             .header("Content-Type", "multipart/form-data; boundary=" + boundary)
             .timeout(Duration.ofSeconds(10))
             .POST(HttpRequest.BodyPublishers.ofByteArray(baos.toByteArray()));
@@ -174,7 +179,7 @@ public final class HttpFileClient {
   }
 
   public boolean resetAvatar(String user) throws IOException, InterruptedException {
-    String url = baseUrl + "/api/users/avatar" + (user != null && !user.isBlank() ? "?user=" + URLEncoder.encode(user.trim(), StandardCharsets.UTF_8) : "");
+    String url = getEffectiveBaseUrl() + "/api/users/avatar" + (user != null && !user.isBlank() ? "?user=" + URLEncoder.encode(user.trim(), StandardCharsets.UTF_8) : "");
     HttpRequest.Builder builder =
         HttpRequest.newBuilder()
             .uri(URI.create(url))
@@ -197,7 +202,7 @@ public final class HttpFileClient {
     try {
       String cleanRoom = (roomUri != null && roomUri.contains("@")) ? roomUri.substring(0, roomUri.indexOf('@')) : roomUri;
       if (cleanRoom != null && cleanRoom.startsWith("sip:")) cleanRoom = cleanRoom.substring(4);
-      String url = baseUrl + "/api/rooms/" + URLEncoder.encode(cleanRoom != null ? cleanRoom : "", StandardCharsets.UTF_8)
+      String url = getEffectiveBaseUrl() + "/api/rooms/" + URLEncoder.encode(cleanRoom != null ? cleanRoom : "", StandardCharsets.UTF_8)
           + "/vmute?sipId=" + URLEncoder.encode(sipId != null ? sipId : "", StandardCharsets.UTF_8) + "&mute=" + mute;
 
       HttpRequest.Builder builder =
@@ -220,7 +225,7 @@ public final class HttpFileClient {
   public List<UserSummary> fetchUsers() throws IOException, InterruptedException {
     HttpRequest.Builder builder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/users"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/users"))
             .timeout(Duration.ofSeconds(5))
             .GET();
     if (authToken != null && !authToken.isBlank()) {
@@ -283,7 +288,7 @@ public final class HttpFileClient {
     String json = "{\"username\":\"" + escapeJson(username) + "\",\"password\":\"" + escapeJson(password) + "\"}";
     HttpRequest req =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/login"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/login"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(5))
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
@@ -323,7 +328,7 @@ public final class HttpFileClient {
     try {
       HttpRequest req =
           HttpRequest.newBuilder()
-              .uri(URI.create(baseUrl + "/api/logout"))
+              .uri(URI.create(getEffectiveBaseUrl() + "/api/logout"))
               .header("Authorization", "Bearer " + token)
               .timeout(Duration.ofSeconds(3))
               .POST(HttpRequest.BodyPublishers.noBody())
@@ -344,7 +349,7 @@ public final class HttpFileClient {
    * Probes the backend health endpoint (GET /api/health).
    */
   public boolean isHealthy() {
-    return probeHealth(this.baseUrl);
+    return probeHealth(getEffectiveBaseUrl());
   }
 
   /**
@@ -438,7 +443,7 @@ public final class HttpFileClient {
     String boundary = "----SipClientBoundary" + System.currentTimeMillis() + Long.toHexString(System.nanoTime());
     byte[] body = buildMultipartBody(boundary, localFile, fileName, contentType, fromUser, toUserOrRoom);
 
-    URI uploadUri = URI.create(baseUrl + "/api/files");
+    URI uploadUri = URI.create(getEffectiveBaseUrl() + "/api/files");
     HttpRequest.Builder uploadReqBuilder =
         HttpRequest.newBuilder()
             .uri(uploadUri)
@@ -479,6 +484,98 @@ public final class HttpFileClient {
     return new FileMessage(finalName, finalSize, downloadUrl);
   }
 
+  private static final Set<String> LOCAL_IPS = new CopyOnWriteArraySet<>();
+  private static volatile long lastLocalIpsScanTime = 0;
+
+  /**
+   * Checks whether the given host name or IP address corresponds to the local machine
+   * (loopback, 0.0.0.0, or any interface IP assigned to this computer).
+   */
+  public static boolean isLocalAddress(String host) {
+    if (host == null || host.isBlank()) {
+      return false;
+    }
+    String h = host.trim().toLowerCase();
+    if ("localhost".equals(h) || "127.0.0.1".equals(h) || "::1".equals(h) || "0.0.0.0".equals(h)) {
+      return true;
+    }
+    long now = System.currentTimeMillis();
+    if (now - lastLocalIpsScanTime > 30_000 || LOCAL_IPS.isEmpty()) {
+      refreshLocalAddresses();
+      lastLocalIpsScanTime = now;
+    }
+    if (LOCAL_IPS.contains(h)) {
+      return true;
+    }
+    try {
+      InetAddress addr = InetAddress.getByName(h);
+      if (addr.isLoopbackAddress() || addr.isAnyLocalAddress() || LOCAL_IPS.contains(addr.getHostAddress().toLowerCase())) {
+        return true;
+      }
+    } catch (Exception ignored) {
+    }
+    return false;
+  }
+
+  private static synchronized void refreshLocalAddresses() {
+    try {
+      Enumeration<NetworkInterface> nifs = NetworkInterface.getNetworkInterfaces();
+      if (nifs != null) {
+        while (nifs.hasMoreElements()) {
+          NetworkInterface nif = nifs.nextElement();
+          Enumeration<InetAddress> addrs = nif.getInetAddresses();
+          while (addrs.hasMoreElements()) {
+            InetAddress ia = addrs.nextElement();
+            String ip = ia.getHostAddress();
+            if (ip != null) {
+              int pct = ip.indexOf('%');
+              if (pct != -1) {
+                ip = ip.substring(0, pct);
+              }
+              LOCAL_IPS.add(ip.toLowerCase());
+            }
+          }
+        }
+      }
+    } catch (Exception ignored) {
+    }
+  }
+
+  /**
+   * If an absolute URL targets this machine's external/LAN IP, rewrite the host to 127.0.0.1
+   * while keeping the port intact to prevent hairpin (NAT loopback) packet drops.
+   */
+  public static String rewriteLocalHairpinIfApplicable(String url) {
+    if (url == null || url.isBlank()) {
+      return "";
+    }
+    try {
+      URI uri = URI.create(url);
+      String host = uri.getHost();
+      if (host != null && isLocalAddress(host) && !"127.0.0.1".equals(host) && !"localhost".equalsIgnoreCase(host)) {
+        int port = uri.getPort();
+        String portStr = (port > 0) ? ":" + port : "";
+        String path = (uri.getRawPath() != null) ? uri.getRawPath() : "";
+        String query = (uri.getRawQuery() != null) ? "?" + uri.getRawQuery() : "";
+        String scheme = (uri.getScheme() != null) ? uri.getScheme() : "http";
+        return scheme + "://127.0.0.1" + portStr + path + query;
+      }
+    } catch (Exception ignored) {
+    }
+    return url;
+  }
+
+  /**
+   * Returns the effective backend base URL for network operations, automatically
+   * rewriting local external addresses to loopback if running on the host.
+   */
+  public String getEffectiveBaseUrl() {
+    if (baseUrl == null || baseUrl.isBlank()) {
+      return "http://127.0.0.1:8080";
+    }
+    return rewriteLocalHairpinIfApplicable(baseUrl);
+  }
+
   /**
    * Normalizes a file download URL so that remote hostnames or relative paths
    * are rewritten to this client's current effective baseUrl.
@@ -488,20 +585,21 @@ public final class HttpFileClient {
       return "";
     }
     String s = url.trim();
+    String effectiveBase = getEffectiveBaseUrl();
     int idx = s.indexOf("/api/files/");
     if (idx != -1) {
-      return baseUrl + s.substring(idx);
+      return effectiveBase + s.substring(idx);
     }
     if (s.startsWith("/")) {
-      return baseUrl + s;
+      return effectiveBase + s;
     }
     if (s.matches("^\\d+$")) {
-      return baseUrl + "/api/files/" + s;
+      return effectiveBase + "/api/files/" + s;
     }
     if (!s.startsWith("http://") && !s.startsWith("https://")) {
-      return baseUrl + "/" + s;
+      return effectiveBase + "/" + s;
     }
-    return s;
+    return rewriteLocalHairpinIfApplicable(s);
   }
 
   /**
@@ -548,7 +646,6 @@ public final class HttpFileClient {
     }
 
     return targetFile;
-
   }
 
   private String resolveDownloadUrl(String responseJson) {
@@ -559,18 +656,22 @@ public final class HttpFileClient {
     Matcher mUrl = URL_PATTERN.matcher(responseJson);
     if (mUrl.find()) {
       String rawUrl = mUrl.group(1).trim();
+      int idx = rawUrl.indexOf("/api/files/");
+      if (idx != -1) {
+        return rawUrl.substring(idx);
+      }
+      if (rawUrl.startsWith("/")) {
+        return rawUrl;
+      }
       if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
         return rawUrl;
       }
-      if (rawUrl.startsWith("/")) {
-        return baseUrl + rawUrl;
-      }
-      return baseUrl + "/" + rawUrl;
+      return "/" + rawUrl;
     }
 
     Matcher mId = ID_PATTERN.matcher(responseJson);
     if (mId.find()) {
-      return baseUrl + "/api/files/" + mId.group(1);
+      return "/api/files/" + mId.group(1);
     }
 
     return null;
@@ -633,7 +734,7 @@ public final class HttpFileClient {
 
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/cdr"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/cdr"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(10))
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
@@ -662,7 +763,7 @@ public final class HttpFileClient {
    */
   public List<CdrRecord> fetchCdrList(String callerFilter, int limit)
       throws IOException, InterruptedException {
-    StringBuilder url = new StringBuilder(baseUrl).append("/api/cdr?limit=").append(limit > 0 ? limit : 100);
+    StringBuilder url = new StringBuilder(getEffectiveBaseUrl()).append("/api/cdr?limit=").append(limit > 0 ? limit : 100);
     if (callerFilter != null && !callerFilter.isBlank()) {
       url.append("&caller=").append(URLEncoder.encode(callerFilter.trim(), StandardCharsets.UTF_8));
     }
@@ -690,7 +791,7 @@ public final class HttpFileClient {
   public CdrStats fetchStats() throws IOException, InterruptedException {
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/cdr/stats"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/cdr/stats"))
             .timeout(Duration.ofSeconds(10))
             .GET();
     if (authToken != null && !authToken.isBlank()) {
@@ -767,7 +868,7 @@ public final class HttpFileClient {
   public List<RoomInfo> fetchRooms() throws IOException, InterruptedException {
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/rooms"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/rooms"))
             .timeout(Duration.ofSeconds(10))
             .GET();
     if (authToken != null && !authToken.isBlank()) {
@@ -790,7 +891,7 @@ public final class HttpFileClient {
     String json = "{\"name\":\"" + escapeJson(name) + "\",\"max_members\":" + max + "}";
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/rooms"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/rooms"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(10))
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
@@ -846,7 +947,7 @@ public final class HttpFileClient {
     String json = "{\"sender\":\"" + escapeJson(sender) + "\",\"content\":\"" + escapeJson(content) + "\",\"isFile\":" + isFile + "}";
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/rooms/" + roomUri + "/messages"))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/rooms/" + roomUri + "/messages"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(10))
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
@@ -868,7 +969,7 @@ public final class HttpFileClient {
       throws IOException, InterruptedException {
     HttpRequest.Builder reqBuilder =
         HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + "/api/rooms/" + roomUri + "/messages?afterId=" + afterId))
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/rooms/" + roomUri + "/messages?afterId=" + afterId))
             .timeout(Duration.ofSeconds(10))
             .GET();
     if (authToken != null && !authToken.isBlank()) {

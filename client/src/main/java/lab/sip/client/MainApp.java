@@ -122,7 +122,7 @@ public final class MainApp extends Application {
       host = "127.0.0.1";
     }
     try (DatagramSocket socket = new DatagramSocket()) {
-      socket.setSoTimeout(600);
+      socket.setSoTimeout(1000);
       String branch = "z9hG4bK-prb" + System.currentTimeMillis() + "-" + (int) (Math.random() * 10000);
       String callId = "prb-" + System.currentTimeMillis() + "-" + targetUser + "@" + host;
       String req =
@@ -494,6 +494,22 @@ public final class MainApp extends Application {
       httpServerField.setText("http://localhost:8080");
     }
     httpFileClient.setBaseUrl(httpServerField.getText());
+    httpServerField.textProperty().addListener((obs, oldV, newV) -> {
+      httpFileClient.setBaseUrl(newV != null ? newV.trim() : "");
+    });
+    server.textProperty().addListener((obs, oldV, newV) -> {
+      if (newV != null) {
+        String currentHttp = httpServerField.getText().trim();
+        boolean isDefaultHttp = currentHttp.isEmpty()
+            || "http://localhost:8080".equalsIgnoreCase(currentHttp)
+            || "http://127.0.0.1:8080".equalsIgnoreCase(currentHttp)
+            || (oldV != null && currentHttp.equals("http://" + oldV.trim() + ":8080"));
+        String s = newV.trim();
+        if (isDefaultHttp && !s.isEmpty() && !s.equals("127.0.0.1") && !s.equalsIgnoreCase("localhost")) {
+          httpServerField.setText("http://" + s + ":8080");
+        }
+      }
+    });
 
     domain = new TextField(named.getOrDefault("domain", "lab"));
     user = new TextField(named.getOrDefault("user", "1001"));
