@@ -93,9 +93,10 @@
     -fx-border-color: #E2E8F0;
     -fx-border-radius: 12;
     -fx-background-radius: 12;
-    -fx-padding: 3 8 3 8;
-    -fx-font-size: 11px;
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 11.5px;
     -fx-font-weight: bold;
+    -fx-alignment: center;
 }
 
 .badge-online {
@@ -104,9 +105,10 @@
     -fx-border-color: #A7F3D0;
     -fx-border-radius: 12;
     -fx-background-radius: 12;
-    -fx-padding: 3 8 3 8;
-    -fx-font-size: 11px;
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 11.5px;
     -fx-font-weight: bold;
+    -fx-alignment: center;
 }
 
 .badge-warn {
@@ -115,9 +117,62 @@
     -fx-border-color: #FDE68A;
     -fx-border-radius: 12;
     -fx-background-radius: 12;
-    -fx-padding: 3 8 3 8;
-    -fx-font-size: 11px;
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 11.5px;
     -fx-font-weight: bold;
+    -fx-alignment: center;
+}
+
+/* ================= 3.1 现代药丸状态切换按钮 (Pill Toggle Button) ================= */
+.camera-toggle-btn {
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-padding: 7 14 7 14;
+    -fx-cursor: hand;
+    -fx-font-size: 13px;
+    -fx-alignment: center;
+}
+
+.camera-toggle-on {
+    -fx-background-color: #EFF6FF;
+    -fx-text-fill: #2563EB;
+    -fx-border-color: #BFDBFE;
+    -fx-font-weight: bold;
+}
+.camera-toggle-on:hover {
+    -fx-background-color: #DBEAFE;
+    -fx-border-color: #93C5FD;
+}
+
+.camera-toggle-off {
+    -fx-background-color: #F1F5F9;
+    -fx-text-fill: #64748B;
+    -fx-border-color: #CBD5E1;
+    -fx-font-weight: normal;
+}
+.camera-toggle-off:hover {
+    -fx-background-color: #E2E8F0;
+    -fx-border-color: #94A3B8;
+}
+
+/* 隐藏 CheckBox 原生自带的小方框与对勾标记，使之完全呈现为无缝融合的高质感药丸按钮 */
+.camera-toggle-btn > .box,
+.camera-toggle-on > .box,
+.camera-toggle-off > .box {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+    -fx-shape: "";
+    -fx-min-width: 0;
+    -fx-pref-width: 0;
+    -fx-max-width: 0;
+}
+.camera-toggle-btn > .box > .mark,
+.camera-toggle-on > .box > .mark,
+.camera-toggle-off > .box > .mark {
+    -fx-background-color: transparent;
+    -fx-shape: "";
+    -fx-padding: 0;
 }
 
 /* ================= 4. 输入框、选择框与基础按钮 ================= */

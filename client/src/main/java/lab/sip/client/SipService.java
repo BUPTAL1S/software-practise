@@ -133,11 +133,29 @@ final class SipService {
     }
   }
 
+  private void ensureThreadRegistered() {
+    if (started && endpoint != null) {
+      try {
+        if (!endpoint.libIsThreadRegistered()) {
+          String name = Thread.currentThread().getName();
+          if (name == null || name.isBlank()) {
+            name = "sip-th-" + Thread.currentThread().getId();
+          } else if (name.length() > 28) {
+            name = name.substring(0, 28);
+          }
+          endpoint.libRegisterThread(name);
+        }
+      } catch (Throwable ignored) {
+      }
+    }
+  }
+
   VideoDetails queryVideoDetails() {
     synchronized (this) {
       if (!started || endpoint == null) {
         return new VideoDetails(false, "引擎未启动", "无", "无", -1, -1);
       }
+      ensureThreadRegistered();
       try {
         String foundCodec = "";
         CodecInfoVector2 codecs = endpoint.videoCodecEnum2();
@@ -210,6 +228,41 @@ final class SipService {
     return queryVideoDetails().captureDevId;
   }
 
+  private volatile boolean cameraEnabled = true;
+
+  public boolean isCameraEnabled() {
+    return cameraEnabled;
+  }
+
+  public void setCameraEnabled(boolean enabled) {
+    this.cameraEnabled = enabled;
+  }
+
+  public synchronized void setCallVideoTransmit(boolean transmit) {
+    if (activeCall != null) {
+      activeCall.setTransmitVideo(transmit);
+    }
+  }
+
+  public synchronized boolean isCallActive() {
+    return activeCall != null;
+  }
+
+  public synchronized String getActiveCallRemoteUri() {
+    if (activeCall != null) {
+      try {
+        CallInfo ci = activeCall.getInfo();
+        return ci.getRemoteUri();
+      } catch (Throwable ignored) {
+      }
+    }
+    return "";
+  }
+
+  public boolean isVideoCallAllowed() {
+    return hasVideoSupport() && hasCaptureDevice() && cameraEnabled;
+  }
+
   private volatile boolean previewMirrorEnabled = true;
 
   synchronized boolean isPreviewActive() {
@@ -223,23 +276,42 @@ final class SipService {
   synchronized void togglePreviewMirror() {
     this.previewMirrorEnabled = !this.previewMirrorEnabled;
     if (videoPreview != null) {
+      ensureThreadRegistered();
+      VideoWindow win = null;
       try {
-        VideoWindow win = videoPreview.getVideoWindow();
+        win = videoPreview.getVideoWindow();
         if (win != null) {
-          VideoWindowInfo winInfo = win.getInfo();
-          if (winInfo != null && winInfo.getWinHandle() != null
-              && winInfo.getWinHandle().getHandle() != null) {
-            long hwnd = winInfo.getWinHandle().getHandle().getWindow();
-            if (previewMirrorEnabled) {
-              NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
-              events.log("系统", "摄像头预览已切换为：镜像模式 (符合照镜子直觉)");
-            } else {
-              NativeMirror.restoreNormal(hwnd, "摄像头预览 (真实)");
-              events.log("系统", "摄像头预览已切换为：真实模式 (非镜像)");
+          VideoWindowInfo winInfo = null;
+          try {
+            winInfo = win.getInfo();
+            if (winInfo != null && winInfo.getWinHandle() != null
+                && winInfo.getWinHandle().getHandle() != null) {
+              long hwnd = winInfo.getWinHandle().getHandle().getWindow();
+              if (previewMirrorEnabled) {
+                NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+                events.log("系统", "摄像头预览已切换为：镜像模式 (符合照镜子直觉)");
+              } else {
+                NativeMirror.restoreNormal(hwnd, "摄像头预览 (真实)");
+                events.log("系统", "摄像头预览已切换为：真实模式 (非镜像)");
+              }
+            }
+          } finally {
+            if (winInfo != null) {
+              try {
+                winInfo.delete();
+              } catch (Throwable ignored) {
+              }
             }
           }
         }
       } catch (Throwable ignored) {
+      } finally {
+        if (win != null) {
+          try {
+            win.delete();
+          } catch (Throwable ignored) {
+          }
+        }
       }
     }
     events.stateChanged();
@@ -249,6 +321,10 @@ final class SipService {
     if (!started || endpoint == null) {
       throw new IllegalStateException("请先启动引擎");
     }
+    if (!cameraEnabled) {
+      throw new IllegalStateException("本地摄像头已被禁用，请先启用摄像头");
+    }
+    ensureThreadRegistered();
     if (videoPreview != null) {
       return;
     }
@@ -257,9 +333,12 @@ final class SipService {
       throw new IllegalStateException("未检测到可用的视频输入设备");
     }
     videoPreview = new VideoPreview(vd.captureDevId);
-    videoPreview.start(new VideoPreviewOpParam());
+    VideoPreviewOpParam opParam = new VideoPreviewOpParam();
+    videoPreview.start(opParam);
+    opParam.delete();
+    VideoWindow win = null;
     try {
-      VideoWindow win = videoPreview.getVideoWindow();
+      win = videoPreview.getVideoWindow();
       if (win != null) {
         MediaSize sz = new MediaSize();
         sz.setW(480);
@@ -268,13 +347,16 @@ final class SipService {
           win.setSize(sz);
         } catch (Throwable t) {
           events.log("警告", "设置预览窗口分辨率失败: " + t.getMessage());
+        } finally {
+          sz.delete();
         }
         win.Show(true);
 
         // 方案 A：针对本地摄像头预览应用渲染层水平镜像变换（符合照镜子直觉，远端发送流不受影响）
         if (previewMirrorEnabled) {
+          VideoWindowInfo winInfo = null;
           try {
-            VideoWindowInfo winInfo = win.getInfo();
+            winInfo = win.getInfo();
             if (winInfo != null && winInfo.getWinHandle() != null
                 && winInfo.getWinHandle().getHandle() != null) {
               long hwnd = winInfo.getWinHandle().getHandle().getWindow();
@@ -282,10 +364,24 @@ final class SipService {
             }
           } catch (Throwable t) {
             events.log("系统", "提示: 原生图层镜像应用: " + t.getMessage());
+          } finally {
+            if (winInfo != null) {
+              try {
+                winInfo.delete();
+              } catch (Throwable ignored) {
+              }
+            }
           }
         }
       }
     } catch (Exception ignored) {
+    } finally {
+      if (win != null) {
+        try {
+          win.delete();
+        } catch (Throwable ignored) {
+        }
+      }
     }
     events.log("系统", "本地摄像头预览已开启 (" + vd.captureDev + (previewMirrorEnabled ? " · 镜像模式" : " · 真实模式") + ")");
     events.stateChanged();
@@ -293,8 +389,24 @@ final class SipService {
 
   synchronized void stopPreview() {
     if (videoPreview != null) {
+      ensureThreadRegistered();
       VideoPreview vp = videoPreview;
       videoPreview = null;
+      VideoWindow win = null;
+      try {
+        win = vp.getVideoWindow();
+        if (win != null) {
+          win.Show(false);
+        }
+      } catch (Throwable ignored) {
+      } finally {
+        if (win != null) {
+          try {
+            win.delete();
+          } catch (Throwable ignored) {
+          }
+        }
+      }
       try {
         vp.stop();
       } catch (Exception ignored) {
@@ -429,6 +541,7 @@ final class SipService {
   }
 
   synchronized void closeActiveVideoWindow() {
+    ensureThreadRegistered();
     if (testNativeVideoWindow != null) {
       try {
         testNativeVideoWindow.Show(false);
@@ -587,7 +700,7 @@ final class SipService {
     cfg.getNatConfig().setViaRewriteUse(0);
     cfg.getNatConfig().setContactUseSrcPort(0);
     if (hasVideoSupport()) {
-      cfg.getVideoConfig().setAutoShowIncoming(true);
+      cfg.getVideoConfig().setAutoShowIncoming(false);
       cfg.getVideoConfig().setAutoTransmitOutgoing(true);
       int capDev = findDefaultCaptureDev();
       if (capDev >= 0) {
@@ -737,6 +850,7 @@ final class SipService {
   }
 
   void hangup() {
+    ensureThreadRegistered();
     ClientCall call;
     String proxy;
     String mock;
@@ -807,6 +921,7 @@ final class SipService {
   }
 
   void shutdown() {
+    ensureThreadRegistered();
     stopPreview();
     cancelHangupWatch();
     hangupQuiet();
@@ -820,12 +935,10 @@ final class SipService {
       try {
         acc.shutdown();
       } catch (Exception ignored) {
-        // shutting down
       }
       try {
         acc.delete();
       } catch (Exception ignored) {
-        // shutting down
       }
     }
     synchronized (this) {
@@ -904,19 +1017,40 @@ final class SipService {
     endpoint = new Endpoint();
     endpoint.libCreate();
     EpConfig epConfig = new EpConfig();
-    logWriter = new ClientLogWriter();
-    epConfig.getLogConfig().setWriter(logWriter);
-    // pjsua 只把 level <= consoleLevel 的日志交给自定义 writer；SIP 报文 dump 是 4 级。
-    epConfig.getLogConfig().setLevel(4);
-    epConfig.getLogConfig().setConsoleLevel(4);
-    epConfig.getLogConfig().setMsgLogging(1);
-    long decor = epConfig.getLogConfig().getDecor();
-    decor &=
-        ~(pj_log_decoration.PJ_LOG_HAS_CR
-            | pj_log_decoration.PJ_LOG_HAS_NEWLINE
-            | pj_log_decoration.PJ_LOG_HAS_COLOR);
-    epConfig.getLogConfig().setDecor(decor);
-    endpoint.libInit(epConfig);
+    try {
+      logWriter = new ClientLogWriter();
+      epConfig.getLogConfig().setWriter(logWriter);
+      // pjsua 只把 level <= consoleLevel 的日志交给自定义 writer；SIP 报文 dump 是 4 级。
+      epConfig.getLogConfig().setLevel(4);
+      epConfig.getLogConfig().setConsoleLevel(4);
+      epConfig.getLogConfig().setMsgLogging(1);
+      long decor = epConfig.getLogConfig().getDecor();
+      decor &=
+          ~(pj_log_decoration.PJ_LOG_HAS_CR
+              | pj_log_decoration.PJ_LOG_HAS_NEWLINE
+              | pj_log_decoration.PJ_LOG_HAS_COLOR);
+      epConfig.getLogConfig().setDecor(decor);
+      // 显式禁用底层 Native Preview，强制使用标准渲染流水线 (Metal/DirectShow)，根治 vid_port.c:728 空指针断言 (exit 134)
+      epConfig.getMedConfig().setVidPreviewEnableNative(false);
+      endpoint.libInit(epConfig);
+    } finally {
+      epConfig.delete();
+    }
+    try {
+      endpoint.libRegisterThread(Thread.currentThread().getName());
+    } catch (Throwable ignored) {
+    }
+    try {
+      Platform.runLater(() -> {
+        try {
+          if (endpoint != null && !endpoint.libIsThreadRegistered()) {
+            endpoint.libRegisterThread("javafx-ui");
+          }
+        } catch (Throwable ignored) {
+        }
+      });
+    } catch (Throwable ignored) {
+    }
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP, port, publicIp);
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_TCP, port, publicIp);
     endpoint.libStart();
@@ -924,28 +1058,30 @@ final class SipService {
 
   private void createTransport(int type, int port, String publicIp) throws Exception {
     TransportConfig transport = new TransportConfig();
-    transport.setPort(port);
-    if (publicIp != null && !publicIp.isBlank()) {
-      transport.setPublicAddress(publicIp);
+    try {
+      transport.setPort(port);
+      if (publicIp != null && !publicIp.isBlank()) {
+        transport.setPublicAddress(publicIp);
+      }
+      endpoint.transportCreate(type, transport);
+    } finally {
+      transport.delete();
     }
-    endpoint.transportCreate(type, transport);
   }
 
   private void closeEndpointQuiet() {
     if (endpoint != null) {
+      ensureThreadRegistered();
       try {
         endpoint.libDestroy();
       } catch (Exception ignored) {
-        // shutting down
       }
       try {
         endpoint.delete();
       } catch (Exception ignored) {
-        // shutting down
       }
       endpoint = null;
     }
-    // libDestroy 会释放 native LogWriter，这里只丢掉 Java 引用。
     logWriter = null;
   }
 
@@ -954,6 +1090,7 @@ final class SipService {
   }
 
   private ClientCall hangupQuiet(boolean cancelWatch) {
+    ensureThreadRegistered();
     if (cancelWatch) {
       cancelHangupWatch();
     }
@@ -1132,6 +1269,7 @@ final class SipService {
 
     @Override
     public void onRegState(OnRegStateParam prm) {
+      ensureThreadRegistered();
       synchronized (SipService.this) {
         if (account != this) {
           return;
@@ -1145,6 +1283,7 @@ final class SipService {
 
     @Override
     public void onIncomingCall(OnIncomingCallParam prm) {
+      ensureThreadRegistered();
       ClientCall incoming;
       synchronized (SipService.this) {
         if (activeCall != null) {
@@ -1161,6 +1300,7 @@ final class SipService {
             Platform.runLater(
                 () -> {
                   try {
+                    ensureThreadRegistered();
                     busyCall.delete();
                   } catch (Exception ignored) {
                   }
@@ -1168,6 +1308,7 @@ final class SipService {
           } catch (IllegalStateException e) {
             // Toolkit not initialized (e.g. headless unit tests)
             try {
+              ensureThreadRegistered();
               busyCall.delete();
             } catch (Exception ignored) {
             }
@@ -1236,6 +1377,7 @@ final class SipService {
     private volatile VideoWindow activeVideoWindow;
     private volatile boolean localHangup;
     private volatile boolean callEndedDispatched;
+    private volatile int videoMediaIndex = -1;
 
     ClientCall(Account acc, String dialedDst, boolean videoConfigured) {
       super(acc);
@@ -1290,6 +1432,7 @@ final class SipService {
     }
 
     synchronized void closeVideoWindow() {
+      ensureThreadRegistered();
       if (activeVideoWindow != null) {
         try {
           activeVideoWindow.Show(false);
@@ -1302,10 +1445,34 @@ final class SipService {
         activeVideoWindow = null;
       }
       videoStreamActive = false;
+      videoMediaIndex = -1;
+    }
+
+    synchronized void setTransmitVideo(boolean transmit) {
+      if (!videoStreamActive) return;
+      try {
+        ensureThreadRegistered();
+        CallVidSetStreamParam vParam = new CallVidSetStreamParam();
+        vParam.setMedIdx(videoMediaIndex >= 0 ? videoMediaIndex : -1);
+        int op = transmit
+            ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT
+            : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_STOP_TRANSMIT;
+        if (transmit) {
+          int devId = findDefaultCaptureDev();
+          if (devId >= 0) {
+            vParam.setCapDev(devId);
+          }
+        }
+        vidSetStream(op, vParam);
+        events.log("通话", "本地视频推流已" + (transmit ? "恢复传输" : "暂停传输"));
+      } catch (Throwable t) {
+        events.log("警告", "设置视频推流状态失败: " + t.getMessage());
+      }
     }
 
     @Override
     public void onCallState(OnCallStateParam prm) {
+      ensureThreadRegistered();
       try {
         CallInfo ci = getInfo();
         int state = ci.getState();
@@ -1365,10 +1532,12 @@ final class SipService {
           Platform.runLater(
               () -> {
                 try {
+                  ensureThreadRegistered();
                   closeVideoWindow();
                 } catch (Throwable ignored) {
                 }
                 try {
+                  ensureThreadRegistered();
                   delete();
                 } catch (Exception ignored) {
                   // already gone
@@ -1386,10 +1555,12 @@ final class SipService {
 
     @Override
     public void onCallMediaState(OnCallMediaStateParam prm) {
+      ensureThreadRegistered();
       try {
         CallInfo ci = getInfo();
-        for (int i = 0; i < ci.getMedia().size(); i++) {
-          CallMediaInfo media = ci.getMedia().get(i);
+        org.pjsip.pjsua2.CallMediaInfoVector mediaVec = ci.getMedia();
+        for (int i = 0; i < mediaVec.size(); i++) {
+          CallMediaInfo media = mediaVec.get(i);
           if (media.getType() == pjmedia_type.PJMEDIA_TYPE_AUDIO) {
             AudioMedia audio = getAudioMedia(i);
             endpoint.audDevManager().getCaptureDevMedia().startTransmit(audio);
@@ -1412,6 +1583,7 @@ final class SipService {
                     }
                     this.activeVideoWindow = vidWin;
                     this.videoStreamActive = true;
+                    this.videoMediaIndex = i;
                   }
                   boolean isRoom = (dialedDst != null && dialedDst.contains("room-"))
                       || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
@@ -1433,7 +1605,8 @@ final class SipService {
                   vidWin.Show(true);
                   if (isRoom) {
                     boolean hasCap = hasCaptureDevice();
-                    if (hasCap && media.getVideoCapDev() < 0) {
+                    boolean camOn = isCameraEnabled();
+                    if (hasCap && camOn && media.getVideoCapDev() < 0) {
                       try {
                         int devId = findDefaultCaptureDev();
                         if (devId >= 0) {
@@ -1446,8 +1619,14 @@ final class SipService {
                       } catch (Throwable ignored) {
                       }
                     }
-                    String capNote =
-                        hasCap ? "本地摄像头推流已启动" : "本地无可用摄像头，仅接收混流画面";
+                    String capNote;
+                    if (!hasCap) {
+                      capNote = "本地无可用摄像头，仅接收混流画面";
+                    } else if (camOn) {
+                      capNote = "本地摄像头推流已启动";
+                    } else {
+                      capNote = "本地摄像头已禁用，MCU 画布正以个人头像展示";
+                    }
                     if (sizeSet) {
                       events.log(
                           "通话",

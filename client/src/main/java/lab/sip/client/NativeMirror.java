@@ -105,12 +105,18 @@ public final class NativeMirror {
         if (!Files.isRegularFile(dylib)) {
           dylib = root.resolve("native/macos-x64/libmacmirror.dylib");
         }
+        if (!Files.isRegularFile(dylib)) {
+          dylib = root.resolve("native/libmacmirror.dylib");
+        }
         if (Files.isRegularFile(dylib)) {
           System.load(dylib.toAbsolutePath().toString());
           loaded = true;
         }
       } else if (os.contains("win")) {
         Path dll = root.resolve("native/windows-x64/winmirror.dll");
+        if (!Files.isRegularFile(dll)) {
+          dll = root.resolve("native/winmirror.dll");
+        }
         if (Files.isRegularFile(dll)) {
           System.load(dll.toAbsolutePath().toString());
           loaded = true;

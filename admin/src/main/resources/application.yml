@@ -15,9 +15,6 @@ spring:
         jdbc:
           time_zone: UTC
 
-sipim:
-  upload-dir: ${SIPIM_UPLOAD_DIR:uploads}
-
 logging:
   level:
     com.lab.sipim: INFO

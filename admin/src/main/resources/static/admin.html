@@ -265,11 +265,11 @@
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-label">
-        <span>当前在线用户</span>
+        <span>后台在线会话</span>
         <span>🟢</span>
       </div>
       <div class="stat-value" id="statOnlineUsers">0</div>
-      <div class="stat-desc" id="statOnlineUsersDesc">已登录后台且 token 仍有效</div>
+      <div class="stat-desc" id="statOnlineUsersDesc">持有活跃 HTTP Token</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">
@@ -444,13 +444,14 @@
               <th>用户 ID</th>
               <th>用户名</th>
               <th>SIP 分机号 (sip_id)</th>
-              <th>账号属性</th>
+              <th>后台会话状态</th>
             </tr>
           </thead>
           <tbody id="usersTableBody">
             <tr><td colspan="4" class="empty-state">加载中...</td></tr>
           </tbody>
         </table>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">注：此处显示 HTTP 业务管理后台会话状态（2小时无操作自动过期）；SIP 语音与视频通话信令在线状态请以客户端 Kamailio 注册为准。</div>
       </div>
     </div>
   </div>
@@ -552,22 +553,6 @@
       if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return '📦';
       if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) return '📑';
       return '📄';
-    }
-
-    async function loadOnlineUsers() {
-      try {
-        const res = await fetch('/api/users/online');
-        if (!res.ok) throw new Error('拉取在线用户失败');
-        const data = await res.json();
-        const names = Array.isArray(data.users) ? data.users : [];
-        document.getElementById('statOnlineUsers').innerText = data.count ?? names.length;
-        document.getElementById('statOnlineUsersDesc').innerText =
-          names.length > 0 ? names.join('、') : '还没有人登录后台';
-        return new Set(names);
-      } catch (err) {
-        console.error('Online users error:', err);
-        return new Set();
-      }
     }
 
     async function loadStats() {
@@ -706,12 +691,38 @@
       }
     }
 
+    async function loadOnlineUsers() {
+      try {
+        const res = await fetch('/api/users/online');
+        if (!res.ok) throw new Error('拉取在线用户失败: ' + res.status);
+        const data = await res.json();
+        const names = Array.isArray(data.users) ? data.users : [];
+        const count = data.count ?? names.length;
+        const countEl = document.getElementById('statOnlineUsers');
+        if (countEl) countEl.innerText = count;
+        const descEl = document.getElementById('statOnlineUsersDesc');
+        if (descEl) {
+          descEl.innerText = names.length > 0
+            ? ('活跃: ' + names.join('、'))
+            : '暂无活跃会话 (未登录或已超时)';
+        }
+        return new Set(names);
+      } catch (err) {
+        console.error('Online users error:', err);
+        const countEl = document.getElementById('statOnlineUsers');
+        if (countEl && countEl.innerText === '0') countEl.innerText = '--';
+        const descEl = document.getElementById('statOnlineUsersDesc');
+        if (descEl) descEl.innerText = '拉取在线状态失败，稍后重试';
+        return new Set();
+      }
+    }
+
     async function loadUsers() {
       try {
         const res = await fetch('/api/users');
         if (!res.ok) throw new Error('拉取用户失败');
         const list = await res.json();
-        const online = await loadOnlineUsers();
+        const onlineSet = await loadOnlineUsers();
         document.getElementById('userCountBadge').innerText = `${list.length} 人`;
 
         const tbody = document.getElementById('usersTableBody');
@@ -720,14 +731,17 @@
           return;
         }
 
-        tbody.innerHTML = list.map(u => `
+        tbody.innerHTML = list.map(u => {
+          const isOnline = onlineSet.has(u.username) || onlineSet.has(u.sipId);
+          return `
           <tr>
             <td><span class="badge badge-gray">#${u.id}</span></td>
             <td><strong>${u.username}</strong></td>
             <td><span class="badge badge-primary text-mono">${u.sipId || u.sip_id || u.username}</span></td>
-            <td><span class="badge ${online.has(u.username) ? 'badge-success' : 'badge-gray'}">${online.has(u.username) ? '在线' : '未登录'}</span></td>
+            <td><span class="badge ${isOnline ? 'badge-success' : 'badge-gray'}" title="${isOnline ? '持有有效后台会话 (2小时自动过期)' : '未登录后台或会话已超时'}">${isOnline ? '后台已登录' : '未登录后台'}</span></td>
           </tr>
-        `).join('');
+        `;
+        }).join('');
       } catch (err) {
         console.error('Users error:', err);
       }
@@ -807,7 +821,7 @@
               eslBadge.innerText = '● FreeSWITCH ESL 在线';
             } else {
               eslBadge.className = 'badge badge-gray';
-              eslBadge.innerText = '● ESL 未连接 ' + esl.target;
+              eslBadge.innerText = '● ESL 监听中 (' + esl.target + ')';
             }
           }
         }
@@ -817,7 +831,6 @@
 
     function loadAllData() {
       checkHealth();
-      loadOnlineUsers();
       loadStats();
       loadCdrList();
       loadRooms();

@@ -11,11 +11,10 @@ mvn spring-boot:run
 ```
 
 - **管理与统计大盘（Web）**：打开浏览器访问 `http://localhost:8080/`（或 `/index.html`、`/admin.html`）
-  - 实时指标：当前在线用户、总通话次数、总时长、平均时长、房间并发峰值人数
+  - 实时指标：总通话次数、总时长、平均时长、房间并发峰值人数
   - 数据面板：通话记录 (CDR)、会议房间 (Rooms)、注册用户 (Users)、文件传输 (Files)
   - 快捷操作：创建房间、快速注册用户、按主被叫筛选通话、文件直接下载
 - 健康检查：`GET http://localhost:8080/api/health`
-- 统计页：`GET http://localhost:8080/`
 - 用户列表：`GET http://localhost:8080/api/users`
 - 库文件：`admin/sipim.db`（已 gitignore）
 - 首次启动会插入测试用户 `1001`–`1008`（`sip_id` 同名，与 Kamailio 静态账号对齐），并初始化研讨室 `room-101` 与 `room-102`。
@@ -70,16 +69,6 @@ mvn spring-boot:run
 `GET http://localhost:8080/api/me`，请求头 `Authorization: Bearer <token>`。
 - 成功 `200`：`{"username":"1001","sipId":"1001"}`
 - 无效或缺头：`401 {"error":"unauthorized"}`
-
-### 4. 当前在线用户
-`GET http://localhost:8080/api/users/online`
-
-成功 `200`：
-```json
-{"count":1,"users":["1002"]}
-```
-
-`count` 是当前进程里仍持有登录 token 的不同用户数。同一个人再次登录不会加一。后台重启后 token 清空，人数回到 0。这不是 Kamailio 的 SIP 注册人数。
 
 ## 房间管理（阶段 2 / 阶段 4 / 阶段 5 联动）
 
@@ -136,58 +125,48 @@ mvn spring-boot:run
 
 ## 文件上传与下载（阶段 3）
 
-字段与客户端 `HttpFileClient` 一致。文件二进制存运行目录下的 `uploads/`（从本目录启动时就是 `admin/uploads/`，已 gitignore），索引存 `files` 表。通话记录和统计见下方阶段 4，本阶段文件接口不含 CDR。
+文件二进制存 `uploads/` 目录，索引存数据库 `files` 表。
 
-`POST http://localhost:8080/api/files`，`multipart/form-data`。
+### 1. 上传文件
+`POST http://localhost:8080/api/files`
+`Content-Type: multipart/form-data`
 
-- 字段 `file`（必填）、`from`（发送方用户名）、`to`（接收方用户名或房间）
-- 有登录时带 `Authorization: Bearer <token>`；没有 token 时仍用表单里的 `from`
-- `from` 为空且 token 合法时，记成该用户；两者都没有时用 `anonymous`
-- `to` 为空时用 `broadcast`
-- 表单写了 `from` 时以表单为准，即使也带了别人的 token
+请求头：
+- `Authorization: Bearer <token>`（可选）：若携带，必须有效；token 关联用户将自动作为 `from`。
 
-成功 `200`，JSON 必有 `id`、`url`（`/api/files/{id}`）、`name`、`size`：
+请求字段：
+- `file`：二进制文件内容（必填）
+- `from`：发送者用户名（可选，默认 `anonymous`）
+- `to`：接收方用户名或房间号（可选，默认 `broadcast`）
 
+成功 `200`：
 ```json
 {
   "id": 1,
-  "name": "hello.txt",
-  "size": 12,
+  "name": "example.png",
+  "size": 10240,
   "url": "/api/files/1",
   "from": "1001",
   "to": "1002"
 }
 ```
 
-缺文件或空文件：`400`
+- 缺文件或文件为空：`400 {"error":"file is required"}`
 
-```json
-{"error":"file is required"}
-```
+### 2. 文件列表查询
+`GET http://localhost:8080/api/files?from=1001&to=1002&limit=50`
 
-带了 `Authorization` 但 token 无效：`401`
+成功 `200`：返回按 ID 倒序排列的文件索引数组。
 
-```json
-{"error":"unauthorized"}
-```
+### 3. 下载文件
+`GET http://localhost:8080/api/files/{id}`
 
-`GET http://localhost:8080/api/files?from=1001&to=1002&limit=50` 返回按 ID 倒序的文件索引。`GET http://localhost:8080/api/files/{id}` 返回文件字节，`Content-Disposition` 里是原始文件名。id 不存在或磁盘文件丢了：`404`。
-
-```bash
-# 上传
-curl.exe -s -F "file=@hello.txt" -F "from=1001" -F "to=1002" http://localhost:8080/api/files
-
-# 先登录再上传（不传 from 时记成 1001）
-TOKEN=$(curl.exe -s -H "Content-Type: application/json" -d "{\"username\":\"1001\",\"password\":\"1001\"}" http://localhost:8080/api/login | python -c "import sys,json; print(json.load(sys.stdin)['token'])")
-curl.exe -s -H "Authorization: Bearer $TOKEN" -F "file=@hello.txt" -F "to=1002" http://localhost:8080/api/files
-
-# 下载（把 1 换成返回的 id）
-curl.exe -OJ http://localhost:8080/api/files/1
-```
+- 成功 `200`：二进制流，带 `Content-Disposition: attachment; filename="<原文件名>"` 与对应 `Content-Type`。
+- 文件不存在：`404 Not Found`。
 
 ## 通话记录与统计（阶段 4）
 
-客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。浏览器打开 `http://localhost:8080/` 可看当前在线用户、通话次数、总时长、平均时长、房间人数峰值，以及 CDR 和用户列表。页面只读已有 GET 接口，不要求登录。房间当前在会人数由阶段 5 的 ESL 写入。
+客户端通话结束时上报 CDR，后台持久化到 SQLite `cdr` 表，并提供记录查询与统计接口。
 
 ### 1. 通话记录上报
 
@@ -243,31 +222,23 @@ curl.exe -OJ http://localhost:8080/api/files/1
 - `averageDurationSec`：平均单次通话时长（秒）
 - `peakRoomMembers`：房间最大同时在会人数峰值（基于通话时段 `[startedAt, startedAt + durationSec]` 的真实时间区间重叠扫描算法计算，反映瞬时并发参会人数，而非历史上不同账号的累计总数；结合各房间的当前在会人数 `rooms.memberCount` 取最大值）
 
-```bash
-# 上报一条通话
-curl.exe -s -H "Content-Type: application/json" -d "{\"caller\":\"1001\",\"callee_or_room\":\"1002\",\"started_at\":\"2026-10-13T10:00:00Z\",\"duration_sec\":45}" http://localhost:8080/api/cdr
-
-# 列表与统计
-curl.exe -s "http://localhost:8080/api/cdr?caller=1001&limit=50"
-curl.exe -s http://localhost:8080/api/cdr/stats
-```
-
 ## 房间 MCU 与 ESL 事件监听（阶段 5）
 
-后台用纯 Java 连接 FreeSWITCH ESL（默认 `127.0.0.1:8021`，密码 `ClueCon`，与 `server/freeswitch/autoload_configs/event_socket.conf.xml` 一致）。`8021` 只绑在跑 FreeSWITCH 的那台机器的回环地址上，校园网其他电脑连不进这个端口，所以不要把 `ESL_HOST` 改成同学的校园网 IP。后台必须和 FreeSWITCH 在同一台机器上跑。容器没起来时按 5 秒重试，不挡住启动。
+后台内置轻量级纯 Java FreeSWITCH ESL 客户端（`EslEventListener`），监听 `8021` 端口，自动实现：
+1. 启动时后台异步连接 FreeSWITCH ESL（默认 `127.0.0.1:8021`，密码 `ClueCon`）；若容器未就绪，按 `reconnect-interval-sec=5` 优雅重试，不阻塞 Spring Boot 启动。
+2. 鉴权通过后订阅 `CUSTOM conference::maintenance` 及通道事件；
+3. 当用户进入房间（`Action: add-member`）或离开房间（`Action: del-member` / `conference-destroy`）时，自动提取 `Conference-Name`（如 `room-101`），将最新实时在会人数 `Conference-Size` 写回 `rooms` 表中的 `member_count` 字段，并同步更新峰值人数。
+4. 后台不发起呼叫（房间由客户端自行 SIP INVITE 加入），不混流媒体，严格遵循分工规范。
 
-- 订阅 `conference::maintenance`。入会、离会时把 `Conference-Size` 写入该房间的 `member_count`，这是当前在会人数。
-- 历史峰值由 CDR 扫线现算，不写回 `member_count`。
-- 后台不发起呼叫，房间由客户端 INVITE 加入。
-
+配置参数（`application.yml`）：
 ```yaml
 freeswitch:
   esl:
-    enabled: true
-    host: 127.0.0.1
-    port: 8021
-    password: ClueCon
-    reconnect-interval-sec: 5
+    enabled: true                  # 是否启用 ESL 监听 (默认 true)
+    host: 127.0.0.1                # FreeSWITCH 容器宿主或内部地址
+    port: 8021                     # ESL 默认端口
+    password: ClueCon              # ESL 密码 (与 FreeSWITCH 对齐)
+    reconnect-interval-sec: 5      # 断线重连间隔秒数
 ```
 
 ## 四张表
@@ -275,7 +246,7 @@ freeswitch:
 | 表 | 字段（最少） | 说明 |
 |---|---|---|
 | users | id, username, password_hash, sip_id | 存储用户及 BCrypt 密码散列 |
-| rooms | id, name, sip_uri (`room-<id>`), max_members=8, member_count | 存储研讨/会议室与 ESL 写入的当前在会人数 |
+| rooms | id, name, sip_uri (`room-<id>`), max_members=8, member_count | 存储研讨/会议室与当前峰值人数 |
 | cdr | id, call_id, caller, callee_or_room, started_at, duration_sec | 通话记录与时长 |
 | files | id, from_user, to_user_or_room, path, size, created_at | 文件索引元数据 |
 
@@ -286,4 +257,4 @@ freeswitch:
 - Spring Web
 - Spring Data JPA + SQLite（文件 `sipim.db`，不入库）
 - `spring-security-crypto`：只做 BCrypt，不启用 Spring Security 过滤链
-- FreeSWITCH ESL：纯 Java Socket，不另加客户端库
+- FreeSWITCH ESL：原生纯 Java Socket 协议实现，零外部重型依赖，完全兼容 Spring Boot 3.3 与 JDK 17/25。

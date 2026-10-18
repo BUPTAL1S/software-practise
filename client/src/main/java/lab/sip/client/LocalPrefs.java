@@ -53,6 +53,10 @@ final class LocalPrefs {
   }
 
   private static Path file() {
-    return NativeLoader.findRepoRoot().resolve("client/.local-prefs");
+    Path root = NativeLoader.findRepoRoot();
+    if (Files.isDirectory(root.resolve("client"))) {
+      return root.resolve("client/.local-prefs");
+    }
+    return root.resolve(".local-prefs");
   }
 }

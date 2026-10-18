@@ -35,12 +35,14 @@ public class MeController {
             return unauthorized();
         }
         Optional<User> user = users.findById(userId.get());
-        if (user.isEmpty()) {
-            return unauthorized();
+        User u = user.get();
+        java.util.LinkedHashMap<String, String> resp = new java.util.LinkedHashMap<>();
+        resp.put("username", u.getUsername());
+        resp.put("sipId", u.getSipId());
+        if (u.getAvatarUrl() != null) {
+            resp.put("avatarUrl", u.getAvatarUrl());
         }
-        return ResponseEntity.ok(Map.of(
-                "username", user.get().getUsername(),
-                "sipId", user.get().getSipId()));
+        return ResponseEntity.ok(resp);
     }
 
     private static ResponseEntity<Map<String, String>> unauthorized() {

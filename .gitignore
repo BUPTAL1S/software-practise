@@ -29,3 +29,6 @@ admin/uploads/
 client/.local-prefs
 admin/.admin.pid
 server/kamailio/public-ip.defs
+dist/
+*.zip
+scripts/cache/

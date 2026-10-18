@@ -49,6 +49,34 @@ SIP 域：`lab`。
 - **后台与 ESL**：后台通过纯 Java 原生 Socket 监听 FreeSWITCH 8021 ESL 端口，自动同步实时在会人数与峰值；
 - 原生库不入库，见 `native/`。
 
+## 阶段 6：免环境绿色便携包与双机验收 (最高分交付)
+
+本系统采用 **方案 A（绿色便携包） + 形态 B（单机宿主双机验收）** 架构。
+
+### 1. 一键自动构建交付包
+
+```bash
+./scripts/build-dist.sh
+```
+
+构建完成后将在 `dist/` 目录下生成：
+- **`小组编号-实践阶段二-macOS-arm64.zip`**：macOS 独立便携包（内嵌 40MB 精简 JRE 17，免配置环境、免安装 JDK、免 Maven，双击即开）；
+- **`小组编号-实践阶段二-Windows-x64.zip`**：Windows 独立便携包（含 JavaFX 跨平台图形组件与 MinGW 动态链接库）；
+- **`小组编号-实践阶段二-完整主机服务.zip`**：电脑 A 主机服务包（含预编译秒开 `sipim-admin.jar` 与 Docker 容器启动脚本）。
+
+### 2. 双机协同验收流程 (形态 B)
+
+- **电脑 A（主机 / Docker 宿主）**：
+  1. 解压 `完整主机服务` 包（或在源码根目录）；
+  2. 双击运行 `一键启动-主机服务.command`（Windows 为 `.bat`），自动拉起 Kamailio、FreeSWITCH MCU 与 Spring Boot 后台，控制台输出当前局域网 IP（如 `10.21.253.218`）；
+  3. 打开客户端（默认以用户 `1001` 登录）。
+
+- **电脑 B（客户端分机 / 老师电脑 / 被叫方）**：
+  1. **电脑 B 完全无需安装 Docker、无需安装 JDK、无需 Maven**；
+  2. 解压对应的客户端绿色包（macOS 或 Windows）；
+  3. 双击 `启动客户端-指定服务器IP.command`（Windows 为 `.bat`），输入电脑 A 的局域网 IP（`10.21.253.218`），用户编号默认 `1002`；
+  4. 点击【注册/上线】，与电脑 A 进行一对一视频通话、文字/文件/短视频收发，或直接呼叫 `sip:room-101@lab` 加入 8 人 MCU 多人视频会议！
+
 ## 协作
 
 仓库：https://github.com/GaiYa0/software-practise  

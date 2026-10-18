@@ -3,11 +3,17 @@ package lab.sip.client;
 import java.awt.Desktop;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
@@ -25,6 +31,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.util.Duration;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
@@ -61,8 +68,148 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
 public final class MainApp extends Application {
+  private final Map<String, ObservableList<ChatMessage>> sessionMap = new ConcurrentHashMap<>();
+  private final Map<String, Integer> unreadCounts = new ConcurrentHashMap<>();
+  private final Map<String, Long> lastRoomMessageIds = new ConcurrentHashMap<>();
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
+
+  public ObservableList<ChatMessage> getOrCreateSession(String target) {
+    if (target == null || target.isBlank()) {
+      target = "default";
+    }
+    String key = extractUser(target).trim().toLowerCase();
+    return sessionMap.computeIfAbsent(key, k -> FXCollections.observableArrayList());
+  }
+
+  public void switchChatSession(String target) {
+    if (peer != null && target != null && !target.equalsIgnoreCase(peer.getText())) {
+      peer.setText(target);
+    }
+    String key = (target != null && !target.isBlank()) ? extractUser(target).trim().toLowerCase() : "default";
+    unreadCounts.put(key, 0);
+    if (assembler != null) {
+      assembler.updateContactUnread(key, 0);
+    }
+    ObservableList<ChatMessage> sessionList = getOrCreateSession(key);
+    if (chatListView != null) {
+      chatListView.setItems(sessionList);
+      if (!sessionList.isEmpty()) {
+        chatListView.scrollTo(sessionList.size() - 1);
+      }
+    }
+    if (chatPeerLabel != null) {
+      if (key.startsWith("room-")) {
+        chatPeerLabel.setText("研讨室 · " + target + " (多方共享)");
+      } else {
+        chatPeerLabel.setText("当前对象: " + target);
+      }
+    }
+  }
+
+  public enum OnlineStatus {
+    ONLINE,
+    OFFLINE,
+    UNREACHABLE
+  }
+
+  public static OnlineStatus probeSipUserStatus(String sipHost, int sipPort, String targetUser) {
+    if (sipHost == null || sipHost.isBlank() || targetUser == null || targetUser.isBlank()) {
+      return OnlineStatus.UNREACHABLE;
+    }
+    String host = sipHost.trim();
+    if ("localhost".equalsIgnoreCase(host)) {
+      host = "127.0.0.1";
+    }
+    try (DatagramSocket socket = new DatagramSocket()) {
+      socket.setSoTimeout(600);
+      String branch = "z9hG4bK-prb" + System.currentTimeMillis() + "-" + (int) (Math.random() * 10000);
+      String callId = "prb-" + System.currentTimeMillis() + "-" + targetUser + "@" + host;
+      String req =
+          "OPTIONS sip:" + targetUser + "@" + host + ":" + sipPort + " SIP/2.0\r\n"
+              + "Via: SIP/2.0/UDP 127.0.0.1:" + socket.getLocalPort() + ";branch=" + branch + "\r\n"
+              + "From: <sip:probe@" + host + ">;tag=p" + System.currentTimeMillis() + "\r\n"
+              + "To: <sip:" + targetUser + "@" + host + ">\r\n"
+              + "Call-ID: " + callId + "\r\n"
+              + "CSeq: 1 OPTIONS\r\n"
+              + "Max-Forwards: 70\r\n"
+              + "Content-Length: 0\r\n\r\n";
+      byte[] bytes = req.getBytes(StandardCharsets.UTF_8);
+      InetAddress addr = InetAddress.getByName(host);
+      DatagramPacket packet = new DatagramPacket(bytes, bytes.length, addr, sipPort);
+      socket.send(packet);
+
+      byte[] buf = new byte[2048];
+      DatagramPacket respPacket = new DatagramPacket(buf, buf.length);
+      try {
+        socket.receive(respPacket);
+      } catch (java.net.SocketTimeoutException te) {
+        // 轻量快速重发 1 次（符合 RFC 3261 规范，防 UDP 本地微小抖动）
+        socket.send(packet);
+        socket.receive(respPacket);
+      }
+      String resp = new String(respPacket.getData(), 0, respPacket.getLength(), StandardCharsets.UTF_8);
+      if (resp.startsWith("SIP/2.0 200") || resp.contains(" 200 OK")) {
+        return OnlineStatus.ONLINE;
+      }
+      if (resp.contains(" 404 ") || resp.contains(" 480 ") || resp.contains(" 603 ")) {
+        return OnlineStatus.OFFLINE;
+      }
+      return OnlineStatus.OFFLINE;
+    } catch (java.net.SocketTimeoutException e) {
+      return OnlineStatus.UNREACHABLE;
+    } catch (Exception e) {
+      return OnlineStatus.UNREACHABLE;
+    }
+  }
+
+  public static boolean probeSipUserOnline(String sipHost, int sipPort, String targetUser) {
+    return probeSipUserStatus(sipHost, sipPort, targetUser) == OnlineStatus.ONLINE;
+  }
+
+  public void handleIncomingInstantMessage(String fromUri, String toUri, String body) {
+    String sender = extractUser(fromUri);
+    String receiver = extractUser(toUri);
+    FileMessage fm = FileMessage.tryParse(body);
+    ChatMessage msg =
+        (fm != null)
+            ? ChatMessage.file(sender, receiver, false, fm, null)
+            : ChatMessage.text(sender, receiver, false, body);
+    ObservableList<ChatMessage> list = getOrCreateSession(sender);
+    list.add(msg);
+    String curTarget = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
+    if (sender.equalsIgnoreCase(curTarget)) {
+      if (chatListView != null) {
+        chatListView.scrollTo(list.size() - 1);
+      }
+    } else {
+      int unread = unreadCounts.getOrDefault(sender.toLowerCase(), 0) + 1;
+      unreadCounts.put(sender.toLowerCase(), unread);
+      if (assembler != null) {
+        assembler.updateContactUnread(sender, unread);
+      }
+    }
+  }
+
+  public static boolean probeRoomMcuReady(String httpBaseUrl) {
+    if (httpBaseUrl == null || httpBaseUrl.isBlank()) {
+      httpBaseUrl = "http://127.0.0.1:8080";
+    }
+    try {
+      java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+          .connectTimeout(java.time.Duration.ofMillis(800)).build();
+      java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+          .uri(java.net.URI.create(httpBaseUrl.replaceAll("/+$", "") + "/api/health"))
+          .timeout(java.time.Duration.ofMillis(1200))
+          .GET()
+          .build();
+      java.net.http.HttpResponse<String> resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+      String b = resp.body();
+      return resp.statusCode() == 200 && b != null && b.contains("\"connected\":true");
+    } catch (Exception e) {
+      return false;
+    }
+  }
 
   private final SipService sip =
       new SipService(
@@ -164,20 +311,7 @@ public final class MainApp extends Application {
             @Override
             public void instantMessageReceived(
                 String fromUri, String toUri, String body, String contentType) {
-              Platform.runLater(
-                  () -> {
-                    String sender = extractUser(fromUri);
-                    String receiver = extractUser(toUri);
-                    FileMessage fm = FileMessage.tryParse(body);
-                    ChatMessage msg =
-                        (fm != null)
-                            ? ChatMessage.file(sender, receiver, false, fm, null)
-                            : ChatMessage.text(sender, receiver, false, body);
-                    chatMessages.add(msg);
-                    if (chatListView != null) {
-                      chatListView.scrollTo(chatMessages.size() - 1);
-                    }
-                  });
+              Platform.runLater(() -> handleIncomingInstantMessage(fromUri, toUri, body));
             }
 
             @Override
@@ -189,9 +323,10 @@ public final class MainApp extends Application {
                     String status =
                         (statusCode == 200) ? "已送达" : ("发送未送达(" + statusCode + " " + reason + ")");
                     boolean matched = false;
+                    ObservableList<ChatMessage> list = getOrCreateSession(targetUser);
                     // 1. 优先尝试在发给 targetUser 且待确认的消息中精确匹配正文
-                    for (int i = 0; i < chatMessages.size(); i++) {
-                      ChatMessage m = chatMessages.get(i);
+                    for (int i = 0; i < list.size(); i++) {
+                      ChatMessage m = list.get(i);
                       if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
                         if (!targetUser.isEmpty() && targetUser.equals(m.getReceiver())) {
                           String expectedBody = m.isFile() ? m.getFile().toWireFormat() : m.getText();
@@ -207,8 +342,8 @@ public final class MainApp extends Application {
                     if (!matched && !targetUser.isEmpty()) {
                       int candidateIndex = -1;
                       int candidateCount = 0;
-                      for (int i = 0; i < chatMessages.size(); i++) {
-                        ChatMessage m = chatMessages.get(i);
+                      for (int i = 0; i < list.size(); i++) {
+                        ChatMessage m = list.get(i);
                         if (m.isOutgoing() && ("已发送".equals(m.getStatus()) || m.getStatus().isEmpty())) {
                           if (targetUser.equals(m.getReceiver())) {
                             candidateIndex = i;
@@ -217,7 +352,7 @@ public final class MainApp extends Application {
                         }
                       }
                       if (candidateCount == 1 && candidateIndex >= 0) {
-                        chatMessages.get(candidateIndex).setStatus(status);
+                        list.get(candidateIndex).setStatus(status);
                         matched = true;
                       }
                     }
@@ -241,7 +376,7 @@ public final class MainApp extends Application {
   private TextField user;
   private PasswordField password;
   private TextField sipPort;
-  private TextField peer;
+  private TextField peer = new TextField("1002");
 
   private Button startEngine;
   private Button register;
@@ -287,9 +422,53 @@ public final class MainApp extends Application {
   private Tab chatTab;
   private Tab roomTab;
   private Button loginBtn;
+  private CheckBox cameraToggleBox;
   private MainViewAssembler assembler;
 
   private String campusIp = "";
+
+  public CheckBox getCameraToggleBox() {
+    if (cameraToggleBox == null) {
+      boolean cameraOn = sip.isCameraEnabled();
+      cameraToggleBox = new CheckBox(cameraOn ? "摄像头: 已开启" : "摄像头: 已禁用");
+      cameraToggleBox.setSelected(cameraOn);
+      cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
+      cameraToggleBox.setOnAction(e -> {
+        boolean enabled = cameraToggleBox.isSelected();
+        sip.setCameraEnabled(enabled);
+        cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
+        cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
+        if (!enabled && sip.isPreviewActive()) {
+          sip.stopPreview();
+        }
+        if (sip.isCallActive()) {
+          sip.setCallVideoTransmit(enabled);
+          String remote = sip.getActiveCallRemoteUri();
+          if (remote != null && (remote.contains("room-") || remote.contains("room"))) {
+            String mySip = user.getText().trim();
+            httpFileClient.toggleRoomVmute(remote, mySip, !enabled);
+            if (logs != null) {
+              logs.append("通话", enabled
+                  ? "本地摄像头已开启，MCU 会议室画面已恢复实时视频"
+                  : "本地摄像头已关闭，MCU 会议室画面已切换为您的个人头像");
+            }
+          }
+        }
+        refreshButtons();
+        if (logs != null && !sip.isCallActive()) {
+          logs.append("系统", "本地摄像头已" + (enabled ? "开启" : "禁用") + " (呼叫与入会将自动" + (enabled ? "支持视频" : "以纯语音模式进行") + ")");
+        }
+      });
+    }
+    return cameraToggleBox;
+  }
+
+  public Button getPreviewBtn() {
+    if (previewBtn == null) {
+      previewBtn = new Button("摄像头预览");
+    }
+    return previewBtn;
+  }
 
 
   @Override
@@ -335,10 +514,30 @@ public final class MainApp extends Application {
     }
     if (named.containsKey("server")) {
       server.setText(named.get("server"));
+    } else if (named.containsKey("host")) {
+      server.setText(named.get("host"));
     }
     if (named.containsKey("http")) {
       httpServerField.setText(named.get("http"));
       httpFileClient.setBaseUrl(named.get("http"));
+    } else if (named.containsKey("http-port") || named.containsKey("http_port")) {
+      String portStr = named.containsKey("http-port") ? named.get("http-port") : named.get("http_port");
+      String host = "127.0.0.1";
+      if (named.containsKey("server")) {
+        host = named.get("server");
+      } else if (named.containsKey("host")) {
+        host = named.get("host");
+      }
+      String derived = "http://" + host + ":" + portStr;
+      httpServerField.setText(derived);
+      httpFileClient.setBaseUrl(derived);
+    } else if (named.containsKey("server") || named.containsKey("host")) {
+      String s = server.getText().trim();
+      if (!s.isEmpty() && !s.equals("127.0.0.1") && !s.equalsIgnoreCase("localhost")) {
+        String derivedHttp = "http://" + s + ":8080";
+        httpServerField.setText(derivedHttp);
+        httpFileClient.setBaseUrl(derivedHttp);
+      }
     }
 
     Button fillLan = new Button("填入本机 IP");
@@ -347,7 +546,7 @@ public final class MainApp extends Application {
     callAudio = new Button("语音呼叫");
     callVideo = new Button("视频呼叫");
     callVideo.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
-    previewBtn = new Button("摄像头预览");
+    previewBtn = getPreviewBtn();
     answerVideo = new Button("接听(视频)");
     answerVideo.getStyleClass().setAll("btn-success");
     answerAudio = new Button("接听(语音)");
@@ -356,14 +555,20 @@ public final class MainApp extends Application {
     hangup.getStyleClass().setAll("btn-danger");
 
     Button testHttpBtn = new Button("测试后台");
-    httpStatusBadge = new Label("未检测");
+    httpStatusBadge = new Label("后台: 未检测");
     httpStatusBadge.getStyleClass().setAll("badge-warn");
+    httpStatusBadge.setMaxWidth(Double.MAX_VALUE);
+    httpStatusBadge.setAlignment(Pos.CENTER);
+    httpStatusBadge.setTooltip(new Tooltip("后台 HTTP 服务尚未检测"));
 
     logs = new LogView();
-    callStatus = new Label("状态 引擎未启动");
+    callStatus = new Label("SIP: 未启动");
     callStatus.getStyleClass().setAll("badge-offline");
     callStatus.setMaxWidth(Double.MAX_VALUE);
+    callStatus.setAlignment(Pos.CENTER);
+    callStatus.setTooltip(new Tooltip("SIP 通信引擎尚未启动"));
     HBox.setHgrow(callStatus, Priority.ALWAYS);
+    HBox.setHgrow(httpStatusBadge, Priority.ALWAYS);
 
     fillLan.setOnAction(
         e -> {
@@ -416,12 +621,14 @@ public final class MainApp extends Application {
                     Platform.runLater(
                         () -> {
                           if (healthy) {
-                            httpStatusBadge.setText("正常" + (authMsg.contains("成功") ? " 已鉴权" : ""));
+                            httpStatusBadge.setText("后台: 正常");
                             httpStatusBadge.getStyleClass().setAll("badge-online");
+                            httpStatusBadge.setTooltip(new Tooltip("后台服务正常: " + finalTarget + authMsg));
                             logs.append("文件", "后台服务正常 " + finalTarget + authMsg);
                           } else {
-                            httpStatusBadge.setText("不可达");
+                            httpStatusBadge.setText("后台: 不可达");
                             httpStatusBadge.getStyleClass().setAll("badge-offline");
+                            httpStatusBadge.setTooltip(new Tooltip("后台 HTTP 连接失败: " + finalTarget));
                             logs.append("警告", "后台 HTTP 连接失败: " + finalTarget + "，请确认 Spring Boot 已启动");
                           }
                           LocalPrefs.save(server.getText(), "tcp", finalTarget);
@@ -474,6 +681,8 @@ public final class MainApp extends Application {
     previewBtn.setContextMenu(previewMenu);
     previewBtn.setTooltip(new Tooltip("点击开启/关闭摄像头预览；右键可切换镜像/真实模式"));
 
+    cameraToggleBox = getCameraToggleBox();
+
     previewBtn.setOnAction(
         e ->
             run(
@@ -523,13 +732,13 @@ public final class MainApp extends Application {
     // ======== 右侧面板：消息与文件传输 (SIP MESSAGE + HTTP 文件) ========
     chatPeerLabel = new Label("当前对象: " + peer.getText().trim());
     chatPeerLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #57606a;");
-    peer.textProperty().addListener((obs, oldV, newV) -> chatPeerLabel.setText("当前对象: " + newV.trim()));
+    peer.textProperty().addListener((obs, oldV, newV) -> switchChatSession(newV));
 
     Label chatHeaderTitle = new Label("消息与文件传输");
     chatHeaderTitle.setStyle("-fx-font-weight: bold; -fx-font-size: 14px; -fx-text-fill: #1E293B;");
     Button clearChatBtn = new Button("清空");
     clearChatBtn.getStyleClass().setAll("btn-secondary");
-    clearChatBtn.setOnAction(e -> chatMessages.clear());
+    clearChatBtn.setOnAction(e -> getOrCreateSession(peer.getText().trim()).clear());
 
     Region chatSpacer = new Region();
     HBox.setHgrow(chatSpacer, Priority.ALWAYS);
@@ -537,7 +746,7 @@ public final class MainApp extends Application {
     chatHeader.setAlignment(Pos.CENTER_LEFT);
     chatHeader.setPadding(new Insets(4, 4, 4, 4));
 
-    chatListView = new ListView<>(chatMessages);
+    chatListView = new ListView<>(getOrCreateSession(peer.getText().trim()));
     chatListView.setCellFactory(lv -> new ChatMessageCell());
     chatListView.getStyleClass().add("chat-list-view");
     VBox.setVgrow(chatListView, Priority.ALWAYS);
@@ -604,6 +813,7 @@ public final class MainApp extends Application {
     rightTabPane.getTabs().addAll(chatTab, roomTab, cdrTab, consoleTab);
 
     this.assembler = new MainViewAssembler();
+    assembler.setOnAvatarClicked(this::showAvatarSettingsDialog);
     BorderPane root =
         assembler.assembleProductUi(
             stage,
@@ -616,6 +826,7 @@ public final class MainApp extends Application {
             callAudio,
             hangup,
             previewBtn,
+            cameraToggleBox,
             incomingBox,
             server,
             fillLan,
@@ -639,14 +850,32 @@ public final class MainApp extends Application {
     }
     stage.setTitle("SIP 客户端 · 阶段 5 房间 MCU 与音视频会议");
     stage.setScene(scene);
+
+    Timeline probeAndPollTimeline =
+        new Timeline(new KeyFrame(Duration.millis(2500), e -> pollOnlineStatusesAndRoomMessages()));
+    probeAndPollTimeline.setCycleCount(Animation.INDEFINITE);
+
     stage.setOnCloseRequest(
         e -> {
+          probeAndPollTimeline.stop();
+          roomPollingTimeline.stop();
           if (logs != null) {
             logs.dockBack();
+          }
+          if (httpFileClient != null) {
+            new Thread(() -> {
+              try {
+                httpFileClient.logout();
+              } catch (Throwable ignored) {
+              }
+            }).start();
           }
           sip.shutdown();
         });
     stage.show();
+    switchChatSession(peer.getText().trim());
+    probeAndPollTimeline.play();
+    pollOnlineStatusesAndRoomMessages();
 
     String snapProp = System.getProperty("ui.snapshot");
     final String snapshotPath = (snapProp != null && !snapProp.isBlank()) ? snapProp : named.get("snapshot");
@@ -725,6 +954,84 @@ public final class MainApp extends Application {
     refreshRooms();
   }
 
+  private void pollOnlineStatusesAndRoomMessages() {
+    new Thread(
+        () -> {
+          // 1. 探活联系人真实在线状态 (1001, 1002, 1003)
+          String sipHost = (server != null && server.getText() != null) ? server.getText().trim() : "127.0.0.1";
+          int sipPortNum = 5060;
+          String myUser = (user != null && user.getText() != null) ? user.getText().trim() : "";
+          java.util.Set<String> allTargets = (assembler != null && !assembler.getContactTargetIds().isEmpty())
+              ? assembler.getContactTargetIds()
+              : java.util.Set.of("1001", "1002", "1003", "room-101");
+
+          for (String target : allTargets) {
+            if (target.startsWith("room")) {
+              continue;
+            }
+            boolean online;
+            if (!myUser.isEmpty() && target.equalsIgnoreCase(myUser) && sip.isRegistered()) {
+              online = true;
+            } else {
+              online = probeSipUserOnline(sipHost, sipPortNum, target);
+            }
+            if (assembler != null) {
+              assembler.updateContactStatus(target, online);
+            }
+          }
+
+          boolean mcuReady = probeRoomMcuReady(httpServerField != null ? httpServerField.getText().trim() : "http://127.0.0.1:8080");
+          if (assembler != null) {
+            for (String target : allTargets) {
+              if (target.startsWith("room")) {
+                assembler.updateContactStatus(target, mcuReady);
+              }
+            }
+          }
+
+          // 2. 轮询当前激活研讨室的增量群聊消息
+          String currentPeer = (peer != null && peer.getText() != null) ? peer.getText().trim() : "";
+          if (isRoomTarget(currentPeer)) {
+            String roomUri = extractUser(currentPeer);
+            long lastId = lastRoomMessageIds.getOrDefault(roomUri.toLowerCase(), 0L);
+            try {
+              httpFileClient.setBaseUrl(httpServerField.getText().trim());
+              List<HttpFileClient.RoomMessageInfo> list = httpFileClient.fetchRoomMessages(roomUri, lastId);
+              if (list != null && !list.isEmpty()) {
+                long maxId = lastId;
+                List<ChatMessage> toAdd = new ArrayList<>();
+                for (HttpFileClient.RoomMessageInfo m : list) {
+                  if (m.id() > maxId) {
+                    maxId = m.id();
+                  }
+                  if (!m.sender().equalsIgnoreCase(myUser)) {
+                    FileMessage fm = m.isFile() ? FileMessage.tryParse(m.content()) : null;
+                    ChatMessage cm = (fm != null)
+                        ? ChatMessage.file(m.sender(), roomUri, false, fm, null)
+                        : ChatMessage.text(m.sender(), roomUri, false, m.content());
+                    toAdd.add(cm);
+                  }
+                }
+                lastRoomMessageIds.put(roomUri.toLowerCase(), maxId);
+                if (!toAdd.isEmpty()) {
+                  Platform.runLater(
+                      () -> {
+                        ObservableList<ChatMessage> session = getOrCreateSession(roomUri);
+                        session.addAll(toAdd);
+                        String activeTarget = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
+                        if (roomUri.equalsIgnoreCase(activeTarget) && chatListView != null) {
+                          chatListView.scrollTo(session.size() - 1);
+                        }
+                      });
+                }
+              }
+            } catch (Exception ignored) {
+            }
+          }
+        },
+        "probe-and-room-poll")
+        .start();
+  }
 
   private void sendTextMessage() {
     String text = chatInput.getText().trim();
@@ -732,32 +1039,50 @@ public final class MainApp extends Application {
       return;
     }
     String targetPeer = peer.getText().trim();
+    String myUser = user.getText().trim();
     if (isRoomTarget(targetPeer)) {
-      logs.append("警告", "会议房间不能发送文字消息，请改填具体用户账号 (如 1002)");
+      chatInput.clear();
+      new Thread(
+          () -> {
+            try {
+              httpFileClient.setBaseUrl(httpServerField.getText().trim());
+              httpFileClient.sendRoomMessage(targetPeer, myUser, text, false);
+              Platform.runLater(
+                  () -> {
+                    ChatMessage msg = ChatMessage.text(myUser, targetPeer, true, text);
+                    ObservableList<ChatMessage> list = getOrCreateSession(targetPeer);
+                    list.add(msg);
+                    if (chatListView != null) {
+                      chatListView.scrollTo(list.size() - 1);
+                    }
+                  });
+            } catch (Exception ex) {
+              Platform.runLater(() -> logs.append("错误", "发送房间消息失败: " + ex.getMessage()));
+            }
+          },
+          "room-text-send")
+          .start();
       return;
     }
     String targetDomain = domain.getText().trim();
-    String myUser = user.getText().trim();
     run(
         () -> {
           sip.sendMessage(targetPeer, targetDomain, text);
           ChatMessage msg = ChatMessage.text(myUser, targetPeer, true, text);
-          chatMessages.add(msg);
+          ObservableList<ChatMessage> list = getOrCreateSession(targetPeer);
+          list.add(msg);
           chatInput.clear();
           if (chatListView != null) {
-            chatListView.scrollTo(chatMessages.size() - 1);
+            chatListView.scrollTo(list.size() - 1);
           }
         });
   }
 
   private void sendFile(Stage owner) {
-    if (!sip.isRegistered()) {
-      logs.append("警告", "尚未注册成功，无法发送文件消息");
-      return;
-    }
     String targetPeer = peer.getText().trim();
-    if (isRoomTarget(targetPeer)) {
-      logs.append("警告", "会议房间不能发送文件，请改填具体用户账号 (如 1002)");
+    boolean isRoom = isRoomTarget(targetPeer);
+    if (!isRoom && !sip.isRegistered()) {
+      logs.append("警告", "尚未注册成功，无法发送点对点文件消息");
       return;
     }
     FileChooser chooser = new FileChooser();
@@ -785,17 +1110,41 @@ public final class MainApp extends Application {
                 FileMessage fm = httpFileClient.uploadFile(file.toPath(), myUser, targetPeer);
                 Platform.runLater(
                     () -> {
-                      fileProgressLabel.setText("上传完成，正在发送 SIP MESSAGE 通知...");
-                      run(
-                          () -> {
-                            sip.sendMessage(targetPeer, targetDomain, fm.toWireFormat());
-                            ChatMessage msg = ChatMessage.file(myUser, targetPeer, true, fm, file.toPath());
-                            chatMessages.add(msg);
-                            if (chatListView != null) {
-                              chatListView.scrollTo(chatMessages.size() - 1);
-                            }
-                            logs.append("文件", "文件通知已发送: " + fm.getName() + " (" + FileMessage.formatSize(fm.getSize()) + ")");
-                          });
+                      if (isRoom) {
+                        new Thread(
+                            () -> {
+                              try {
+                                httpFileClient.sendRoomMessage(targetPeer, myUser, fm.toWireFormat(), true);
+                                Platform.runLater(
+                                    () -> {
+                                      ChatMessage msg = ChatMessage.file(myUser, targetPeer, true, fm, file.toPath());
+                                      ObservableList<ChatMessage> list = getOrCreateSession(targetPeer);
+                                      list.add(msg);
+                                      if (chatListView != null) {
+                                        chatListView.scrollTo(list.size() - 1);
+                                      }
+                                      logs.append("文件", "研讨室文件共享成功: " + fm.getName() + " (" + FileMessage.formatSize(fm.getSize()) + ")");
+                                    });
+                              } catch (Exception ex) {
+                                Platform.runLater(() -> logs.append("错误", "房间文件广播失败: " + ex.getMessage()));
+                              }
+                            },
+                            "room-file-broadcast")
+                            .start();
+                      } else {
+                        fileProgressLabel.setText("上传完成，正在发送 SIP MESSAGE 通知...");
+                        run(
+                            () -> {
+                              sip.sendMessage(targetPeer, targetDomain, fm.toWireFormat());
+                              ChatMessage msg = ChatMessage.file(myUser, targetPeer, true, fm, file.toPath());
+                              ObservableList<ChatMessage> list = getOrCreateSession(targetPeer);
+                              list.add(msg);
+                              if (chatListView != null) {
+                                chatListView.scrollTo(list.size() - 1);
+                              }
+                              logs.append("文件", "文件通知已发送: " + fm.getName() + " (" + FileMessage.formatSize(fm.getSize()) + ")");
+                            });
+                      }
                     });
               } catch (Exception ex) {
                 Platform.runLater(
@@ -807,7 +1156,7 @@ public final class MainApp extends Application {
                     () -> {
                       fileProgressLabel.setVisible(false);
                       fileProgressLabel.setManaged(false);
-                      sendFileBtn.setDisable(!sip.isRegistered());
+                      sendFileBtn.setDisable(false);
                     });
               }
             },
@@ -871,16 +1220,33 @@ public final class MainApp extends Application {
     boolean videoSupported = vd.supported;
     boolean hasCapture = vd.captureDevId >= 0;
 
+    boolean cameraOn = sip.isCameraEnabled();
+    if (cameraToggleBox != null) {
+      if (cameraToggleBox.isSelected() != cameraOn) {
+        cameraToggleBox.setSelected(cameraOn);
+      }
+      cameraToggleBox.setText(cameraOn ? "摄像头: 已开启" : "摄像头: 已禁用");
+      cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
+    }
+    if (previewBtn != null) {
+      previewBtn.setDisable(!on || !videoSupported || !hasCapture || !cameraOn);
+      if (!cameraOn) {
+        previewBtn.setText("摄像头已禁用");
+      } else if (!hasCapture && videoSupported) {
+        previewBtn.setText("无摄像头");
+      } else {
+        previewBtn.setText(sip.isPreviewActive() ? "关闭预览" : "摄像头预览");
+      }
+    }
+
+    if (startEngine == null) {
+      return;
+    }
+
     startEngine.setDisable(on);
     register.setDisable(!on);
     if (loginBtn != null) {
       loginBtn.setDisable(!on);
-    }
-    previewBtn.setDisable(!on || !videoSupported || !hasCapture);
-    if (!hasCapture && videoSupported) {
-      previewBtn.setText("无摄像头");
-    } else {
-      previewBtn.setText(sip.isPreviewActive() ? "关闭预览" : "摄像头预览");
     }
 
     callAudio.setDisable(!reg);
@@ -929,7 +1295,21 @@ public final class MainApp extends Application {
       roomTableView.refresh();
     }
 
-    callStatus.setText("状态  " + sip.statusText());
+    String fullSip = sip.statusText();
+    String shortSip;
+    if (!on) {
+      shortSip = "SIP: 未启动";
+    } else if (sip.isInCall()) {
+      shortSip = sip.isInRoomCall() ? "SIP: 在会中" : "SIP: 通话中";
+    } else if (reg) {
+      shortSip = "SIP: 在线";
+    } else if (fullSip.contains("失败")) {
+      shortSip = "SIP: 离线";
+    } else {
+      shortSip = "SIP: 未注册";
+    }
+    callStatus.setText(shortSip);
+    callStatus.setTooltip(new Tooltip(fullSip));
     if (reg) {
       callStatus.getStyleClass().setAll("badge-online");
     } else if (on) {
@@ -1007,10 +1387,17 @@ public final class MainApp extends Application {
                 String token = httpFileClient.login(u, p);
                 Platform.runLater(
                     () -> {
-                      httpStatusBadge.setText("已登录 (" + u + ")");
+                      httpStatusBadge.setText("后台: 已登录");
                       httpStatusBadge.getStyleClass().setAll("badge-online");
                       String tokenSample = (token != null && token.length() > 8) ? token.substring(0, 8) + "..." : token;
+                      httpStatusBadge.setTooltip(new Tooltip("后台已登录: " + u + " (Token: " + tokenSample + ")"));
                       logs.append("系统", "后台登录成功: " + u + " (Token: " + tokenSample + ")");
+                      if (assembler != null) {
+                        String av = httpFileClient.getUserAvatarUrl();
+                        String fullAv = (av != null && !av.isBlank()) ? httpFileClient.getBaseUrl() + av : null;
+                        assembler.updateNavAvatar(fullAv, u);
+                      }
+                      refreshContactAvatars();
                       refreshCdrAndStats();
                       refreshRooms();
                     });
@@ -1018,12 +1405,14 @@ public final class MainApp extends Application {
                 Platform.runLater(
                     () -> {
                       if (!silent) {
-                        httpStatusBadge.setText("登录失败");
+                        httpStatusBadge.setText("后台: 失败");
                         httpStatusBadge.getStyleClass().setAll("badge-offline");
+                        httpStatusBadge.setTooltip(new Tooltip("后台登录失败: " + ex.getMessage()));
                         logs.append("警告", "后台登录失败: " + ex.getMessage());
                       } else {
-                        httpStatusBadge.setText("未登录");
+                        httpStatusBadge.setText("后台: 未登录");
                         httpStatusBadge.getStyleClass().setAll("badge-warn");
+                        httpStatusBadge.setTooltip(new Tooltip("后台尚未登录，可点击【网络与账号设置】进行登录"));
                         logs.append("提示", "后台静默登录未成功 (" + ex.getMessage() + ")，可确认密码后点击【登录后台】");
                       }
                     });
@@ -1405,88 +1794,10 @@ public final class MainApp extends Application {
     colCount.setMaxWidth(95);
 
     TableColumn<HttpFileClient.RoomInfo, Void> colAction = new TableColumn<>("操作");
-    colAction.setMinWidth(210);
-    colAction.setMaxWidth(260);
-    colAction.setCellFactory(param -> new TableCell<>() {
-      private final Button joinVideoBtn = new Button("视频参会");
-      private final Button joinAudioBtn = new Button("语音参会");
-      private final Button selectBtn = new Button("选定");
-      private final Button exitBtn = new Button("退出会议");
-      private final HBox defaultBox = new HBox(6, joinVideoBtn, joinAudioBtn, selectBtn);
-      private final HBox inMeetingBox = new HBox(6, exitBtn, selectBtn);
-
-      {
-        defaultBox.setAlignment(Pos.CENTER_LEFT);
-        inMeetingBox.setAlignment(Pos.CENTER_LEFT);
-
-        joinVideoBtn.getStyleClass().setAll("btn-primary");
-        joinVideoBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
-        joinVideoBtn.setTooltip(new Tooltip("发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"));
-        joinVideoBtn.setOnAction(e -> {
-          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
-          if (room != null && room.sipUri() != null) {
-            peer.setText(room.sipUri());
-            run(() -> sip.call(room.sipUri(), domain.getText().trim(), true));
-          }
-        });
-
-        joinAudioBtn.getStyleClass().setAll("btn-secondary");
-        joinAudioBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
-        joinAudioBtn.setTooltip(new Tooltip("发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
-        joinAudioBtn.setOnAction(e -> {
-          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
-          if (room != null && room.sipUri() != null) {
-            peer.setText(room.sipUri());
-            run(() -> sip.call(room.sipUri(), domain.getText().trim(), false));
-          }
-        });
-
-        exitBtn.getStyleClass().setAll("btn-danger");
-        exitBtn.setStyle(
-            "-fx-font-size: 11px; -fx-padding: 4 10 4 10; -fx-background-color: #EF4444; -fx-text-fill: white; -fx-font-weight: bold;");
-        exitBtn.setTooltip(new Tooltip("断开与当前研讨室的连接并退出会议"));
-        exitBtn.setOnAction(e -> run(sip::hangup));
-
-        selectBtn.getStyleClass().setAll("btn-secondary");
-        selectBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
-        selectBtn.setTooltip(new Tooltip("填入呼叫目标栏"));
-        selectBtn.setOnAction(e -> {
-          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
-          if (room != null && room.sipUri() != null) {
-            peer.setText(room.sipUri());
-            logs.append("操作", "已选定会议室目标: " + room.sipUri());
-          }
-        });
-      }
-
-      @Override
-      protected void updateItem(Void item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || getIndex() < 0 || getIndex() >= getTableView().getItems().size()) {
-          setGraphic(null);
-        } else {
-          HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
-          boolean isCurRoom = room != null && sip.isCurrentRoom(room.sipUri());
-          if (isCurRoom) {
-            setGraphic(inMeetingBox);
-          } else {
-            boolean inAnyCall = sip.isInCall();
-            if (inAnyCall) {
-              joinVideoBtn.setDisable(true);
-              joinVideoBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
-              joinAudioBtn.setDisable(true);
-              joinAudioBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
-            } else {
-              joinVideoBtn.setDisable(!sip.hasVideoSupport());
-              joinVideoBtn.setTooltip(new Tooltip("发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"));
-              joinAudioBtn.setDisable(false);
-              joinAudioBtn.setTooltip(new Tooltip("发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
-            }
-            setGraphic(defaultBox);
-          }
-        }
-      }
-    });
+    colAction.setMinWidth(280);
+    colAction.setMaxWidth(350);
+    colAction.setPrefWidth(310);
+    colAction.setCellFactory(param -> new RoomActionCell());
 
     roomTableView.getColumns().addAll(colId, colName, colUri, colMax, colCount, colAction);
 
@@ -1596,6 +1907,115 @@ public final class MainApp extends Application {
     return roomBox;
   }
 
+  class RoomActionCell extends TableCell<HttpFileClient.RoomInfo, Void> {
+    final Button joinMainBtn = new Button("加入会议");
+    final Button joinVideoBtn = new Button("视频");
+    final Button joinAudioBtn = new Button("语音");
+    final Button selectBtn = new Button("选定");
+    final Button exitBtn = new Button("退出会议");
+    final HBox defaultBox = new HBox(6, joinMainBtn, joinVideoBtn, joinAudioBtn, selectBtn);
+    final HBox inMeetingBox = new HBox(6, exitBtn, selectBtn);
+
+    {
+      defaultBox.setAlignment(Pos.CENTER_LEFT);
+      inMeetingBox.setAlignment(Pos.CENTER_LEFT);
+
+      joinMainBtn.getStyleClass().setAll("btn-primary");
+      joinMainBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 10 4 10; -fx-background-color: #2481CC; -fx-text-fill: white; -fx-font-weight: bold;");
+      joinMainBtn.setTooltip(new Tooltip("一键进入研讨室并切换至聊天（智能根据设备开启音视频）"));
+      joinMainBtn.setOnAction(e -> {
+        HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+        if (room != null && room.sipUri() != null) {
+          peer.setText(room.sipUri());
+          boolean useVideo = sip.isVideoCallAllowed();
+          if (sip.isStarted() && sip.isRegistered()) {
+            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+            run(() -> sip.call(room.sipUri(), dom, useVideo));
+          }
+          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
+            rightTabPane.getSelectionModel().select(0);
+          }
+        }
+      });
+
+      joinVideoBtn.getStyleClass().setAll("btn-secondary");
+      joinVideoBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+      joinVideoBtn.setTooltip(new Tooltip("发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"));
+      joinVideoBtn.setOnAction(e -> {
+        HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+        if (room != null && room.sipUri() != null) {
+          peer.setText(room.sipUri());
+          if (sip.isStarted() && sip.isRegistered()) {
+            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+            run(() -> sip.call(room.sipUri(), dom, true));
+          }
+        }
+      });
+
+      joinAudioBtn.getStyleClass().setAll("btn-secondary");
+      joinAudioBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+      joinAudioBtn.setTooltip(new Tooltip("发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
+      joinAudioBtn.setOnAction(e -> {
+        HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+        if (room != null && room.sipUri() != null) {
+          peer.setText(room.sipUri());
+          if (sip.isStarted() && sip.isRegistered()) {
+            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+            run(() -> sip.call(room.sipUri(), dom, false));
+          }
+        }
+      });
+
+      exitBtn.getStyleClass().setAll("btn-danger");
+      exitBtn.setStyle(
+          "-fx-font-size: 11px; -fx-padding: 4 10 4 10; -fx-background-color: #EF4444; -fx-text-fill: white; -fx-font-weight: bold;");
+      exitBtn.setTooltip(new Tooltip("断开与当前研讨室的连接并退出会议"));
+      exitBtn.setOnAction(e -> run(sip::hangup));
+
+      selectBtn.getStyleClass().setAll("btn-secondary");
+      selectBtn.setStyle("-fx-font-size: 11px; -fx-padding: 4 8 4 8;");
+      selectBtn.setTooltip(new Tooltip("选定此会议室并切换至文字沟通"));
+      selectBtn.setOnAction(e -> {
+        HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+        if (room != null && room.sipUri() != null) {
+          peer.setText(room.sipUri());
+          logs.append("操作", "已选定会议室目标: " + room.sipUri());
+          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
+            rightTabPane.getSelectionModel().select(0);
+          }
+        }
+      });
+    }
+
+    @Override
+    public void updateItem(Void item, boolean empty) {
+      super.updateItem(item, empty);
+      if (empty || getIndex() < 0 || getTableView() == null || getIndex() >= getTableView().getItems().size()) {
+        setGraphic(null);
+      } else {
+        HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
+        boolean isCurRoom = room != null && sip.isCurrentRoom(room.sipUri());
+        if (isCurRoom) {
+          setGraphic(inMeetingBox);
+        } else {
+          boolean inAnyCall = sip.isInCall();
+          if (inAnyCall) {
+            joinMainBtn.setDisable(true);
+            joinMainBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
+            joinVideoBtn.setDisable(true);
+            joinAudioBtn.setDisable(true);
+          } else {
+            joinMainBtn.setDisable(false);
+            joinMainBtn.setTooltip(new Tooltip("一键进入研讨室并切换至聊天（智能根据设备开启音视频）"));
+            joinVideoBtn.setDisable(!sip.hasVideoSupport());
+            joinAudioBtn.setDisable(false);
+          }
+          setGraphic(defaultBox);
+        }
+      }
+    }
+  }
+
   private void refreshRooms() {
     String httpUrl = httpServerField.getText().trim();
     httpFileClient.setBaseUrl(httpUrl);
@@ -1652,13 +2072,44 @@ public final class MainApp extends Application {
     });
   }
 
+  private void showAvatarSettingsDialog() {
+    if (assembler == null) return;
+    assembler.showAvatarSettingsModal(
+        primaryStage,
+        httpFileClient,
+        user.getText().trim(),
+        user.getText().trim() + "@" + domain.getText().trim(),
+        logs);
+  }
+
+  private void refreshContactAvatars() {
+    new Thread(
+        () -> {
+          try {
+            java.util.List<HttpFileClient.UserSummary> list = httpFileClient.fetchUsers();
+            for (HttpFileClient.UserSummary us : list) {
+              if (us.avatarUrl() != null && !us.avatarUrl().isBlank() && assembler != null) {
+                assembler.updateContactAvatar(us.username(), httpFileClient.getBaseUrl() + us.avatarUrl());
+              }
+            }
+          } catch (Exception ignored) {
+          }
+        },
+        "contact-avatars-fetcher")
+        .start();
+  }
+
   private void run(Throwing action) {
     try {
       action.run();
     } catch (Throwable ex) {
-      logs.append("错误", ex.getClass().getSimpleName() + "：" + ex.getMessage());
+      if (logs != null) {
+        logs.append("错误", ex.getClass().getSimpleName() + "：" + ex.getMessage());
+      }
     }
-    refreshButtons();
+    if (startEngine != null) {
+      refreshButtons();
+    }
   }
 
   static String extractUser(String uri) {
@@ -1697,7 +2148,7 @@ public final class MainApp extends Application {
     return u.startsWith("room-");
   }
 
-  private final class ChatMessageCell extends ListCell<ChatMessage> {
+  class ChatMessageCell extends ListCell<ChatMessage> {
     private final VBox root = new VBox(4);
     private final HBox header = new HBox(8);
     private final Label metaLabel = new Label();
@@ -1710,6 +2161,10 @@ public final class MainApp extends Application {
     private final HBox fileActionBox = new HBox(6);
     private final Button downloadBtn = new Button();
     private final Button openBtn = new Button("打开");
+
+    public ImageView getPreviewImageView() {
+      return previewImageView;
+    }
 
     ChatMessageCell() {
       metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px;");
@@ -1740,7 +2195,7 @@ public final class MainApp extends Application {
     }
 
     @Override
-    protected void updateItem(ChatMessage item, boolean empty) {
+    public void updateItem(ChatMessage item, boolean empty) {
       super.updateItem(item, empty);
       if (empty || item == null) {
         setGraphic(null);
@@ -1799,19 +2254,29 @@ public final class MainApp extends Application {
         fileSizeLabel.setText(FileMessage.formatSize(fm.getSize()) + " · " + fm.getUrl());
 
         boolean hasLocal = item.getLocalPath() != null && Files.exists(item.getLocalPath());
-        if (hasLocal && isImage) {
+        if (isImage) {
           try {
-            Image img = new Image(item.getLocalPath().toUri().toString(), 180, 0, true, true);
+            Image img;
+            if (hasLocal) {
+              img = new Image(item.getLocalPath().toUri().toString(), 180, 0, true, true);
+            } else {
+              String normUrl = httpFileClient.normalizeFileUrl(fm.getUrl());
+              img = new Image(normUrl, 180, 0, true, true, true);
+            }
             previewImageView.setImage(img);
             previewImageView.setVisible(true);
             previewImageView.setManaged(true);
             previewImageView.setOnMouseClicked(
                 e -> {
                   try {
-                    if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
-                      Desktop.getDesktop().open(item.getLocalPath().toFile());
+                    if (hasLocal) {
+                      if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
+                        Desktop.getDesktop().open(item.getLocalPath().toFile());
+                      } else {
+                        getHostServices().showDocument(item.getLocalPath().toUri().toString());
+                      }
                     } else {
-                      getHostServices().showDocument(item.getLocalPath().toUri().toString());
+                      getHostServices().showDocument(httpFileClient.normalizeFileUrl(fm.getUrl()));
                     }
                   } catch (Exception ex) {
                     logs.append("错误", "打开图片失败: " + ex.getMessage());
@@ -1883,24 +2348,64 @@ public final class MainApp extends Application {
     return inRoomExitBtn;
   }
 
-  TableView<HttpFileClient.RoomInfo> getRoomTableView() {
+  public TableView<HttpFileClient.RoomInfo> getRoomTableView() {
+    if (roomTableView == null) {
+      buildRoomPane();
+    }
     return roomTableView;
   }
 
-  ObservableList<HttpFileClient.RoomInfo> getRoomRecords() {
+  public MainViewAssembler getAssembler() {
+    return assembler;
+  }
+
+  public void setAssembler(MainViewAssembler assembler) {
+    this.assembler = assembler;
+  }
+
+  public SipService getSipService() {
+    return sip;
+  }
+
+  public TextField getPeerField() {
+    return peer;
+  }
+
+  public ObservableList<HttpFileClient.RoomInfo> getRoomRecords() {
     return roomRecords;
   }
 
-  TabPane getRightTabPane() {
+  public TabPane getRightTabPane() {
     return rightTabPane;
   }
 
-  Tab getRoomTab() {
+  public HttpFileClient getHttpFileClient() {
+    return httpFileClient;
+  }
+
+  public Tab getRoomTab() {
     return roomTab;
   }
 
   void syncUiState() {
     refreshButtons();
+  }
+
+  @Override
+  public void stop() throws Exception {
+    if (httpFileClient != null) {
+      try {
+        httpFileClient.logout();
+      } catch (Throwable ignored) {
+      }
+    }
+    if (sip != null) {
+      try {
+        sip.shutdown();
+      } catch (Throwable ignored) {
+      }
+    }
+    super.stop();
   }
 
   public static void main(String[] args) {

@@ -72,7 +72,16 @@ class UiVisualSnapshotTest {
       out.getParentFile().mkdirs();
     }
     ImageIO.write(bi, "png", out);
-    System.out.println("SNAPSHOT_SAVED: " + out.getAbsolutePath());
+
+    File repoOut = new File("../docs/snapshots/" + filename);
+    if (!repoOut.getParentFile().exists()) {
+      repoOut = new File("docs/snapshots/" + filename);
+    }
+    if (repoOut.getParentFile() != null) {
+      repoOut.getParentFile().mkdirs();
+    }
+    ImageIO.write(bi, "png", repoOut);
+    System.out.println("SNAPSHOT_SAVED: " + repoOut.getAbsolutePath());
   }
 
   @Test

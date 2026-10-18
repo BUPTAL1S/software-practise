@@ -25,16 +25,22 @@ services:
 
   # 阶段 5 MCU 会议室容器 (FreeSWITCH mod_conference + ESL)
   # 启用：docker compose --profile mcu up -d
+  # 阶段 6 发布 21000-21099/udp 用于跨容器与双机会议室 RTP 媒体传输
   freeswitch:
     image: safarov/freeswitch:1.11.3
     container_name: freeswitch
     profiles: ["mcu"]
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "5080:5080/udp"
       - "5080:5080/tcp"
       - "127.0.0.1:8021:8021"
+      - "21000-21099:21000-21099/udp"
     volumes:
-      - ./freeswitch:/tmp/freeswitch-custom:ro
+      - ./freeswitch:/tmp/freeswitch-custom:rw
     entrypoint:
       - /bin/sh
       - -c
@@ -44,9 +50,17 @@ services:
           cp -varf /usr/share/freeswitch/conf/vanilla/* /etc/freeswitch/
         fi
         cp -varf /tmp/freeswitch-custom/* /etc/freeswitch/
+        if [ -d /tmp/freeswitch-custom/autoload_configs ]; then
+          mkdir -p /etc/freeswitch/autoload_configs
+          cp -varf /tmp/freeswitch-custom/autoload_configs/* /etc/freeswitch/autoload_configs/
+        fi
         if [ -d /tmp/freeswitch-custom/sounds ]; then
           mkdir -p /usr/share/freeswitch/sounds
           cp -varf /tmp/freeswitch-custom/sounds/* /usr/share/freeswitch/sounds/
+        fi
+        if [ -n "$$PUBLIC_IP" ]; then
+          sed -i "s/external_rtp_ip=127.0.0.1/external_rtp_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
+          sed -i "s/external_sip_ip=127.0.0.1/external_sip_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
         fi
         exec /entrypoint.sh
     restart: unless-stopped
