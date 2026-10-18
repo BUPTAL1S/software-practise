@@ -31,6 +31,7 @@
       <param name="video-canvas-size" value="1280x720"/>
       <param name="video-fps" value="30"/>
       <param name="video-codec-bandwidth" value="2mb"/>
+      <param name="video-no-video-avatar" value="/tmp/freeswitch-custom/avatars/default.png"/>
 
       <!-- 进出房音效与静音控制 -->
       <param name="enter-sound" value="tone_stream://%(200,0,500,600)"/>

@@ -77,34 +77,96 @@ public final class NativeLoader {
     String os = System.getProperty("os.name", "").toLowerCase();
     String arch = System.getProperty("os.arch", "").toLowerCase();
     Path root = findRepoRoot();
+
+    // 1. Direct explicit property override
+    String explicitDir = System.getProperty("sip.native.dir");
+    if (explicitDir != null && !explicitDir.isBlank()) {
+      Path p = Path.of(explicitDir).toAbsolutePath();
+      if (Files.isDirectory(p)) {
+        Path cand = resolveLibInDir(p, os);
+        if (cand != null) return cand;
+      }
+    }
+
     if (os.contains("win")) {
-      return root.resolve("native/windows-x64/pjsua2.dll");
+      Path dll1 = root.resolve("native/windows-x64/pjsua2.dll");
+      if (Files.isRegularFile(dll1)) return dll1;
+      Path dll2 = root.resolve("native/pjsua2.dll");
+      if (Files.isRegularFile(dll2)) return dll2;
+      return dll1;
     }
     if (os.contains("mac")) {
       Path arm = root.resolve("native/macos-arm64");
       Path intel = root.resolve("native/macos-x64");
       Path dir = (arch.contains("aarch64") || arch.contains("arm64")) ? arm : intel;
+      Path cand = resolveLibInDir(dir, os);
+      if (cand != null) return cand;
+
+      Path flatCand = resolveLibInDir(root.resolve("native"), os);
+      if (flatCand != null) return flatCand;
+
       Path dylib = dir.resolve("libpjsua2.dylib");
-      Path jnilib = dir.resolve("libpjsua2.jnilib");
-      if (Files.isRegularFile(dylib)) {
-        return dylib;
-      }
-      return jnilib;
+      return dylib;
     }
     throw new IllegalStateException("不支持的系统：" + os + " " + arch);
   }
 
-  static Path findRepoRoot() {
-    Path dir = Path.of(System.getProperty("user.dir")).toAbsolutePath();
-    for (Path p = dir; p != null; p = p.getParent()) {
+  private static Path resolveLibInDir(Path dir, String os) {
+    if (dir == null || !Files.isDirectory(dir)) return null;
+    if (os.contains("win")) {
+      Path dll = dir.resolve("pjsua2.dll");
+      if (Files.isRegularFile(dll)) return dll;
+    } else if (os.contains("mac")) {
+      Path dylib = dir.resolve("libpjsua2.dylib");
+      if (Files.isRegularFile(dylib)) return dylib;
+      Path jnilib = dir.resolve("libpjsua2.jnilib");
+      if (Files.isRegularFile(jnilib)) return jnilib;
+    }
+    return null;
+  }
+
+  public static Path findRepoRoot() {
+    // 1. Check user.dir
+    Path userDir = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+    if (Files.isDirectory(userDir.resolve("native"))) {
+      return userDir;
+    }
+
+    // 2. Check code source (where the JAR or classes reside)
+    try {
+      java.net.URL location = NativeLoader.class.getProtectionDomain().getCodeSource().getLocation();
+      if (location != null) {
+        Path codePath = Path.of(location.toURI()).toAbsolutePath();
+        Path codeDir = Files.isDirectory(codePath) ? codePath : codePath.getParent();
+        for (Path p = codeDir; p != null; p = p.getParent()) {
+          if (Files.isDirectory(p.resolve("native"))) {
+            return p;
+          }
+        }
+      }
+    } catch (Exception ignored) {
+    }
+
+    // 3. Walk up userDir searching for native/ and README.md (dev repository mode)
+    for (Path p = userDir; p != null; p = p.getParent()) {
       if (Files.isDirectory(p.resolve("native")) && Files.isRegularFile(p.resolve("README.md"))) {
         return p;
       }
+      if (Files.isDirectory(p.resolve("native"))) {
+        return p;
+      }
     }
-    Path parent = dir.getParent();
+
+    Path parent = userDir.getParent();
     if (parent != null && Files.isDirectory(parent.resolve("native"))) {
       return parent;
     }
-    return dir;
+    return userDir;
+  }
+
+  public static void main(String[] args) {
+    System.out.println("[NativeLoader] Testing native library loading in standalone JVM...");
+    load();
+    System.out.println("[NativeLoader] Success: PJSUA2 native library loaded successfully (" + libraryFile() + ")");
   }
 }

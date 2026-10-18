@@ -24,6 +24,9 @@ public class User {
     @Column(name = "sip_id", nullable = false, unique = true)
     private String sipId;
 
+    @Column(name = "avatar_url")
+    private String avatarUrl;
+
     public Long getId() {
         return id;
     }
@@ -54,5 +57,13 @@ public class User {
 
     public void setSipId(String sipId) {
         this.sipId = sipId;
+    }
+
+    public String getAvatarUrl() {
+        return avatarUrl;
+    }
+
+    public void setAvatarUrl(String avatarUrl) {
+        this.avatarUrl = avatarUrl;
     }
 }

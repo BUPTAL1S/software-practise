@@ -12,6 +12,13 @@
     <param name="rtp-timer-name" value="soft"/>
     <param name="sip-ip" value="0.0.0.0"/>
     <param name="rtp-ip" value="0.0.0.0"/>
+    <!-- 信令来自 Docker 网桥上的 Kamailio，不能把它当成内网而在 SDP 里写容器地址。 -->
+    <param name="local-network-acl" value="loopback.auto"/>
+    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+    <!-- 接受客户端 INVITE 里的 H.264 fmtp，而不是另起一套 profile。 -->
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
     <param name="auth-calls" value="false"/>
   </settings>
 </profile>

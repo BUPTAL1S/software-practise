@@ -47,10 +47,33 @@ public class LoginController {
         }
         User user = found.get();
         String token = tokens.issue(user.getId());
-        return ResponseEntity.ok(Map.of(
-                "token", token,
-                "username", user.getUsername(),
-                "sipId", user.getSipId()));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("token", token);
+        resp.put("username", user.getUsername());
+        resp.put("sipId", user.getSipId());
+        if (user.getAvatarUrl() != null) {
+            resp.put("avatarUrl", user.getAvatarUrl());
+        }
+        return ResponseEntity.ok(resp);
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, Object>> logout(
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody(required = false) Map<String, String> body) {
+        String token = null;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7).trim();
+        } else if (body != null && body.containsKey("token")) {
+            token = body.get("token");
+        }
+        boolean revoked = false;
+        if (token != null && !token.isBlank()) {
+            Optional<Long> uid = tokens.userIdOf(token);
+            revoked = tokens.revoke(token);
+            uid.ifPresent(tokens::revokeUser);
+        }
+        return ResponseEntity.ok(Map.of("success", true, "revoked", revoked, "message", "已成功登出后台会话"));
     }
 
     @PostMapping("/register")

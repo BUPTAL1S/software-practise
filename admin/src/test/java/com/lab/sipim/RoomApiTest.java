@@ -13,6 +13,7 @@ import com.lab.sipim.repo.RoomRepository;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +38,15 @@ class RoomApiTest {
 
     @Autowired
     private MockMvc mvc;
+
+    @Autowired
+    private com.lab.sipim.repo.RoomMessageRepository messageRepo;
+
+    @Autowired
+    private com.lab.sipim.repo.UserRepository userRepo;
+
+    @Autowired
+    private com.lab.sipim.security.LoginTokens tokens;
 
     @Autowired
     private RoomRepository roomRepo;
@@ -128,4 +138,101 @@ class RoomApiTest {
         mvc.perform(get("/api/rooms/room-unknown-none"))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void sendAndQueryRoomMessagesWithAuthAndPersistence() throws Exception {
+        // 1. 发送人未携带 Token（即使伪造为 1001）-> 严格返回 401 Unauthorized，彻底杜绝冒充
+        Map<String, Object> unauthMsg = Map.of(
+                "sender", "1001",
+                "content", "未经登录的伪造消息",
+                "isFile", false
+        );
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(unauthMsg)))
+                .andExpect(status().isUnauthorized());
+
+        // 2. 携带合法 Token (用户 1001) 发送消息 -> 成功持久化
+        com.lab.sipim.domain.User user1001 = userRepo.findByUsername("1001").orElseThrow();
+        String token1001 = tokens.issue(user1001.getId());
+        Map<String, Object> msg1 = Map.of(
+                "content", "大家好，会议开始",
+                "isFile", false
+        );
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .header("Authorization", "Bearer " + token1001)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(msg1)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").isNumber())
+                .andExpect(jsonPath("$.sender").value("1001"))
+                .andExpect(jsonPath("$.content").value("大家好，会议开始"))
+                .andExpect(jsonPath("$.isFile").value(false));
+
+        // 3. 越权防伪造测试：携带 1002 的 Token，但在 body 中试图冒充 1001 -> 403 Forbidden
+        com.lab.sipim.domain.User user1002 = userRepo.findByUsername("1002").orElseThrow();
+        String token1002 = tokens.issue(user1002.getId());
+        Map<String, Object> impersonateMsg = Map.of(
+                "sender", "1001",
+                "content", "试图越权冒充他人发送",
+                "isFile", false
+        );
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .header("Authorization", "Bearer " + token1002)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(impersonateMsg)))
+                .andExpect(status().isForbidden());
+
+        // 4. 用户 1002 正常发送文件共享消息
+        Map<String, Object> msg2 = Map.of(
+                "sender", "1002",
+                "content", "[FILE] design.png | 12345 | http://localhost:8088/api/files/1",
+                "isFile", true
+        );
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .header("Authorization", "Bearer " + token1002)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(msg2)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sender").value("1002"))
+                .andExpect(jsonPath("$.isFile").value(true));
+
+        // 5. 使用无效 Token -> 401 Unauthorized
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .header("Authorization", "Bearer invalid-token-xyz")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(msg1)))
+                .andExpect(status().isUnauthorized());
+
+        // 5. 校验数据库持久化实体真实存在
+        List<com.lab.sipim.domain.RoomMessage> dbList = messageRepo.findByRoomUriIgnoreCaseOrderByIdAsc("room-101");
+        assertThat(dbList).isNotEmpty();
+        assertThat(dbList.stream().anyMatch(m -> m.getSender().equals("1001") && m.getContent().equals("大家好，会议开始"))).isTrue();
+        assertThat(dbList.stream().anyMatch(m -> m.getSender().equals("1002") && m.isFile())).isTrue();
+
+        // 6. Fetch messages via REST API
+        mvc.perform(get("/api/rooms/room-101/messages"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(greaterThanOrEqualTo(2))))
+                .andExpect(jsonPath("$[?(@.sender == '1001')].content").value("大家好，会议开始"));
+
+        // 7. Query with afterId
+        long latestId = dbList.get(dbList.size() - 1).getId();
+        mvc.perform(get("/api/rooms/room-101/messages?afterId=" + latestId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(0)));
+
+        // 8. Send to non-existent room -> 404 Not Found
+        mvc.perform(post("/api/rooms/non-existent/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(msg1)))
+                .andExpect(status().isNotFound());
+
+        // 9. Send empty content -> 400 Bad Request
+        mvc.perform(post("/api/rooms/room-101/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("sender", "1001", "content", ""))))
+                .andExpect(status().isBadRequest());
+    }
 }
+

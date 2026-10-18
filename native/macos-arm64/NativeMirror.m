@@ -39,6 +39,29 @@ static char kMirrorObserverKey;
 }
 @end
 
+static BOOL isViewInHierarchy(NSView *root, void *target) {
+    if (!root) return NO;
+    if ((__bridge void *)root == target) return YES;
+    for (NSView *sub in [root subviews]) {
+        if (isViewInHierarchy(sub, target)) return YES;
+    }
+    return NO;
+}
+
+static id validatePointerSafely(void *ptr) {
+    if (!ptr) return nil;
+    NSArray<NSWindow *> *wins = [NSApp windows];
+    for (NSWindow *w in wins) {
+        if ((__bridge void *)w == ptr) {
+            return w;
+        }
+        if (isViewInHierarchy([w contentView], ptr)) {
+            return (__bridge id)ptr;
+        }
+    }
+    return nil;
+}
+
 static NSView* findTargetView(id obj) {
     if (!obj) return nil;
     if ([obj isKindOfClass:[NSWindow class]]) {
@@ -68,7 +91,8 @@ static NSView* findTargetView(id obj) {
 
 static void doApplyMirror(void *ptr, const char *titleUtf8) {
     if (!ptr) return;
-    id obj = (__bridge id)ptr;
+    id obj = validatePointerSafely(ptr);
+    if (!obj) return;
     NSView *targetView = findTargetView(obj);
     if (targetView) {
         // If targetView is a child of contentView, ensure contentView itself is not mirrored
@@ -107,7 +131,8 @@ static void doApplyMirror(void *ptr, const char *titleUtf8) {
 
 static void doRestoreNormal(void *ptr, const char *titleUtf8) {
     if (!ptr) return;
-    id obj = (__bridge id)ptr;
+    id obj = validatePointerSafely(ptr);
+    if (!obj) return;
     NSView *targetView = findTargetView(obj);
     if (targetView) {
         objc_setAssociatedObject(targetView, &kMirrorObserverKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -191,7 +216,8 @@ JNIEXPORT jboolean JNICALL Java_lab_sip_client_NativeMirror_isMirroredNative
     void *ptr = (void *)(intptr_t)hwnd;
     __block jboolean mirrored = JNI_FALSE;
     void (^checkBlock)(void) = ^{
-        id obj = (__bridge id)ptr;
+        id obj = validatePointerSafely(ptr);
+        if (!obj) return;
         NSView *targetView = findTargetView(obj);
         if (targetView && targetView.layer) {
             CGAffineTransform t = targetView.layer.affineTransform;

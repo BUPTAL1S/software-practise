@@ -46,6 +46,22 @@ public final class HttpFileClient {
       int memberCount
   ) {}
 
+  public record RoomMessageInfo(
+      long id,
+      String roomUri,
+      String sender,
+      String content,
+      boolean isFile,
+      Instant timestamp
+  ) {}
+
+  public record UserSummary(
+      Long id,
+      String username,
+      String sipId,
+      String avatarUrl
+  ) {}
+
   private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
   private static final Pattern URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
   private static final Pattern NAME_PATTERN = Pattern.compile("\"(?:name|fileName|filename)\"\\s*:\\s*\"([^\"]+)\"");
@@ -67,10 +83,12 @@ public final class HttpFileClient {
   private static final Pattern ROOM_SIP_URI_PATTERN = Pattern.compile("\"(?:sip_uri|sipUri)\"\\s*:\\s*\"([^\"]+)\"");
   private static final Pattern ROOM_MAX_MEMBERS_PATTERN = Pattern.compile("\"(?:max_members|maxMembers)\"\\s*:\\s*(\\d+)");
   private static final Pattern ROOM_MEMBER_COUNT_PATTERN = Pattern.compile("\"(?:member_count|memberCount|peak_members|peakMembers)\"\\s*:\\s*(\\d+)");
+  private static final Pattern AVATAR_URL_PATTERN = Pattern.compile("\"avatarUrl\"\\s*:\\s*\"([^\"]+)\"");
 
   private final HttpClient httpClient;
   private volatile String baseUrl;
   private volatile String authToken;
+  private volatile String userAvatarUrl;
 
   public HttpFileClient(String baseUrl) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
@@ -95,6 +113,153 @@ public final class HttpFileClient {
 
   public void setAuthToken(String authToken) {
     this.authToken = authToken;
+  }
+
+  public String getUserAvatarUrl() {
+    return userAvatarUrl;
+  }
+
+  public void setUserAvatarUrl(String userAvatarUrl) {
+    this.userAvatarUrl = userAvatarUrl;
+  }
+
+  public String uploadAvatar(Path imagePath, String user) throws IOException, InterruptedException {
+    byte[] fileBytes = Files.readAllBytes(imagePath);
+    String filename = imagePath.getFileName().toString();
+    return uploadAvatar(fileBytes, filename, user);
+  }
+
+  public String uploadAvatar(byte[] fileBytes, String filename, String user) throws IOException, InterruptedException {
+    String boundary = "Boundary-" + System.currentTimeMillis();
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+    baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+    baos.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+    baos.write("Content-Type: image/png\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+    baos.write(fileBytes);
+    baos.write("\r\n".getBytes(StandardCharsets.UTF_8));
+
+    if (user != null && !user.isBlank()) {
+      baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+      baos.write(("Content-Disposition: form-data; name=\"user\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+      baos.write(user.trim().getBytes(StandardCharsets.UTF_8));
+      baos.write("\r\n".getBytes(StandardCharsets.UTF_8));
+    }
+
+    baos.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/users/avatar"))
+            .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+            .timeout(Duration.ofSeconds(10))
+            .POST(HttpRequest.BodyPublishers.ofByteArray(baos.toByteArray()));
+
+    if (authToken != null && !authToken.isBlank()) {
+      builder.header("Authorization", "Bearer " + authToken);
+    }
+
+    HttpResponse<String> resp = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() == 200) {
+      Matcher m = AVATAR_URL_PATTERN.matcher(resp.body());
+      if (m.find()) {
+        String url = m.group(1);
+        this.userAvatarUrl = url;
+        return url;
+      }
+      return "";
+    } else {
+      throw new IOException("上传头像失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+  }
+
+  public boolean resetAvatar(String user) throws IOException, InterruptedException {
+    String url = baseUrl + "/api/users/avatar" + (user != null && !user.isBlank() ? "?user=" + URLEncoder.encode(user.trim(), StandardCharsets.UTF_8) : "");
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(Duration.ofSeconds(5))
+            .DELETE();
+
+    if (authToken != null && !authToken.isBlank()) {
+      builder.header("Authorization", "Bearer " + authToken);
+    }
+
+    HttpResponse<String> resp = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() == 200) {
+      this.userAvatarUrl = null;
+      return true;
+    }
+    return false;
+  }
+
+  public boolean toggleRoomVmute(String roomUri, String sipId, boolean mute) {
+    try {
+      String cleanRoom = (roomUri != null && roomUri.contains("@")) ? roomUri.substring(0, roomUri.indexOf('@')) : roomUri;
+      if (cleanRoom != null && cleanRoom.startsWith("sip:")) cleanRoom = cleanRoom.substring(4);
+      String url = baseUrl + "/api/rooms/" + URLEncoder.encode(cleanRoom != null ? cleanRoom : "", StandardCharsets.UTF_8)
+          + "/vmute?sipId=" + URLEncoder.encode(sipId != null ? sipId : "", StandardCharsets.UTF_8) + "&mute=" + mute;
+
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder()
+              .uri(URI.create(url))
+              .timeout(Duration.ofSeconds(3))
+              .POST(HttpRequest.BodyPublishers.noBody());
+
+      if (authToken != null && !authToken.isBlank()) {
+        builder.header("Authorization", "Bearer " + authToken);
+      }
+
+      httpClient.sendAsync(builder.build(), HttpResponse.BodyHandlers.discarding());
+      return true;
+    } catch (Throwable t) {
+      return false;
+    }
+  }
+
+  public List<UserSummary> fetchUsers() throws IOException, InterruptedException {
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/users"))
+            .timeout(Duration.ofSeconds(5))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      builder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() == 200) {
+      return parseUsers(resp.body());
+    }
+    return List.of();
+  }
+
+  private static List<UserSummary> parseUsers(String json) {
+    List<UserSummary> list = new ArrayList<>();
+    if (json == null || json.isBlank()) return list;
+    Matcher objMatcher = Pattern.compile("\\{([^}]+)\\}").matcher(json);
+    while (objMatcher.find()) {
+      String objStr = objMatcher.group(1);
+      Long id = null;
+      Matcher idM = ID_PATTERN.matcher(objStr);
+      if (idM.find()) id = Long.parseLong(idM.group(1));
+
+      String uName = "";
+      Matcher uM = Pattern.compile("\"username\"\\s*:\\s*\"([^\"]+)\"").matcher(objStr);
+      if (uM.find()) uName = uM.group(1);
+
+      String sip = "";
+      Matcher sipM = Pattern.compile("\"sipId\"\\s*:\\s*\"([^\"]+)\"").matcher(objStr);
+      if (sipM.find()) sip = sipM.group(1);
+
+      String av = null;
+      Matcher avM = AVATAR_URL_PATTERN.matcher(objStr);
+      if (avM.find()) av = avM.group(1);
+
+      if (!uName.isEmpty() || !sip.isEmpty()) {
+        list.add(new UserSummary(id, uName, sip, av));
+      }
+    }
+    return list;
   }
 
   private static String normalizeBaseUrl(String url) {
@@ -129,6 +294,12 @@ public final class HttpFileClient {
       if (m.find()) {
         String token = m.group(1);
         this.authToken = token;
+        Matcher am = AVATAR_URL_PATTERN.matcher(resp.body());
+        if (am.find()) {
+          this.userAvatarUrl = am.group(1);
+        } else {
+          this.userAvatarUrl = null;
+        }
         return token;
       }
       return "";
@@ -136,6 +307,31 @@ public final class HttpFileClient {
       throw new IOException("后台鉴权失败 (HTTP 401 unauthorized)");
     } else {
       throw new IOException("登录后台失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+  }
+
+  /**
+   * Performs backend session logout via POST /api/logout, actively revoking active session token.
+   */
+  public boolean logout() {
+    String token = this.authToken;
+    this.authToken = null;
+    this.userAvatarUrl = null;
+    if (token == null || token.isBlank()) {
+      return true;
+    }
+    try {
+      HttpRequest req =
+          HttpRequest.newBuilder()
+              .uri(URI.create(baseUrl + "/api/logout"))
+              .header("Authorization", "Bearer " + token)
+              .timeout(Duration.ofSeconds(3))
+              .POST(HttpRequest.BodyPublishers.noBody())
+              .build();
+      HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      return resp.statusCode() == 200;
+    } catch (Throwable ignored) {
+      return false;
     }
   }
 
@@ -189,11 +385,29 @@ public final class HttpFileClient {
     if (probeHealth(currentUrl)) {
       return normalizeBaseUrl(currentUrl);
     }
+    String host = "localhost";
+    try {
+      if (currentUrl != null && currentUrl.startsWith("http")) {
+        URI u = URI.create(currentUrl);
+        if (u.getHost() != null && !u.getHost().isBlank()) {
+          host = u.getHost();
+        }
+      }
+    } catch (Exception ignored) {
+    }
     int[] candidatePorts = {8080, 8088, 8081, 8082, 8083};
     for (int port : candidatePorts) {
-      String candidate = "http://localhost:" + port;
+      String candidate = "http://" + host + ":" + port;
       if (!candidate.equalsIgnoreCase(currentUrl) && probeHealth(candidate)) {
         return candidate;
+      }
+    }
+    if (!"localhost".equalsIgnoreCase(host) && !"127.0.0.1".equals(host)) {
+      for (int port : candidatePorts) {
+        String candidate = "http://localhost:" + port;
+        if (!candidate.equalsIgnoreCase(currentUrl) && probeHealth(candidate)) {
+          return candidate;
+        }
       }
     }
     return null;
@@ -266,6 +480,31 @@ public final class HttpFileClient {
   }
 
   /**
+   * Normalizes a file download URL so that remote hostnames or relative paths
+   * are rewritten to this client's current effective baseUrl.
+   */
+  public String normalizeFileUrl(String url) {
+    if (url == null || url.isBlank()) {
+      return "";
+    }
+    String s = url.trim();
+    int idx = s.indexOf("/api/files/");
+    if (idx != -1) {
+      return baseUrl + s.substring(idx);
+    }
+    if (s.startsWith("/")) {
+      return baseUrl + s;
+    }
+    if (s.matches("^\\d+$")) {
+      return baseUrl + "/api/files/" + s;
+    }
+    if (!s.startsWith("http://") && !s.startsWith("https://")) {
+      return baseUrl + "/" + s;
+    }
+    return s;
+  }
+
+  /**
    * Downloads a file from the given URL and saves it to targetFile.
    */
   public Path downloadFile(String downloadUrl, Path targetFile)
@@ -273,16 +512,7 @@ public final class HttpFileClient {
     Objects.requireNonNull(downloadUrl, "downloadUrl");
     Objects.requireNonNull(targetFile, "targetFile");
 
-    String absUrl = downloadUrl;
-    if (absUrl.startsWith("/")) {
-      absUrl = baseUrl + absUrl;
-    } else if ((absUrl.startsWith("http://localhost:") || absUrl.startsWith("http://127.0.0.1:"))
-        && !baseUrl.contains("localhost") && !baseUrl.contains("127.0.0.1")) {
-      int slashIdx = absUrl.indexOf("/", 8);
-      if (slashIdx != -1) {
-        absUrl = baseUrl + absUrl.substring(slashIdx);
-      }
-    }
+    String absUrl = normalizeFileUrl(downloadUrl);
 
     HttpRequest.Builder downloadReqBuilder =
         HttpRequest.newBuilder()
@@ -300,7 +530,11 @@ public final class HttpFileClient {
 
     HttpResponse<Path> resp;
     try {
-      resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(targetFile));
+      resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(
+          targetFile,
+          java.nio.file.StandardOpenOption.CREATE,
+          java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+          java.nio.file.StandardOpenOption.WRITE));
     } catch (IOException e) {
       throw new IOException("下载文件连接失败 (" + absUrl + "): " + e.getMessage(), e);
     }
@@ -314,6 +548,7 @@ public final class HttpFileClient {
     }
 
     return targetFile;
+
   }
 
   private String resolveDownloadUrl(String responseJson) {
@@ -602,5 +837,107 @@ public final class HttpFileClient {
     }
     return list;
   }
+
+  /**
+   * Sends an instant text message or file notification to a conference room via POST /api/rooms/{identifier}/messages.
+   */
+  public RoomMessageInfo sendRoomMessage(String roomUri, String sender, String content, boolean isFile)
+      throws IOException, InterruptedException {
+    String json = "{\"sender\":\"" + escapeJson(sender) + "\",\"content\":\"" + escapeJson(content) + "\",\"isFile\":" + isFile + "}";
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/rooms/" + roomUri + "/messages"))
+            .header("Content-Type", "application/json")
+            .timeout(Duration.ofSeconds(10))
+            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+      throw new IOException("发送房间消息失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseRoomMessage(resp.body());
+  }
+
+  /**
+   * Fetches room messages newer than afterId via GET /api/rooms/{identifier}/messages?afterId={afterId}.
+   */
+  public List<RoomMessageInfo> fetchRoomMessages(String roomUri, long afterId)
+      throws IOException, InterruptedException {
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(baseUrl + "/api/rooms/" + roomUri + "/messages?afterId=" + afterId))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取房间消息失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parseRoomMessageList(resp.body());
+  }
+
+  public static RoomMessageInfo parseRoomMessage(String json) {
+    if (json == null || json.isEmpty()) return null;
+    Matcher mId = ID_PATTERN.matcher(json);
+    long id = mId.find() ? Long.parseLong(mId.group(1)) : 0;
+
+    String roomUri = extractJsonString(json, "roomUri");
+    if (roomUri == null) roomUri = extractJsonString(json, "room_uri");
+    if (roomUri == null) roomUri = "";
+
+    String sender = extractJsonString(json, "sender");
+    if (sender == null) sender = "";
+
+    String content = extractJsonString(json, "content");
+    if (content == null) content = "";
+
+    Matcher mIsFile = Pattern.compile("\"(?:isFile|is_file)\"\\s*:\\s*(true|false)").matcher(json);
+    boolean isFile = mIsFile.find() && "true".equalsIgnoreCase(mIsFile.group(1));
+
+    String tsStr = extractJsonString(json, "timestamp");
+    Instant ts = null;
+    if (tsStr != null && !tsStr.isBlank()) {
+      try {
+        ts = Instant.parse(tsStr);
+      } catch (Exception ignored) {}
+    }
+    if (ts == null) ts = Instant.now();
+
+    return new RoomMessageInfo(id, roomUri, sender, content, isFile, ts);
+  }
+
+  public static List<RoomMessageInfo> parseRoomMessageList(String json) {
+    List<RoomMessageInfo> list = new ArrayList<>();
+    if (json == null || json.isEmpty()) return list;
+    Matcher m = Pattern.compile("\\{[^{}]+\\}").matcher(json);
+    while (m.find()) {
+      RoomMessageInfo info = parseRoomMessage(m.group());
+      if (info != null && info.id() > 0) {
+        list.add(info);
+      }
+    }
+    return list;
+  }
+
+  private static String extractJsonString(String json, String field) {
+    Pattern p = Pattern.compile("\"" + field + "\"\\s*:\\s*\"((?:\\\\\"|[^\"])*)\"");
+    Matcher m = p.matcher(json);
+    if (m.find()) {
+      return unescapeJson(m.group(1));
+    }
+    return null;
+  }
+
+  private static String unescapeJson(String s) {
+    if (s == null) return "";
+    return s.replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
+  }
 }
+
 

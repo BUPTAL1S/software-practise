@@ -2,8 +2,13 @@ package com.lab.sipim.web;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lab.sipim.domain.Room;
+import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.CdrRepository;
+import com.lab.sipim.repo.RoomMessageRepository;
 import com.lab.sipim.repo.RoomRepository;
+import com.lab.sipim.repo.UserRepository;
+import com.lab.sipim.security.LoginTokens;
+import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -16,10 +21,23 @@ import org.springframework.web.bind.annotation.*;
 public class RoomController {
 
     private final RoomRepository roomRepo;
+    private final RoomMessageRepository messageRepo;
+    private final UserRepository userRepo;
+    private final LoginTokens tokens;
     private final CdrRepository cdrRepo;
+    @Autowired(required = false)
+    private com.lab.sipim.esl.EslEventListener eslEventListener;
 
-    public RoomController(RoomRepository roomRepo, @Autowired(required = false) CdrRepository cdrRepo) {
+    public RoomController(
+            RoomRepository roomRepo,
+            RoomMessageRepository messageRepo,
+            UserRepository userRepo,
+            LoginTokens tokens,
+            @Autowired(required = false) CdrRepository cdrRepo) {
         this.roomRepo = roomRepo;
+        this.messageRepo = messageRepo;
+        this.userRepo = userRepo;
+        this.tokens = tokens;
         this.cdrRepo = cdrRepo;
     }
 
@@ -35,31 +53,121 @@ public class RoomController {
 
     @GetMapping("/{identifier}")
     public ResponseEntity<?> getRoom(@PathVariable("identifier") String identifier) {
-        if (identifier == null || identifier.isBlank()) {
-            return ResponseEntity.notFound().build();
-        }
-        String trimmed = identifier.trim();
-        Optional<Room> found = Optional.empty();
-
-        // Try numeric ID lookup
-        try {
-            long id = Long.parseLong(trimmed);
-            found = roomRepo.findById(id);
-        } catch (NumberFormatException ignored) {
-            // Not a numeric ID, search by SIP URI below
-        }
-
-        if (found.isEmpty()) {
-            found = roomRepo.findBySipUri(trimmed);
-        }
-        if (found.isEmpty() && !trimmed.startsWith("room-")) {
-            found = roomRepo.findBySipUri("room-" + trimmed);
-        }
-
+        Optional<Room> found = findRoom(identifier);
         if (found.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
         }
         return ResponseEntity.ok(formatRoom(found.get()));
+    }
+
+    @PostMapping("/{identifier}/messages")
+    public ResponseEntity<?> sendRoomMessage(
+            @PathVariable("identifier") String identifier,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody(required = false) SendRoomMessageRequest req) {
+        Optional<Room> found = findRoom(identifier);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
+        }
+        Room r = found.get();
+        String content = (req != null && req.getContent() != null) ? req.getContent().trim() : "";
+        if (content.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "content is required"));
+        }
+
+        if (authorization == null || authorization.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        String token = MeController.bearerToken(authorization);
+        if (token == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        Optional<Long> uid = tokens.userIdOf(token);
+        if (uid.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        Optional<User> u = userRepo.findById(uid.get());
+        if (u.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        String finalSender = u.get().getUsername();
+
+        // 防伪造校验：如果请求体也传入了 sender 且与登录用户身份不一致，直接拒绝 403 Forbidden
+        String candidate = (req != null && req.getSender() != null) ? req.getSender().trim() : "";
+        if (!candidate.isEmpty() && !candidate.equalsIgnoreCase(finalSender)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "cannot impersonate another user: " + candidate));
+        }
+
+        boolean isFile = req != null && Boolean.TRUE.equals(req.getIsFile());
+        com.lab.sipim.domain.RoomMessage entity = new com.lab.sipim.domain.RoomMessage(
+                r.getSipUri().toLowerCase(),
+                finalSender,
+                content,
+                isFile
+        );
+        entity = messageRepo.save(entity);
+
+        RoomMessage resp = new RoomMessage(
+                entity.getId(),
+                entity.getRoomUri(),
+                entity.getSender(),
+                entity.getContent(),
+                entity.isFile(),
+                entity.getCreatedAt()
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    @GetMapping("/{identifier}/messages")
+    public ResponseEntity<?> getRoomMessages(
+            @PathVariable("identifier") String identifier,
+            @RequestParam(value = "afterId", defaultValue = "0") long afterId,
+            @RequestParam(value = "limit", defaultValue = "100") int limit) {
+        Optional<Room> found = findRoom(identifier);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
+        }
+        Room r = found.get();
+        String roomKey = r.getSipUri().toLowerCase();
+
+        List<com.lab.sipim.domain.RoomMessage> entities;
+        if (afterId > 0) {
+            entities = messageRepo.findByRoomUriIgnoreCaseAndIdGreaterThanOrderByIdAsc(roomKey, afterId);
+        } else {
+            entities = messageRepo.findByRoomUriIgnoreCaseOrderByIdAsc(roomKey);
+        }
+
+        List<RoomMessage> result = new ArrayList<>();
+        for (com.lab.sipim.domain.RoomMessage m : entities) {
+            result.add(new RoomMessage(
+                    m.getId(),
+                    m.getRoomUri(),
+                    m.getSender(),
+                    m.getContent(),
+                    m.isFile(),
+                    m.getCreatedAt()
+            ));
+        }
+        if (limit > 0 && result.size() > limit) {
+            result = result.subList(result.size() - limit, result.size());
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    private Optional<Room> findRoom(String identifier) {
+        if (identifier == null || identifier.isBlank()) return Optional.empty();
+        String trimmed = identifier.trim();
+        try {
+            long id = Long.parseLong(trimmed);
+            Optional<Room> byId = roomRepo.findById(id);
+            if (byId.isPresent()) return byId;
+        } catch (NumberFormatException ignored) {}
+        Optional<Room> byUri = roomRepo.findBySipUri(trimmed);
+        if (byUri.isPresent()) return byUri;
+        if (!trimmed.startsWith("room-")) {
+            return roomRepo.findBySipUri("room-" + trimmed);
+        }
+        return Optional.empty();
     }
 
     @PostMapping
@@ -110,6 +218,23 @@ public class RoomController {
         saved = roomRepo.save(saved);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(formatRoom(saved));
+    }
+
+    @PostMapping("/{identifier}/vmute")
+    public ResponseEntity<?> setRoomMemberVmute(
+            @PathVariable("identifier") String identifier,
+            @RequestParam("sipId") String sipId,
+            @RequestParam(value = "mute", defaultValue = "true") boolean mute) {
+        boolean ok = false;
+        if (eslEventListener != null) {
+            ok = eslEventListener.setMemberVmute(identifier, sipId, mute);
+        }
+        return ResponseEntity.ok(Map.of(
+                "success", ok,
+                "room", identifier,
+                "sipId", sipId,
+                "muted", mute
+        ));
     }
 
     private Map<String, Object> formatRoom(Room r) {
@@ -164,4 +289,44 @@ public class RoomController {
             this.sipUri = sipUri;
         }
     }
+
+    public record RoomMessage(
+            long id,
+            String roomUri,
+            String sender,
+            String content,
+            boolean isFile,
+            Instant timestamp
+    ) {}
+
+    public static class SendRoomMessageRequest {
+        private String sender;
+        private String content;
+        private Boolean isFile;
+
+        public String getSender() {
+            return sender;
+        }
+
+        public void setSender(String sender) {
+            this.sender = sender;
+        }
+
+        public String getContent() {
+            return content;
+        }
+
+        public void setContent(String content) {
+            this.content = content;
+        }
+
+        public Boolean getIsFile() {
+            return isFile;
+        }
+
+        public void setIsFile(Boolean isFile) {
+            this.isFile = isFile;
+        }
+    }
 }
+
