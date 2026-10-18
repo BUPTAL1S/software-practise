@@ -24,6 +24,23 @@ class FileMessageTest {
   }
 
   @Test
+  void testEncodeAndDecodeRelativeWireFormat() {
+    FileMessage msg = new FileMessage("document.pdf", 2048576, "/api/files/42");
+    assertEquals("document.pdf", msg.getName());
+    assertEquals(2048576, msg.getSize());
+    assertEquals("/api/files/42", msg.getUrl());
+
+    String wire = msg.toWireFormat();
+    assertEquals("[FILE] document.pdf | 2048576 | /api/files/42", wire);
+
+    FileMessage parsed = FileMessage.tryParse(wire);
+    assertNotNull(parsed);
+    assertEquals("document.pdf", parsed.getName());
+    assertEquals(2048576, parsed.getSize());
+    assertEquals("/api/files/42", parsed.getUrl());
+  }
+
+  @Test
   void testParseJsonStyleFileNotification() {
     String jsonBody = "[FILE] {\"name\":\"photo.jpg\",\"size\":512000,\"url\":\"/api/files/99\"}";
     FileMessage parsed = FileMessage.tryParse(jsonBody);

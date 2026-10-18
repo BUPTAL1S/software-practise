@@ -219,7 +219,8 @@ class HttpFileClientTest {
     assertNotNull(fm);
     assertEquals("test-upload.txt", fm.getName());
     assertEquals(29, fm.getSize());
-    assertEquals(serverBaseUrl + "/api/files/42", fm.getUrl());
+    assertEquals("/api/files/42", fm.getUrl(), "Upload must return relative path without sender's host/ip");
+    assertEquals(serverBaseUrl + "/api/files/42", client.normalizeFileUrl(fm.getUrl()));
 
     Path downloadPath = tempDir.resolve("downloaded-file.txt");
     Path result = client.downloadFile(fm.getUrl(), downloadPath);
@@ -238,8 +239,54 @@ class HttpFileClientTest {
 
     // Simulated cross-host URL sent from another client running on localhost:8080
     // When client.getBaseUrl() is serverBaseUrl (e.g. 127.0.0.1:port), it rewrites to its configured host
-    HttpFileClient clientRemote = new HttpFileClient("http://192.168.1.100:" + server.getAddress().getPort());
-    assertEquals("http://192.168.1.100:" + server.getAddress().getPort(), clientRemote.getBaseUrl());
+    int port = server.getAddress().getPort();
+    HttpFileClient clientRemote = new HttpFileClient("http://192.168.1.100:" + port);
+    assertEquals("http://192.168.1.100:" + port, clientRemote.getBaseUrl());
+    assertEquals("http://192.168.1.100:" + port + "/api/files/42", clientRemote.normalizeFileUrl("http://localhost:8080/api/files/42"));
+    assertEquals("http://192.168.1.100:" + port + "/api/files/42", clientRemote.normalizeFileUrl("/api/files/42"));
+
+    // Hairpinning defense verification
+    assertTrue(HttpFileClient.isLocalAddress("127.0.0.1"));
+    assertTrue(HttpFileClient.isLocalAddress("localhost"));
+    assertEquals("http://127.0.0.1:" + port + "/api/files/42", client.normalizeFileUrl("/api/files/42"));
+
+    // Real host LAN interface IP hairpin rewrite verification (both download and upload)
+    String localLanIp = null;
+    java.util.Enumeration<java.net.NetworkInterface> nifs = java.net.NetworkInterface.getNetworkInterfaces();
+    if (nifs != null) {
+      while (nifs.hasMoreElements() && localLanIp == null) {
+        java.net.NetworkInterface nif = nifs.nextElement();
+        if (!nif.isUp() || nif.isLoopback()) continue;
+        java.util.Enumeration<java.net.InetAddress> addrs = nif.getInetAddresses();
+        while (addrs.hasMoreElements()) {
+          java.net.InetAddress addr = addrs.nextElement();
+          if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
+            localLanIp = addr.getHostAddress();
+            break;
+          }
+        }
+      }
+    }
+    if (localLanIp != null) {
+      assertTrue(HttpFileClient.isLocalAddress(localLanIp), "Local LAN IP must be recognized as local address");
+      HttpFileClient clientWithLanIp = new HttpFileClient("http://" + localLanIp + ":" + port);
+      // Assert that host's real LAN IP is automatically rewritten to 127.0.0.1
+      assertEquals("http://127.0.0.1:" + port, clientWithLanIp.getEffectiveBaseUrl(),
+          "Configured host LAN IP must be rewritten to 127.0.0.1 to avoid hairpin drop");
+      assertEquals("http://127.0.0.1:" + port + "/api/files/42",
+          clientWithLanIp.normalizeFileUrl("http://" + localLanIp + ":" + port + "/api/files/42"),
+          "Download URL targeting local LAN IP must be normalized to 127.0.0.1");
+      assertEquals("http://127.0.0.1:" + port + "/api/files/42",
+          clientWithLanIp.normalizeFileUrl("/api/files/42"),
+          "Relative download URL must resolve to rewritten 127.0.0.1");
+
+      // Verify that upload also benefits from hairpin rewrite and hits MockServer (which binds 127.0.0.1 only)
+      Path uploadPath = tempDir.resolve("test-upload.txt");
+      Files.write(uploadPath, TEST_FILE_CONTENT);
+      FileMessage uploadedFm = clientWithLanIp.uploadFile(uploadPath, "1001", "1002");
+      assertNotNull(uploadedFm);
+      assertEquals("/api/files/42", uploadedFm.getUrl());
+    }
   }
 
   @Test
