@@ -290,7 +290,7 @@ final class SipService {
 
   /** Native handle of the remote PJSIP video window (HWND on Windows, NSWindow on macOS). */
   public synchronized long getActiveVideoWindowHandle() {
-    if (activeCall == null) {
+    if (activeCall == null || !isCallConnected()) {
       return 0;
     }
     try {

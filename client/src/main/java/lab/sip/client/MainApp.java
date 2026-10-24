@@ -1960,7 +1960,7 @@ public final class MainApp extends Application {
             new KeyFrame(
                 Duration.millis(500),
                 e -> {
-                  if (videoCallWindow == null || !sip.isInCall()) {
+                  if (videoCallWindow == null || !sip.isCallConnected()) {
                     return;
                   }
                   long remote = sip.getActiveVideoWindowHandle();
