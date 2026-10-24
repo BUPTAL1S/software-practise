@@ -85,6 +85,8 @@ final class SipService {
   private ClientLogWriter logWriter;
   private ClientAccount account;
   private ClientCall activeCall;
+  /** 最近一次创建的通话包装对象；关机时必须显式 delete，否则 finalize 会在库销毁后断言。 */
+  private volatile ClientCall lastCall;
   private VideoPreview videoPreview;
   private boolean started;
   private boolean incomingRinging;
@@ -834,6 +836,7 @@ final class SipService {
       acc = account;
       next = new ClientCall(acc, dst, video);
       activeCall = next;
+      lastCall = next;
       proxy = outboundProxy;
     }
     CallOpParam prm = new CallOpParam(true);
@@ -942,7 +945,27 @@ final class SipService {
     ensureThreadRegistered();
     stopPreview();
     cancelHangupWatch();
-    hangupQuiet();
+    ClientCall last = hangupQuiet();
+    // 必须显式 delete 通话对象再销毁 endpoint。否则残留下来的 Call 会在 JVM 退出时
+    // 由 finalize 回调 pjsua_call_set_user_data，而此时 max_calls 已归零，
+    // pjsua_call.c 的断言会 abort（退出码 3）。
+    ClientCall pending;
+    synchronized (this) {
+      pending = activeCall;
+      activeCall = null;
+    }
+    deleteCallQuietly(last);
+    if (pending != null && pending != last) {
+      deleteCallQuietly(pending);
+    }
+    ClientCall stray;
+    synchronized (this) {
+      stray = lastCall;
+      lastCall = null;
+    }
+    if (stray != null && stray != last && stray != pending) {
+      deleteCallQuietly(stray);
+    }
     ClientAccount acc;
     synchronized (this) {
       clearBuddiesLocked();
@@ -1130,6 +1153,17 @@ final class SipService {
       // already gone; DISCONNECTED will delete
     }
     return call;
+  }
+
+  private static void deleteCallQuietly(Call call) {
+    if (call == null) {
+      return;
+    }
+    try {
+      call.delete();
+    } catch (Throwable ignored) {
+      // 已经删过了
+    }
   }
 
   // PJSIP 一发出 BYE 就把通话置为 DISCONNECTED，不等应答；要判断对端是否收到，只能看 BYE 的响应。
@@ -1357,6 +1391,7 @@ final class SipService {
         }
         incoming = new ClientCall(this, prm.getCallId());
         activeCall = incoming;
+        lastCall = incoming;
         incomingRinging = true;
       }
       String remote = "";
