@@ -564,7 +564,7 @@ public final class MainApp extends Application {
     callVideo.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
     previewBtn = getPreviewBtn();
     answerVideo = new Button("接听(视频)");
-    answerVideo.getStyleClass().setAll("btn-success");
+    answerVideo.getStyleClass().setAll("btn-primary");
     answerAudio = new Button("接听(语音)");
     answerAudio.getStyleClass().setAll("btn-primary");
     hangup = new Button("挂断");
