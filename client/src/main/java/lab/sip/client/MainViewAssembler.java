@@ -10,6 +10,7 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
@@ -43,6 +44,9 @@ final class MainViewAssembler {
   private Stage settingsModalStage;
   private Button consoleBtn;
   private Button oneClickOnlineBtn;
+  private VBox quickList;
+  private TextField contactTargetField;
+  private String directorySignature = "";
 
   private Runnable onAvatarClicked;
   private final StackPane globalAvatarPane = new StackPane();
@@ -375,12 +379,26 @@ final class MainViewAssembler {
     // Quick dial contact cards (Telegram style)
     Label quickTitle = new Label("联系人与研讨室");
     quickTitle.getStyleClass().add("section-label");
-    VBox quickList = new VBox(6);
+    this.contactTargetField = callTargetField;
+    this.quickList = new VBox(6);
+    if (quickDialButtons.length == 0) {
+      Label loading = new Label("正在加载通讯录...");
+      loading.setStyle("-fx-font-size: 11px; -fx-text-fill: #94A3B8; -fx-padding: 4 2 4 2;");
+      quickList.getChildren().add(loading);
+    }
     for (Button btn : quickDialButtons) {
       formatContactButton(btn);
       btn.setMaxWidth(Double.MAX_VALUE);
       quickList.getChildren().add(btn);
     }
+    ScrollPane quickScroll = new ScrollPane(quickList);
+    quickScroll.setFitToWidth(true);
+    quickScroll.setPannable(true);
+    quickScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    quickScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+    quickScroll.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-padding: 0;");
+    quickScroll.setMinHeight(120);
+    VBox.setVgrow(quickScroll, Priority.ALWAYS);
 
     sidebar.getChildren().addAll(
         badgeRow,
@@ -390,7 +408,7 @@ final class MainViewAssembler {
         dialTitle,
         callTargetField,
         quickTitle,
-        quickList);
+        quickScroll);
     return sidebar;
   }
 
@@ -428,6 +446,10 @@ final class MainViewAssembler {
       new java.util.concurrent.ConcurrentHashMap<>();
   private final java.util.Map<String, Integer> contactUnreadMap =
       new java.util.concurrent.ConcurrentHashMap<>();
+  private final java.util.Map<String, Boolean> contactOnlineMap =
+      new java.util.concurrent.ConcurrentHashMap<>();
+  private final java.util.Map<String, String> contactAvatarMap =
+      new java.util.concurrent.ConcurrentHashMap<>();
 
   public java.util.Set<String> getContactTargetIds() {
     return java.util.Collections.unmodifiableSet(contactCardMap.keySet());
@@ -445,6 +467,7 @@ final class MainViewAssembler {
 
   public void updateContactStatus(String targetId, boolean online) {
     if (targetId == null) return;
+    contactOnlineMap.put(targetId.trim().toLowerCase(), online);
     Runnable r = () -> {
       ContactCardHandle card = contactCardMap.get(targetId.trim().toLowerCase());
       if (card != null) {
@@ -497,48 +520,156 @@ final class MainViewAssembler {
     }
   }
 
-  void formatContactButton(Button btn) {
-    String original = btn.getText();
-    if (original == null) {
-      original = "";
+  /**
+   * Rebuilds the left contact/room list from the backend directory.
+   * Skips the rebuild when the directory contents are unchanged so periodic
+   * polling does not steal clicks or flicker the list.
+   */
+  void rebuildDirectory(
+      java.util.List<HttpFileClient.UserSummary> users,
+      java.util.List<HttpFileClient.RoomInfo> rooms,
+      String self,
+      String httpBaseUrl) {
+    if (users == null || quickList == null) {
+      return;
     }
-    String badgeText = "1";
-    String badgeColor = "#2481CC";
-    String primaryText = original;
-    String basePrefix = "测试账号";
-    String secondaryText = "离线";
-    String targetId = original;
+    String me = self == null ? "" : self.trim();
+    java.util.List<HttpFileClient.RoomInfo> safeRooms =
+        rooms == null ? java.util.List.of() : rooms;
 
-    if (original.contains("1001")) {
-      targetId = "1001";
-      badgeText = "1";
-      badgeColor = "#2481CC";
-      primaryText = "1001";
-      basePrefix = "测试账号 1";
-      secondaryText = "离线";
-    } else if (original.contains("1002")) {
-      targetId = "1002";
-      badgeText = "2";
-      badgeColor = "#10B981";
-      primaryText = "1002";
-      basePrefix = "测试账号 2";
-      secondaryText = "离线";
-    } else if (original.contains("1003")) {
-      targetId = "1003";
-      badgeText = "3";
-      badgeColor = "#8B5CF6";
-      primaryText = "1003";
-      basePrefix = "测试账号 3";
-      secondaryText = "离线";
-    } else if (original.contains("room")) {
-      targetId = "room-101";
-      badgeText = "M";
-      badgeColor = "#F59E0B";
-      primaryText = "room-101";
-      basePrefix = "MCU 研讨室";
-      secondaryText = "多方共享";
+    StringBuilder signature = new StringBuilder();
+    signature.append(me).append('|');
+    for (HttpFileClient.UserSummary user : users) {
+      if (user == null) continue;
+      signature.append(user.username()).append('/').append(user.sipId()).append('/')
+          .append(user.avatarUrl()).append(';');
     }
+    signature.append('|');
+    for (HttpFileClient.RoomInfo room : safeRooms) {
+      if (room == null) continue;
+      signature.append(room.sipUri()).append('/').append(room.name()).append(';');
+    }
+    if (signature.toString().equals(directorySignature)) {
+      return;
+    }
+    directorySignature = signature.toString();
 
+    Runnable rebuild = () -> {
+      quickList.getChildren().clear();
+      contactCardMap.clear();
+
+      quickList.getChildren().add(directorySectionLabel("联系人"));
+      java.util.Set<String> seen = new java.util.HashSet<>();
+      boolean hasUser = false;
+      for (HttpFileClient.UserSummary user : users) {
+        if (user == null) continue;
+        String target = firstNonBlank(user.username(), user.sipId());
+        if (target.isEmpty() || target.equalsIgnoreCase(me) || !seen.add(target.toLowerCase())) {
+          continue;
+        }
+        String avatar = user.avatarUrl();
+        if (avatar != null && !avatar.isBlank() && httpBaseUrl != null
+            && !avatar.startsWith("http://") && !avatar.startsWith("https://")) {
+          avatar = httpBaseUrl.replaceAll("/+$", "") + "/" + avatar.replaceAll("^/+", "");
+        }
+        if (avatar != null && !avatar.isBlank()) {
+          contactAvatarMap.put(target.toLowerCase(), avatar);
+        }
+        Button btn = new Button();
+        installContactCard(
+            btn, target, target, "联系人", badgeFor(target), colorFor(target), false);
+        btn.setMaxWidth(Double.MAX_VALUE);
+        quickList.getChildren().add(btn);
+        hasUser = true;
+      }
+      if (!hasUser) {
+        quickList.getChildren().add(emptyDirectoryLabel("暂无联系人"));
+      }
+
+      quickList.getChildren().add(directorySectionLabel("研讨室"));
+      boolean hasRoom = false;
+      for (HttpFileClient.RoomInfo room : safeRooms) {
+        if (room == null) continue;
+        String target = firstNonBlank(room.sipUri());
+        if (target.isEmpty() || !seen.add(target.toLowerCase())) {
+          continue;
+        }
+        String display = firstNonBlank(room.name(), target);
+        Button btn = new Button();
+        installContactCard(btn, target, display, target, "M", "#F59E0B", true);
+        btn.setMaxWidth(Double.MAX_VALUE);
+        quickList.getChildren().add(btn);
+        hasRoom = true;
+      }
+      if (!hasRoom) {
+        quickList.getChildren().add(emptyDirectoryLabel("暂无研讨室"));
+      }
+    };
+    if (Platform.isFxApplicationThread()) {
+      rebuild.run();
+    } else {
+      Platform.runLater(rebuild);
+    }
+  }
+
+  private static Label directorySectionLabel(String text) {
+    Label label = new Label(text);
+    label.setStyle(
+        "-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: #64748B;"
+            + " -fx-padding: 7 2 2 2;");
+    return label;
+  }
+
+  private static Label emptyDirectoryLabel(String text) {
+    Label label = new Label(text);
+    label.setStyle("-fx-font-size: 11px; -fx-text-fill: #94A3B8; -fx-padding: 4 2 4 2;");
+    return label;
+  }
+
+  private static String firstNonBlank(String... values) {
+    if (values != null) {
+      for (String value : values) {
+        if (value != null && !value.isBlank()) {
+          return value.trim();
+        }
+      }
+    }
+    return "";
+  }
+
+  private static String badgeFor(String target) {
+    if (target == null || target.isBlank()) {
+      return "?";
+    }
+    String value = target.trim();
+    if (value.regionMatches(true, 0, "room", 0, 4)) {
+      return "M";
+    }
+    char last = value.charAt(value.length() - 1);
+    return Character.isDigit(last)
+        ? String.valueOf(last)
+        : value.substring(0, 1).toUpperCase();
+  }
+
+  private static String colorFor(String target) {
+    String[] colors = {"#2481CC", "#10B981", "#8B5CF6", "#F59E0B", "#EF4444", "#0EA5E9"};
+    int hash = target == null ? 0 : target.hashCode();
+    return colors[(hash & 0x7fffffff) % colors.length];
+  }
+
+  /**
+   * Installs the Telegram-style card graphic into an existing button and
+   * registers its handle. The caller decides whether to add the button to the
+   * quick list.
+   */
+  private ContactCardHandle installContactCard(
+      Button btn,
+      String targetId,
+      String primaryText,
+      String basePrefix,
+      String badgeText,
+      String badgeColor,
+      boolean isRoom) {
     HBox card = new HBox(8);
     card.setAlignment(Pos.CENTER_LEFT);
 
@@ -553,7 +684,9 @@ final class MainViewAssembler {
     contactImgView.setClip(new Circle(15, 15, 15));
     contactImgView.setVisible(false);
 
-    Circle statusDot = new Circle(4.5, Color.web(targetId.startsWith("room") ? "#10B981" : "#94A3B8"));
+    String key = targetId.trim().toLowerCase();
+    boolean online = contactOnlineMap.getOrDefault(key, isRoom);
+    Circle statusDot = new Circle(4.5, Color.web(online ? "#10B981" : "#94A3B8"));
     statusDot.setStroke(Color.WHITE);
     statusDot.setStrokeWidth(1.5);
     StackPane.setAlignment(statusDot, Pos.BOTTOM_RIGHT);
@@ -563,15 +696,21 @@ final class MainViewAssembler {
     VBox textBox = new VBox(2);
     Label nameLbl = new Label(primaryText);
     nameLbl.setStyle("-fx-font-weight: bold; -fx-font-size: 12.5px; -fx-text-fill: #1E293B;");
-    Label subLbl = new Label(basePrefix + " · " + secondaryText);
-    subLbl.setStyle("-fx-font-size: 11px; -fx-text-fill: #94A3B8;");
+    String secondary =
+        isRoom ? (online ? "就绪(多方共享)" : "未就绪(MCU离线)") : (online ? "在线" : "离线");
+    Label subLbl = new Label(basePrefix + " · " + secondary);
+    subLbl.setStyle(
+        online
+            ? "-fx-font-size: 11px; -fx-text-fill: #10B981;"
+            : "-fx-font-size: 11px; -fx-text-fill: #94A3B8;");
     textBox.getChildren().addAll(nameLbl, subLbl);
 
     Region spacer = new Region();
     HBox.setHgrow(spacer, Priority.ALWAYS);
 
-    int existingUnread = contactUnreadMap.getOrDefault(targetId.trim().toLowerCase(), 0);
-    Label unreadBadge = new Label(existingUnread > 99 ? "99+" : (existingUnread > 0 ? String.valueOf(existingUnread) : ""));
+    int existingUnread = contactUnreadMap.getOrDefault(key, 0);
+    Label unreadBadge =
+        new Label(existingUnread > 99 ? "99+" : (existingUnread > 0 ? String.valueOf(existingUnread) : ""));
     unreadBadge.setStyle(
         "-fx-background-color: #EF4444; -fx-text-fill: white; -fx-font-size: 10px;"
             + " -fx-font-weight: bold; -fx-padding: 1 6 1 6; -fx-background-radius: 10;");
@@ -582,10 +721,42 @@ final class MainViewAssembler {
     btn.setText("");
     btn.setGraphic(card);
     btn.getStyleClass().setAll("quick-dial-btn");
+    btn.setOnAction(
+        e -> {
+          if (contactTargetField != null) {
+            contactTargetField.setText(targetId);
+          }
+        });
 
-    contactCardMap.put(
-        targetId.toLowerCase(),
-        new ContactCardHandle(targetId, nameLbl, subLbl, statusDot, unreadBadge, basePrefix, contactImgView, badgeLbl));
+    ContactCardHandle handle =
+        new ContactCardHandle(
+            targetId, nameLbl, subLbl, statusDot, unreadBadge, basePrefix, contactImgView, badgeLbl);
+    contactCardMap.put(key, handle);
+    String cachedAvatar = contactAvatarMap.get(key);
+    if (cachedAvatar != null && !cachedAvatar.isBlank()) {
+      updateContactAvatar(targetId, cachedAvatar);
+    }
+    return handle;
+  }
+
+  void formatContactButton(Button btn) {
+    String original = btn.getText();
+    if (original == null) {
+      original = "";
+    }
+    String targetId = original.replaceAll("\\s*\\(.*\\)$", "").trim();
+    if (targetId.isEmpty()) {
+      return;
+    }
+    boolean isRoom = targetId.toLowerCase().startsWith("room");
+    installContactCard(
+        btn,
+        targetId,
+        targetId,
+        isRoom ? "MCU 研讨室" : "联系人",
+        isRoom ? "M" : badgeFor(targetId),
+        isRoom ? "#F59E0B" : colorFor(targetId),
+        isRoom);
   }
 
 
@@ -797,9 +968,15 @@ final class MainViewAssembler {
 
   public void updateContactAvatar(String targetId, String avatarUrl) {
     if (targetId == null) return;
+    String key = targetId.trim().toLowerCase();
+    if (avatarUrl == null || avatarUrl.isBlank()) {
+      contactAvatarMap.remove(key);
+    } else {
+      contactAvatarMap.put(key, avatarUrl);
+    }
     Platform.runLater(
         () -> {
-          ContactCardHandle card = contactCardMap.get(targetId.trim().toLowerCase());
+          ContactCardHandle card = contactCardMap.get(key);
           if (card != null && card.contactImgView != null) {
             if (avatarUrl != null && !avatarUrl.isBlank()) {
               try {

@@ -1111,15 +1111,6 @@ public final class MainApp extends Application {
     Label peerLabel = new Label("呼叫/聊天:");
     peerLabel.setStyle("-fx-font-weight: bold;");
 
-    Button chip1001 = new Button("1001 (测试账号 1)");
-    chip1001.setOnAction(e -> peer.setText("1001"));
-    Button chip1002 = new Button("1002 (测试账号 2)");
-    chip1002.setOnAction(e -> peer.setText("1002"));
-    Button chip1003 = new Button("1003 (测试账号 3)");
-    chip1003.setOnAction(e -> peer.setText("1003"));
-    Button chipRoom = new Button("room-101 (MCU 研讨室)");
-    chipRoom.setOnAction(e -> peer.setText("room-101"));
-
     // 来电提示横幅
     incomingNotice = new Label("收到来电");
     incomingNotice.setStyle("-fx-font-weight: bold; -fx-text-fill: #1a7f37;");
@@ -1232,7 +1223,7 @@ public final class MainApp extends Application {
             videoDetailLabel,
             httpStatusBadge,
             peer,
-            new Button[] {chip1001, chip1002, chip1003, chipRoom},
+            new Button[0],
             callVideo,
             callAudio,
             hangup,
@@ -2496,34 +2487,64 @@ public final class MainApp extends Application {
   }
 
   private void refreshRooms() {
+    refreshDirectory();
+  }
+
+  /**
+   * Refreshes both the room table and the left contact/room directory from the
+   * backend. The old implementation only refreshed rooms, so newly registered
+   * users never appeared in the sidebar.
+   */
+  private void refreshDirectory() {
     String httpUrl = httpServerField.getText().trim();
     httpFileClient.setBaseUrl(httpUrl);
     new Thread(
             () -> {
               try {
+                List<HttpFileClient.UserSummary> users = httpFileClient.fetchUsers();
+                if (users.isEmpty()) {
+                  // fetchUsers() returns an empty list for both "no users" and
+                  // an expired token; try a lazy re-login once.
+                  reloginHttp();
+                  users = httpFileClient.fetchUsers();
+                }
                 List<HttpFileClient.RoomInfo> rooms = httpFileClient.fetchRooms();
+                final List<HttpFileClient.UserSummary> finalUsers = users;
+                final List<HttpFileClient.RoomInfo> finalRooms = rooms;
                 Platform.runLater(
                     () -> {
                       if (roomRefreshFailed) {
-                        logs.append("系统", "拉取房间列表已恢复正常");
+                        logs.append("系统", "刷新通讯录已恢复正常");
                         roomRefreshFailed = false;
                       }
-                      roomRecords.setAll(rooms);
+                      if (roomRecords != null) {
+                        roomRecords.setAll(finalRooms);
+                      }
                       if (roomCountBadge != null) {
-                        roomCountBadge.setText(rooms.size() + " 间");
+                        roomCountBadge.setText(finalRooms.size() + " 间");
+                      }
+                      if (assembler != null && !finalUsers.isEmpty()) {
+                        assembler.rebuildDirectory(
+                            finalUsers,
+                            finalRooms,
+                            user.getText().trim(),
+                            httpFileClient.getBaseUrl());
                       }
                     });
               } catch (Exception ex) {
+                if (isHttpUnauthorized(ex)) {
+                  reloginHttp();
+                }
                 Platform.runLater(
                     () -> {
                       if (!roomRefreshFailed) {
                         roomRefreshFailed = true;
-                        logs.append("警告", "拉取房间列表失败: " + ex.getMessage());
+                        logs.append("警告", "刷新通讯录失败: " + ex.getMessage());
                       }
                     });
               }
             },
-            "room-list-fetcher")
+            "directory-refresh")
         .start();
   }
 
