@@ -259,6 +259,7 @@ final class SipService {
       return false;
     }
     try {
+      ensureThreadRegistered();
       return activeCall.getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED;
     } catch (Throwable ignored) {
       return false;
