@@ -67,6 +67,8 @@ final class CallWindow {
     if (stage == null) {
       build(target);
       stage.show();
+      stage.toFront();
+      stage.requestFocus();
     }
     update(target, video, cameraOn, connected, muted);
     if (connected) {

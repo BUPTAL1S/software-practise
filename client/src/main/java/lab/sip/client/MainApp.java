@@ -1800,8 +1800,9 @@ public final class MainApp extends Application {
   }
 
   private void syncCallWindow() {
+    boolean inCall = sip.isInCall();
     boolean connected = sip.isCallConnected();
-    if (!connected) {
+    if (!inCall || (!connected && sip.hasIncoming())) {
       if (callWindow != null) {
         callWindow.close();
         callWindow = null;
@@ -1829,7 +1830,7 @@ public final class MainApp extends Application {
           target,
           video,
           cameraOn,
-          true,
+          connected,
           () -> run(sip::hangup),
           muted -> {
             sip.setAudioMuted(muted);
@@ -1839,10 +1840,10 @@ public final class MainApp extends Application {
           },
           enabled -> setCallCamera(enabled));
     } else {
-      callWindow.update(target, video, cameraOn, true);
+      callWindow.update(target, video, cameraOn, connected);
     }
 
-    if (video && cameraOn && sip.getActiveVideoWindowHandle() != 0) {
+    if (connected && video && cameraOn && sip.getActiveVideoWindowHandle() != 0) {
       if (!sip.isPreviewActive()) {
         try {
           sip.startCallPreview();
