@@ -22,6 +22,7 @@ public final class ChatMessage {
   private final Instant timestamp;
   private volatile String status;
   private volatile Path localPath;
+  private volatile Long backendId;
 
   public ChatMessage(
       String sender,
@@ -47,6 +48,15 @@ public final class ChatMessage {
   public static ChatMessage file(String sender, String receiver, boolean outgoing, FileMessage file, Path localPath) {
     ChatMessage msg = new ChatMessage(sender, receiver, outgoing, file.toWireFormat(), file, Instant.now(), outgoing ? "已发送" : "");
     msg.setLocalPath(localPath);
+    return msg;
+  }
+
+  public static ChatMessage fromServer(
+      String sender, String receiver, boolean outgoing, String content, Instant timestamp, Long backendId, String status) {
+    FileMessage fm = FileMessage.tryParse(content);
+    ChatMessage msg = new ChatMessage(
+        sender, receiver, outgoing, content, fm, timestamp, status == null ? "" : status);
+    msg.backendId = backendId;
     return msg;
   }
 
@@ -88,6 +98,14 @@ public final class ChatMessage {
 
   public void setStatus(String status) {
     this.status = status;
+  }
+
+  public Long getBackendId() {
+    return backendId;
+  }
+
+  public void setBackendId(Long backendId) {
+    this.backendId = backendId;
   }
 
   public Path getLocalPath() {

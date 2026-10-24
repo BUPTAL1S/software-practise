@@ -36,10 +36,20 @@ public class DemoDataLoader implements CommandLineRunner {
                 user.setUsername(id);
                 user.setSipId(id);
                 user.setPasswordHash(passwordEncoder.encode(id));
+                user.setRole(i == 1001 ? "ADMIN" : "USER");
                 users.save(user);
             }
             log.info("inserted {} demo users (1001-1008)", users.count());
         }
+
+        // 兼容已有数据库：只把 1001 提升为管理员。
+        users.findByUsername("1001").ifPresent(u -> {
+            if (!"ADMIN".equalsIgnoreCase(u.getRole())) {
+                u.setRole("ADMIN");
+                users.save(u);
+                log.info("promoted 1001 to ADMIN for chat audit");
+            }
+        });
 
         if (rooms.count() == 0) {
             com.lab.sipim.domain.Room r1 = new com.lab.sipim.domain.Room();

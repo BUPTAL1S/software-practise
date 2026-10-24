@@ -60,6 +60,16 @@ public final class HttpFileClient {
       Instant timestamp
   ) {}
 
+  public record PrivateMessageInfo(
+      long id,
+      String sender,
+      String receiver,
+      String content,
+      boolean isFile,
+      String status,
+      Instant timestamp
+  ) {}
+
   public record UserSummary(
       Long id,
       String username,
@@ -1024,6 +1034,166 @@ public final class HttpFileClient {
       }
     }
     return list;
+  }
+
+  // ================= private chat persistence / offline inbox =================
+
+  public PrivateMessageInfo savePrivateMessage(
+      String receiver, String content, boolean isFile, String status)
+      throws IOException, InterruptedException {
+    String json = "{\"receiver\":\"" + escapeJson(receiver)
+        + "\",\"content\":\"" + escapeJson(content)
+        + "\",\"isFile\":" + isFile
+        + ",\"status\":\"" + escapeJson(status == null ? "PENDING" : status) + "\"}";
+    HttpRequest.Builder b = HttpRequest.newBuilder()
+        .uri(URI.create(getEffectiveBaseUrl() + "/api/messages"))
+        .header("Content-Type", "application/json")
+        .timeout(Duration.ofSeconds(10))
+        .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+    if (authToken != null && !authToken.isBlank()) {
+      b.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp = httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+      throw new IOException("保存私聊消息失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parsePrivateMessage(resp.body());
+  }
+
+  public List<PrivateMessageInfo> fetchPrivateMessages(String peer, long afterId)
+      throws IOException, InterruptedException {
+    HttpRequest.Builder b = HttpRequest.newBuilder()
+        .uri(URI.create(getEffectiveBaseUrl() + "/api/messages?peer="
+            + URLEncoder.encode(peer == null ? "" : peer, StandardCharsets.UTF_8)
+            + "&afterId=" + Math.max(0, afterId) + "&limit=200"))
+        .timeout(Duration.ofSeconds(10))
+        .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      b.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp = httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取私聊历史失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parsePrivateMessageList(resp.body());
+  }
+
+  public List<PrivateMessageInfo> fetchPendingPrivateMessages() throws IOException, InterruptedException {
+    HttpRequest.Builder b = HttpRequest.newBuilder()
+        .uri(URI.create(getEffectiveBaseUrl() + "/api/messages/pending"))
+        .timeout(Duration.ofSeconds(10))
+        .GET();
+    if (authToken != null && !authToken.isBlank()) {
+      b.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp = httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() != 200) {
+      throw new IOException("获取离线消息失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+    return parsePrivateMessageList(resp.body());
+  }
+
+  public void updatePrivateMessageStatus(long id, String status) throws IOException, InterruptedException {
+    String json = "{\"status\":\"" + escapeJson(status == null ? "PENDING" : status) + "\"}";
+    HttpRequest.Builder b = HttpRequest.newBuilder()
+        .uri(URI.create(getEffectiveBaseUrl() + "/api/messages/" + id + "/status"))
+        .header("Content-Type", "application/json")
+        .timeout(Duration.ofSeconds(10))
+        .method("PATCH", HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+    if (authToken != null && !authToken.isBlank()) {
+      b.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp = httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+      throw new IOException("更新消息状态失败 (HTTP " + resp.statusCode() + "): " + resp.body());
+    }
+  }
+
+  public static PrivateMessageInfo parsePrivateMessage(String json) {
+    if (json == null || json.isEmpty()) return null;
+    long id = jsonLong(json, "id", -1);
+    String sender = jsonString(json, "sender");
+    String receiver = jsonString(json, "receiver");
+    String content = jsonString(json, "content");
+    boolean isFile = jsonBool(json, "is_file", jsonBool(json, "isFile", false));
+    String status = jsonString(json, "status");
+    String ts = jsonString(json, "created_at");
+    if (ts == null) ts = jsonString(json, "createdAt");
+    Instant instant = Instant.now();
+    if (ts != null && !ts.isBlank()) {
+      try {
+        instant = Instant.parse(ts);
+      } catch (Exception ignored) {}
+    }
+    return new PrivateMessageInfo(id, nullToEmpty(sender), nullToEmpty(receiver),
+        nullToEmpty(content), isFile, status == null ? "PENDING" : status, instant);
+  }
+
+  public static List<PrivateMessageInfo> parsePrivateMessageList(String json) {
+    List<PrivateMessageInfo> out = new ArrayList<>();
+    if (json == null || json.isEmpty()) return out;
+    for (String obj : splitJsonObjects(json)) {
+      PrivateMessageInfo info = parsePrivateMessage(obj);
+      if (info != null && info.id() > 0) out.add(info);
+    }
+    return out;
+  }
+
+  /** Split a JSON array into top-level objects, respecting escaped quotes and braces in strings. */
+  private static List<String> splitJsonObjects(String json) {
+    List<String> out = new ArrayList<>();
+    int depth = 0;
+    boolean inString = false;
+    boolean escape = false;
+    int start = -1;
+    for (int i = 0; i < json.length(); i++) {
+      char c = json.charAt(i);
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (c == '\\') {
+          escape = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+      } else if (c == '{') {
+        if (depth == 0) start = i;
+        depth++;
+      } else if (c == '}') {
+        if (depth > 0) {
+          depth--;
+          if (depth == 0 && start >= 0) {
+            out.add(json.substring(start, i + 1));
+            start = -1;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  private static String jsonString(String json, String field) {
+    Matcher m = Pattern.compile("\"" + Pattern.quote(field) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"")
+        .matcher(json);
+    return m.find() ? unescapeJson(m.group(1)) : null;
+  }
+
+  private static long jsonLong(String json, String field, long fallback) {
+    Matcher m = Pattern.compile("\"" + Pattern.quote(field) + "\"\\s*:\\s*(-?\\d+)").matcher(json);
+    return m.find() ? Long.parseLong(m.group(1)) : fallback;
+  }
+
+  private static boolean jsonBool(String json, String field, boolean fallback) {
+    Matcher m = Pattern.compile("\"" + Pattern.quote(field) + "\"\\s*:\\s*(true|false)").matcher(json);
+    return m.find() ? "true".equalsIgnoreCase(m.group(1)) : fallback;
+  }
+
+  private static String nullToEmpty(String s) {
+    return s == null ? "" : s;
   }
 
   private static String extractJsonString(String json, String field) {

@@ -11,8 +11,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 import javafx.animation.Animation;
@@ -71,6 +73,12 @@ public final class MainApp extends Application {
   private final Map<String, ObservableList<ChatMessage>> sessionMap = new ConcurrentHashMap<>();
   private final Map<String, Integer> unreadCounts = new ConcurrentHashMap<>();
   private final Map<String, Long> lastRoomMessageIds = new ConcurrentHashMap<>();
+  private final Map<String, Boolean> privateHistoryLoaded = new ConcurrentHashMap<>();
+  private final Map<Long, ChatMessage> privateMessagesById = new ConcurrentHashMap<>();
+  private final Set<Long> seenPrivateMessageIds = ConcurrentHashMap.newKeySet();
+  private volatile long lastPrivateInboxPollAt;
+  private volatile long lastPrivateHistoryPollAt;
+  private volatile String privateChatUser = "";
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
 
@@ -104,6 +112,9 @@ public final class MainApp extends Application {
       } else {
         chatPeerLabel.setText("当前对象: " + target);
       }
+    }
+    if (!key.startsWith("room-") && !"default".equals(key)) {
+      loadPrivateHistory(key);
     }
   }
 
@@ -189,6 +200,314 @@ public final class MainApp extends Application {
         assembler.updateContactUnread(sender, unread);
       }
     }
+  }
+
+  private String myUsername() {
+    return (user != null && user.getText() != null) ? user.getText().trim() : "";
+  }
+
+  private static String privateStatusText(String status, boolean outgoing) {
+    if (!outgoing) {
+      return "";
+    }
+    if ("DELIVERED".equalsIgnoreCase(status)) {
+      return "已送达";
+    }
+    if ("PENDING".equalsIgnoreCase(status)) {
+      return "待送达";
+    }
+    if ("FAILED".equalsIgnoreCase(status)) {
+      return "发送失败";
+    }
+    return "";
+  }
+
+  private void loadPrivateHistory(String target) {
+    String key = extractUser(target).toLowerCase();
+    String me = myUsername();
+    if (key.isBlank() || key.startsWith("room-") || me.isBlank()
+        || httpFileClient.getAuthToken() == null || httpFileClient.getAuthToken().isBlank()) {
+      return;
+    }
+    if (privateHistoryLoaded.putIfAbsent(key, Boolean.TRUE) != null) {
+      return;
+    }
+    new Thread(
+            () -> {
+              try {
+                httpFileClient.setBaseUrl(httpServerField.getText().trim());
+                List<HttpFileClient.PrivateMessageInfo> list =
+                    httpFileClient.fetchPrivateMessages(key, 0);
+                Platform.runLater(() -> mergePrivateHistory(key, me, list));
+              } catch (Exception ex) {
+                privateHistoryLoaded.remove(key);
+                Platform.runLater(() -> logs.append("警告", "加载私聊历史失败：" + ex.getMessage()));
+              }
+            },
+            "private-history")
+        .start();
+  }
+
+  private void mergePrivateHistory(
+      String key, String me, List<HttpFileClient.PrivateMessageInfo> list) {
+    if (list == null || list.isEmpty()) {
+      return;
+    }
+    ObservableList<ChatMessage> session = getOrCreateSession(key);
+    boolean changed = false;
+    for (HttpFileClient.PrivateMessageInfo info : list) {
+      if (info.id() <= 0) {
+        continue;
+      }
+      ChatMessage known = privateMessagesById.get(info.id());
+      boolean outgoing = info.sender() != null && info.sender().equalsIgnoreCase(me);
+      if (known != null) {
+        known.setStatus(privateStatusText(info.status(), outgoing));
+        seenPrivateMessageIds.add(info.id());
+        ackIncomingPrivateIfPending(info, outgoing);
+        changed = true;
+        continue;
+      }
+      if (seenPrivateMessageIds.contains(info.id())) {
+        continue;
+      }
+      // If the same message is already on screen from SIP, attach the server id
+      // instead of adding a duplicate bubble.
+      ChatMessage live = findLiveMessage(session, outgoing, info.sender(), info.content());
+      if (live != null) {
+        live.setBackendId(info.id());
+        live.setStatus(privateStatusText(info.status(), outgoing));
+        privateMessagesById.put(info.id(), live);
+        seenPrivateMessageIds.add(info.id());
+        ackIncomingPrivateIfPending(info, outgoing);
+        changed = true;
+        continue;
+      }
+      ChatMessage msg =
+          ChatMessage.fromServer(
+              info.sender(),
+              info.receiver(),
+              outgoing,
+              info.content(),
+              info.timestamp(),
+              info.id(),
+              privateStatusText(info.status(), outgoing));
+      session.add(msg);
+      privateMessagesById.put(info.id(), msg);
+      seenPrivateMessageIds.add(info.id());
+      ackIncomingPrivateIfPending(info, outgoing);
+      changed = true;
+    }
+    if (changed) {
+      session.sort(Comparator.comparing(ChatMessage::getTimestamp));
+      if (chatListView != null && !session.isEmpty()) {
+        chatListView.refresh();
+        chatListView.scrollTo(session.size() - 1);
+      }
+    }
+  }
+
+  private void ackIncomingPrivateIfPending(
+      HttpFileClient.PrivateMessageInfo info, boolean outgoing) {
+    if (outgoing || info == null || !"PENDING".equalsIgnoreCase(info.status())) {
+      return;
+    }
+    new Thread(
+            () -> {
+              try {
+                httpFileClient.updatePrivateMessageStatus(info.id(), "DELIVERED");
+              } catch (Exception ignored) {
+              }
+            },
+            "private-ack-history")
+        .start();
+  }
+
+  private static ChatMessage findLiveMessage(
+      ObservableList<ChatMessage> session, boolean outgoing, String sender, String content) {
+    for (int i = session.size() - 1; i >= 0; i--) {
+      ChatMessage m = session.get(i);
+      if (m.getBackendId() == null
+          && m.isOutgoing() == outgoing
+          && content != null
+          && content.equals(m.getText())
+          && (outgoing || (sender != null && sender.equalsIgnoreCase(m.getSender())))) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  /** Pull PENDING messages for this user, show them, then acknowledge delivery. */
+  private void pollPrivateInbox() {
+    String me = myUsername();
+    if (me.isBlank() || httpFileClient.getAuthToken() == null
+        || httpFileClient.getAuthToken().isBlank()) {
+      return;
+    }
+    long now = System.currentTimeMillis();
+    if (now - lastPrivateInboxPollAt < 2000) {
+      return;
+    }
+    lastPrivateInboxPollAt = now;
+    new Thread(
+            () -> {
+              try {
+                httpFileClient.setBaseUrl(httpServerField.getText().trim());
+                List<HttpFileClient.PrivateMessageInfo> list =
+                    httpFileClient.fetchPendingPrivateMessages();
+                if (list == null || list.isEmpty()) {
+                  return;
+                }
+                Platform.runLater(
+                    () -> {
+                      for (HttpFileClient.PrivateMessageInfo info : list) {
+                        if (info.id() <= 0 || !seenPrivateMessageIds.add(info.id())) {
+                          continue;
+                        }
+                        // Give the online SIP MESSAGE a few seconds to arrive first.
+                        if (info.timestamp() != null
+                            && info.timestamp().isAfter(Instant.now().minusSeconds(5))) {
+                          seenPrivateMessageIds.remove(info.id());
+                          continue;
+                        }
+                        String sender = info.sender() == null ? "" : info.sender();
+                        ObservableList<ChatMessage> session = getOrCreateSession(sender);
+                        ChatMessage live = findLiveMessage(session, false, sender, info.content());
+                        if (live != null) {
+                          live.setBackendId(info.id());
+                          privateMessagesById.put(info.id(), live);
+                        } else {
+                          ChatMessage msg =
+                              ChatMessage.fromServer(
+                                  sender,
+                                  me,
+                                  false,
+                                  info.content(),
+                                  info.timestamp(),
+                                  info.id(),
+                                  "");
+                          session.add(msg);
+                          session.sort(Comparator.comparing(ChatMessage::getTimestamp));
+                          privateMessagesById.put(info.id(), msg);
+                        }
+                        String curTarget =
+                            (peer != null && peer.getText() != null)
+                                ? extractUser(peer.getText().trim())
+                                : "";
+                        if (live == null) {
+                          if (sender.equalsIgnoreCase(curTarget)) {
+                            if (chatListView != null) {
+                              chatListView.scrollTo(session.size() - 1);
+                            }
+                          } else {
+                            int unread = unreadCounts.getOrDefault(sender.toLowerCase(), 0) + 1;
+                            unreadCounts.put(sender.toLowerCase(), unread);
+                            if (assembler != null) {
+                              assembler.updateContactUnread(sender, unread);
+                            }
+                          }
+                        }
+                        new Thread(
+                                () -> {
+                                  try {
+                                    httpFileClient.updatePrivateMessageStatus(
+                                        info.id(), "DELIVERED");
+                                  } catch (Exception ignored) {
+                                  }
+                                },
+                                "private-ack")
+                            .start();
+                      }
+                    });
+              } catch (Exception ignored) {
+              }
+            },
+            "private-inbox")
+        .start();
+  }
+
+  /** Refresh delivery states for the currently open private conversation. */
+  private void refreshActivePrivateStatuses() {
+    String target = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
+    if (target.isBlank() || target.startsWith("room-") || myUsername().isBlank()
+        || httpFileClient.getAuthToken() == null || httpFileClient.getAuthToken().isBlank()) {
+      return;
+    }
+    long now = System.currentTimeMillis();
+    if (now - lastPrivateHistoryPollAt < 5000) {
+      return;
+    }
+    lastPrivateHistoryPollAt = now;
+    new Thread(
+            () -> {
+              try {
+                httpFileClient.setBaseUrl(httpServerField.getText().trim());
+                List<HttpFileClient.PrivateMessageInfo> list =
+                    httpFileClient.fetchPrivateMessages(target, 0);
+                Platform.runLater(() -> mergePrivateHistory(target, myUsername(), list));
+              } catch (Exception ignored) {
+              }
+            },
+            "private-status")
+        .start();
+  }
+
+  /**
+   * Archive an outgoing SIP MESSAGE after its delivery status is known.
+   * 2xx = DELIVERED; 404/408/480/486 = PENDING for the offline inbox; other = FAILED.
+   */
+  private void archiveOutgoingPrivateMessage(String toUri, String body, int code) {
+    String receiver = extractUser(toUri);
+    if (receiver.isBlank() || receiver.startsWith("room-") || body == null || body.isBlank()) {
+      return;
+    }
+    String status;
+    if (code >= 200 && code < 300) {
+      status = "DELIVERED";
+    } else if (code == 404 || code == 408 || code == 480 || code == 486 || code == 503) {
+      status = "PENDING";
+    } else {
+      status = "FAILED";
+    }
+    boolean isFile = FileMessage.tryParse(body) != null;
+    new Thread(
+            () -> {
+              try {
+                httpFileClient.setBaseUrl(httpServerField.getText().trim());
+                HttpFileClient.PrivateMessageInfo info =
+                    httpFileClient.savePrivateMessage(receiver, body, isFile, status);
+                if (info == null || info.id() <= 0) {
+                  return;
+                }
+                Platform.runLater(
+                    () -> {
+                      ObservableList<ChatMessage> list = getOrCreateSession(receiver);
+                      ChatMessage target = null;
+                      for (int i = list.size() - 1; i >= 0; i--) {
+                        ChatMessage m = list.get(i);
+                        if (m.isOutgoing() && m.getBackendId() == null
+                            && body.equals(m.getText())) {
+                          target = m;
+                          break;
+                        }
+                      }
+                      if (target != null) {
+                        target.setBackendId(info.id());
+                        target.setStatus(privateStatusText(info.status(), true));
+                        privateMessagesById.put(info.id(), target);
+                        seenPrivateMessageIds.add(info.id());
+                        if (chatListView != null) {
+                          chatListView.refresh();
+                        }
+                      }
+                    });
+              } catch (Exception ex) {
+                Platform.runLater(() -> logs.append("警告", "私聊消息入库失败：" + ex.getMessage()));
+              }
+            },
+            "private-archive")
+        .start();
   }
 
   public static boolean probeRoomMcuReady(String httpBaseUrl) {
@@ -317,6 +636,7 @@ public final class MainApp extends Application {
             @Override
             public void instantMessageStatus(
                 String toUri, String body, int statusCode, String reason) {
+              archiveOutgoingPrivateMessage(toUri, body, statusCode);
               Platform.runLater(
                   () -> {
                     String targetUser = extractUser(toUri);
@@ -1053,6 +1373,8 @@ public final class MainApp extends Application {
         },
         "probe-and-room-poll")
         .start();
+    pollPrivateInbox();
+    refreshActivePrivateStatuses();
   }
 
   private void sendTextMessage() {
@@ -1451,6 +1773,16 @@ public final class MainApp extends Application {
                       refreshContactAvatars();
                       refreshCdrAndStats();
                       refreshRooms();
+                      String chatUser = user.getText().trim();
+                      if (!chatUser.equalsIgnoreCase(privateChatUser)) {
+                        privateChatUser = chatUser;
+                        privateHistoryLoaded.clear();
+                        seenPrivateMessageIds.clear();
+                        privateMessagesById.clear();
+                      }
+                      privateHistoryLoaded.remove(extractUser(peer.getText()).toLowerCase());
+                      loadPrivateHistory(peer.getText().trim());
+                      pollPrivateInbox();
                     });
               } catch (Exception ex) {
                 Platform.runLater(
@@ -2302,8 +2634,10 @@ public final class MainApp extends Application {
       statusLabel.setText(item.getStatus());
       if ("已送达".equals(item.getStatus())) {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #10B981; -fx-font-weight: bold;");
-      } else if (item.getStatus().startsWith("发送未送达")) {
+      } else if (item.getStatus().startsWith("发送未送达") || "发送失败".equals(item.getStatus())) {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #EF4444; -fx-font-weight: bold;");
+      } else if ("待送达".equals(item.getStatus())) {
+        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #F59E0B; -fx-font-weight: bold;");
       } else {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #94A3B8;");
       }
