@@ -946,6 +946,18 @@
         const res = await fetch('/api/admin/messages?' + params.toString(), {
           headers: {Authorization: 'Bearer ' + chatAdminToken}
         });
+        if (res.status === 401 || res.status === 403) {
+          chatAdminToken = '';
+          sessionStorage.removeItem('chatAdminToken');
+          document.getElementById('chatLoginBadge').innerText = '未登录';
+          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          const message = res.status === 401
+            ? '登录已过期，请重新用 1001 登录'
+            : '只有管理员 1001 可以查看聊天记录';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">' + message + '</td></tr>';
+          showToast(message, true);
+          return;
+        }
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '查询失败');
         if (!Array.isArray(data) || data.length === 0) {
@@ -997,6 +1009,9 @@
       loadRooms();
       loadUsers();
       loadFiles();
+      if (chatAdminToken) {
+        loadChatMessages();
+      }
     }
 
     function toggleAutoRefresh(enable) {
