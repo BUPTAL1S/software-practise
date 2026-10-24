@@ -79,6 +79,7 @@ public final class MainApp extends Application {
   private volatile long lastPrivateInboxPollAt;
   private volatile long lastPrivateHistoryPollAt;
   private volatile String privateChatUser = "";
+  private final Object httpAuthLock = new Object();
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
 
@@ -206,6 +207,58 @@ public final class MainApp extends Application {
     return (user != null && user.getText() != null) ? user.getText().trim() : "";
   }
 
+  private static boolean isHttpUnauthorized(Throwable error) {
+    String message = error == null ? null : error.getMessage();
+    return message != null && (message.contains("HTTP 401") || message.contains("401"));
+  }
+
+  /**
+   * The backend keeps login tokens in memory. A backend restart revokes every
+   * client token; re-login lazily so chat persistence keeps working.
+   */
+  private boolean reloginHttp() {
+    String u = myUsername();
+    if (u.isBlank()) {
+      return false;
+    }
+    String p = (password != null && password.getText() != null) ? password.getText() : "";
+    if (p.isBlank()) {
+      p = u;
+    }
+    final String loginPassword = p;
+    synchronized (httpAuthLock) {
+      try {
+        httpFileClient.setBaseUrl(httpServerField.getText().trim());
+        String token = httpFileClient.login(u, loginPassword);
+        if (token != null && !token.isBlank()) {
+          Platform.runLater(() -> {
+            if (httpStatusBadge != null) {
+              httpStatusBadge.setText("后台: 已登录");
+              httpStatusBadge.getStyleClass().setAll("badge-online");
+            }
+            logs.append("系统", "后台登录已过期，已自动重新登录: " + u);
+          });
+          return true;
+        }
+      } catch (Exception ex) {
+        Platform.runLater(() -> logs.append("警告", "后台自动重新登录失败：" + ex.getMessage()));
+      }
+      return false;
+    }
+  }
+
+  private HttpFileClient.PrivateMessageInfo savePrivateWithAuthRetry(
+      String receiver, String body, boolean isFile, String status) throws Exception {
+    try {
+      return httpFileClient.savePrivateMessage(receiver, body, isFile, status);
+    } catch (Exception ex) {
+      if (!isHttpUnauthorized(ex) || !reloginHttp()) {
+        throw ex;
+      }
+      return httpFileClient.savePrivateMessage(receiver, body, isFile, status);
+    }
+  }
+
   private static String privateStatusText(String status, boolean outgoing) {
     if (!outgoing) {
       return "";
@@ -241,6 +294,10 @@ public final class MainApp extends Application {
                 Platform.runLater(() -> mergePrivateHistory(key, me, list));
               } catch (Exception ex) {
                 privateHistoryLoaded.remove(key);
+                if (isHttpUnauthorized(ex) && reloginHttp()) {
+                  loadPrivateHistory(target);
+                  return;
+                }
                 Platform.runLater(() -> logs.append("警告", "加载私聊历史失败：" + ex.getMessage()));
               }
             },
@@ -316,7 +373,10 @@ public final class MainApp extends Application {
             () -> {
               try {
                 httpFileClient.updatePrivateMessageStatus(info.id(), "DELIVERED");
-              } catch (Exception ignored) {
+              } catch (Exception ex) {
+                if (isHttpUnauthorized(ex)) {
+                  reloginHttp();
+                }
               }
             },
             "private-ack-history")
@@ -413,14 +473,20 @@ public final class MainApp extends Application {
                                   try {
                                     httpFileClient.updatePrivateMessageStatus(
                                         info.id(), "DELIVERED");
-                                  } catch (Exception ignored) {
+                                  } catch (Exception ex) {
+                                    if (isHttpUnauthorized(ex)) {
+                                      reloginHttp();
+                                    }
                                   }
                                 },
                                 "private-ack")
                             .start();
                       }
                     });
-              } catch (Exception ignored) {
+              } catch (Exception ex) {
+                if (isHttpUnauthorized(ex)) {
+                  reloginHttp();
+                }
               }
             },
             "private-inbox")
@@ -446,7 +512,10 @@ public final class MainApp extends Application {
                 List<HttpFileClient.PrivateMessageInfo> list =
                     httpFileClient.fetchPrivateMessages(target, 0);
                 Platform.runLater(() -> mergePrivateHistory(target, myUsername(), list));
-              } catch (Exception ignored) {
+              } catch (Exception ex) {
+                if (isHttpUnauthorized(ex)) {
+                  reloginHttp();
+                }
               }
             },
             "private-status")
@@ -476,7 +545,7 @@ public final class MainApp extends Application {
               try {
                 httpFileClient.setBaseUrl(httpServerField.getText().trim());
                 HttpFileClient.PrivateMessageInfo info =
-                    httpFileClient.savePrivateMessage(receiver, body, isFile, status);
+                    savePrivateWithAuthRetry(receiver, body, isFile, status);
                 if (info == null || info.id() <= 0) {
                   return;
                 }
