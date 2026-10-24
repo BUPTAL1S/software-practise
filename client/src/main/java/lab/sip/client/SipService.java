@@ -1880,11 +1880,8 @@ final class SipService {
                     } catch (Throwable t) {
                       events.log("警告", "显示视频窗口失败: " + t.getMessage());
                     }
-                    // 视频通话使用独立远端窗口并尽量全屏；本地 PiP 由原生窗口叠加。
-                    try {
-                      vidWin.setFullScreen(true);
-                    } catch (Throwable ignored) {
-                    }
+                    // 不使用 SDL 独占全屏：它会切换桌面分辨率/缩放，导致整个
+                    // JavaFX 界面看起来被放大。保持普通独立窗口。
                   }
                   if (isRoom) {
                     boolean hasCap = hasCaptureDevice();
