@@ -1,9 +1,23 @@
 #include <jni.h>
 #include <windows.h>
 #include <stdint.h>
+#include <math.h>
 
 static HWND as_hwnd(jlong handle) {
     return (HWND)(intptr_t)handle;
+}
+
+static double dpi_scale(HWND window) {
+    HDC dc = GetDC(window);
+    if (dc == NULL) return 1.0;
+    int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+    ReleaseDC(window, dc);
+    if (dpi <= 0) return 1.0;
+    return (double)dpi / 96.0;
+}
+
+static int scaled(int value, double scale) {
+    return (int)lround((double)value * scale);
 }
 
 static void make_child(HWND child, HWND parent, int x, int y, int w, int h, int topmost) {
@@ -47,15 +61,21 @@ Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
     HWND pip = as_hwnd(pipHandle);
     if (parent == NULL || !IsWindow(parent)) return;
 
-    make_child(remote, parent, x, y, w, h, 0);
+    double scale = dpi_scale(parent);
+    int px = scaled(x, scale);
+    int py = scaled(y, scale);
+    int pw = scaled(w, scale);
+    int ph = scaled(h, scale);
+
+    make_child(remote, parent, px, py, pw, ph, 0);
     if (pip != NULL && IsWindow(pip)) {
-        int pipW = w / 4;
+        int pipW = pw / 4;
         if (pipW < 180) pipW = 180;
         if (pipW > 320) pipW = 320;
         int pipH = pipW * 9 / 16;
         int margin = 16;
-        make_child(pip, parent, x + w - pipW - margin,
-                   y + h - pipH - margin, pipW, pipH, 1);
+        make_child(pip, parent, px + pw - pipW - margin,
+                   py + ph - pipH - margin, pipW, pipH, 1);
     }
 }
 
