@@ -10,6 +10,10 @@
     <param name="inbound-codec-prefs" value="PCMU,PCMA,H264"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA,H264"/>
     <param name="rtp-timer-name" value="soft"/>
+    <!-- 客户端崩溃/被杀后不会有 BYE，会议室会残留没有 RTP 的僵尸通道；
+         60 秒收不到媒体就自动挂断，避免同一个账号在会议里出现两次。 -->
+    <param name="media_timeout" value="60"/>
+    <param name="media_hold_timeout" value="60"/>
     <param name="sip-ip" value="0.0.0.0"/>
     <param name="rtp-ip" value="0.0.0.0"/>
     <!-- 信令来自 Docker 网桥上的 Kamailio，不能把它当成内网而在 SDP 里写容器地址。 -->
