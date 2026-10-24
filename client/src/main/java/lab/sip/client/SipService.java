@@ -340,37 +340,46 @@ final class SipService {
     try {
       win = videoPreview.getVideoWindow();
       if (win != null) {
-        MediaSize sz = new MediaSize();
-        sz.setW(480);
-        sz.setH(320);
+        VideoWindowInfo winInfo = null;
+        boolean nativeWindow = false;
         try {
-          win.setSize(sz);
+          winInfo = win.getInfo();
+          nativeWindow = winInfo != null && winInfo.getIsNative();
         } catch (Throwable t) {
-          events.log("警告", "设置预览窗口分辨率失败: " + t.getMessage());
-        } finally {
-          sz.delete();
+          events.log("警告", "预览窗口尚未就绪: " + t.getMessage());
         }
-        win.Show(true);
+        if (!nativeWindow) {
+          MediaSize sz = new MediaSize();
+          sz.setW(480);
+          sz.setH(320);
+          try {
+            win.setSize(sz);
+          } catch (Throwable t) {
+            events.log("警告", "设置预览窗口分辨率失败: " + t.getMessage());
+          } finally {
+            sz.delete();
+          }
+          try {
+            win.Show(true);
+          } catch (Throwable t) {
+            events.log("警告", "显示预览窗口失败: " + t.getMessage());
+          }
+        }
 
         // 方案 A：针对本地摄像头预览应用渲染层水平镜像变换（符合照镜子直觉，远端发送流不受影响）
-        if (previewMirrorEnabled) {
-          VideoWindowInfo winInfo = null;
+        if (previewMirrorEnabled && winInfo != null && winInfo.getWinHandle() != null
+            && winInfo.getWinHandle().getHandle() != null) {
           try {
-            winInfo = win.getInfo();
-            if (winInfo != null && winInfo.getWinHandle() != null
-                && winInfo.getWinHandle().getHandle() != null) {
-              long hwnd = winInfo.getWinHandle().getHandle().getWindow();
-              NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
-            }
+            long hwnd = winInfo.getWinHandle().getHandle().getWindow();
+            NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
           } catch (Throwable t) {
             events.log("系统", "提示: 原生图层镜像应用: " + t.getMessage());
-          } finally {
-            if (winInfo != null) {
-              try {
-                winInfo.delete();
-              } catch (Throwable ignored) {
-              }
-            }
+          }
+        }
+        if (winInfo != null) {
+          try {
+            winInfo.delete();
+          } catch (Throwable ignored) {
           }
         }
       }
@@ -1182,6 +1191,26 @@ final class SipService {
   }
 
   private final class ClientLogWriter extends LogWriter {
+    private java.io.PrintWriter fileSink;
+    private boolean fileSinkInit;
+
+    private void mirrorToFile(String msg) {
+      if (!fileSinkInit) {
+        fileSinkInit = true;
+        String path = System.getenv("UI_LOG_FILE");
+        if (path != null && !path.isBlank()) {
+          try {
+            fileSink = new java.io.PrintWriter(new java.io.FileWriter(path, true), true);
+          } catch (Throwable ignored) {
+            fileSink = null;
+          }
+        }
+      }
+      if (fileSink != null) {
+        fileSink.println(msg);
+      }
+    }
+
     @Override
     public void write(LogEntry entry) {
       try {
@@ -1189,6 +1218,7 @@ final class SipService {
         if (msg == null || msg.isBlank()) {
           return;
         }
+        mirrorToFile(msg);
         String trimmed = msg.trim();
         if (forwardSipDump(trimmed)) {
           return;
@@ -1384,6 +1414,7 @@ final class SipService {
     private volatile boolean videoConfigured;
     private volatile boolean videoStreamActive;
     private volatile VideoWindow activeVideoWindow;
+    private volatile int activeVideoWinId = -1;
     private volatile boolean localHangup;
     private volatile boolean callDisconnected;
     private volatile boolean callEndedDispatched;
@@ -1476,6 +1507,7 @@ final class SipService {
       ensureThreadRegistered();
       VideoWindow win = activeVideoWindow;
       activeVideoWindow = null;
+      activeVideoWinId = -1;
       videoStreamActive = false;
       videoMediaIndex = -1;
       if (win == null) {
@@ -1649,37 +1681,66 @@ final class SipService {
               int winId = media.getVideoIncomingWindowId();
               if (winId >= 0) {
                 try {
-                  VideoWindow vidWin = new VideoWindow(winId);
+                  VideoWindow vidWin;
                   synchronized (this) {
-                    if (this.activeVideoWindow != null && this.activeVideoWindow != vidWin) {
-                      try {
-                        this.activeVideoWindow.Show(false);
-                        this.activeVideoWindow.delete();
-                      } catch (Throwable ignored) {
+                    if (this.activeVideoWinId == winId && this.activeVideoWindow != null) {
+                      vidWin = this.activeVideoWindow;
+                    } else {
+                      vidWin = new VideoWindow(winId);
+                      if (this.activeVideoWindow != null) {
+                        try {
+                          this.activeVideoWindow.Show(false);
+                          this.activeVideoWindow.delete();
+                        } catch (Throwable ignored) {
+                        }
                       }
+                      this.activeVideoWindow = vidWin;
+                      this.activeVideoWinId = winId;
                     }
-                    this.activeVideoWindow = vidWin;
                     this.videoStreamActive = true;
                     this.videoMediaIndex = i;
                   }
+                  VideoWindowInfo winInfo = null;
+                  boolean nativeWindow = false;
+                  try {
+                    winInfo = vidWin.getInfo();
+                    nativeWindow = winInfo != null && winInfo.getIsNative();
+                  } catch (Throwable t) {
+                    events.log("警告", "视频窗口尚未就绪: " + t.getMessage());
+                  } finally {
+                    if (winInfo != null) {
+                      try {
+                        winInfo.delete();
+                      } catch (Throwable ignored) {
+                      }
+                    }
+                  }
                   boolean isRoom = (dialedDst != null && dialedDst.contains("room-"))
                       || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
-                  MediaSize sz = new MediaSize();
-                  if (isRoom) {
-                    sz.setW(1280);
-                    sz.setH(720);
-                  } else {
-                    sz.setW(640);
-                    sz.setH(360);
-                  }
                   boolean sizeSet = false;
-                  try {
-                    vidWin.setSize(sz);
-                    sizeSet = true;
-                  } catch (Throwable t) {
-                    events.log("警告", "设置视频窗口分辨率失败: " + t.getMessage());
+                  if (!nativeWindow) {
+                    MediaSize sz = new MediaSize();
+                    if (isRoom) {
+                      sz.setW(1280);
+                      sz.setH(720);
+                    } else {
+                      sz.setW(640);
+                      sz.setH(360);
+                    }
+                    try {
+                      vidWin.setSize(sz);
+                      sizeSet = true;
+                    } catch (Throwable t) {
+                      events.log("警告", "设置视频窗口分辨率失败: " + t.getMessage());
+                    } finally {
+                      sz.delete();
+                    }
+                    try {
+                      vidWin.Show(true);
+                    } catch (Throwable t) {
+                      events.log("警告", "显示视频窗口失败: " + t.getMessage());
+                    }
                   }
-                  vidWin.Show(true);
                   if (isRoom) {
                     boolean hasCap = hasCaptureDevice();
                     boolean camOn = isCameraEnabled();
@@ -1688,10 +1749,14 @@ final class SipService {
                         int devId = findDefaultCaptureDev();
                         if (devId >= 0) {
                           CallVidSetStreamParam vParam = new CallVidSetStreamParam();
-                          vParam.setMedIdx(i);
-                          vParam.setCapDev(devId);
-                          vidSetStream(
-                              pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT, vParam);
+                          try {
+                            vParam.setMedIdx(i);
+                            vParam.setCapDev(devId);
+                            vidSetStream(
+                                pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT, vParam);
+                          } finally {
+                            vParam.delete();
+                          }
                         }
                       } catch (Throwable ignored) {
                       }
