@@ -427,7 +427,7 @@ final class SipService {
       call = activeCall;
       ringing = incomingRinging;
     }
-    if (call == null) {
+    if (call == null || call.isOutgoing) {
       return false;
     }
     try {
@@ -437,6 +437,15 @@ final class SipService {
     } catch (Exception e) {
       return ringing;
     }
+  }
+
+  /** 当前来电是否带视频 offer。只在真正的 incoming call 上有效。 */
+  synchronized boolean isIncomingVideo() {
+    ClientCall call = activeCall;
+    if (call == null || call.isOutgoing) {
+      return false;
+    }
+    return call.offersVideo();
   }
 
   private volatile String mockTarget = null;
@@ -1376,6 +1385,7 @@ final class SipService {
     private volatile boolean videoStreamActive;
     private volatile VideoWindow activeVideoWindow;
     private volatile boolean localHangup;
+    private volatile boolean callDisconnected;
     private volatile boolean callEndedDispatched;
     private volatile int videoMediaIndex = -1;
 
@@ -1422,6 +1432,37 @@ final class SipService {
       return false;
     }
 
+    /** 来电 SDP 里是否包含视频媒体（不要求已经协商为 ACTIVE）。 */
+    synchronized boolean offersVideo() {
+      if (videoConfigured || videoStreamActive || activeVideoWindow != null) {
+        return true;
+      }
+      try {
+        CallInfo ci = getInfo();
+        if (ci.getRemVideoCount() > 0) {
+          return true;
+        }
+        // 振铃阶段 getMedia() 还没有 active 媒体，视频 offer 在 provMedia 里。
+        if (containsVideo(ci.getMedia()) || containsVideo(ci.getProvMedia())) {
+          return true;
+        }
+      } catch (Throwable ignored) {
+      }
+      return false;
+    }
+
+    private static boolean containsVideo(org.pjsip.pjsua2.CallMediaInfoVector media) {
+      if (media == null) {
+        return false;
+      }
+      for (int i = 0; i < media.size(); i++) {
+        if (media.get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     synchronized void attachVideoWindow(VideoWindow win) {
       this.activeVideoWindow = win;
       this.videoStreamActive = (win != null);
@@ -1433,19 +1474,54 @@ final class SipService {
 
     synchronized void closeVideoWindow() {
       ensureThreadRegistered();
-      if (activeVideoWindow != null) {
-        try {
-          activeVideoWindow.Show(false);
-        } catch (Throwable ignored) {
-        }
-        try {
-          activeVideoWindow.delete();
-        } catch (Throwable ignored) {
-        }
-        activeVideoWindow = null;
-      }
+      VideoWindow win = activeVideoWindow;
+      activeVideoWindow = null;
       videoStreamActive = false;
       videoMediaIndex = -1;
+      if (win == null) {
+        return;
+      }
+      boolean disconnected = callDisconnected;
+      if (!disconnected) {
+        try {
+          disconnected = getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED;
+        } catch (Throwable t) {
+          disconnected = true;
+        }
+      }
+      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port 和 vid_win。
+      // 此时 Show(false) 会以空 vp 触发 vid_port.c:728，
+      // delete() 又会以失效的 wid 触发 pjsua_vid.c:1843。
+      // 断开后只能丢弃 Java 侧包装，不能再触碰任何原生窗口接口。
+      if (disconnected) {
+        abandonVideoWindow(win);
+        return;
+      }
+      try {
+        win.Show(false);
+      } catch (Throwable ignored) {
+      }
+      try {
+        win.delete();
+      } catch (Throwable ignored) {
+      }
+    }
+
+    private static void abandonVideoWindow(VideoWindow win) {
+      if (win == null) {
+        return;
+      }
+      // 不再调用任何会查 wid / vp 的原生方法；把 SWIG 指针清零，
+      // 让 delete() 和 finalize() 都变成空操作，避免进程退出时再次断言。
+      try {
+        java.lang.reflect.Field ptr = VideoWindow.class.getDeclaredField("swigCPtr");
+        ptr.setAccessible(true);
+        ptr.setLong(win, 0L);
+        java.lang.reflect.Field own = VideoWindow.class.getDeclaredField("swigCMemOwn");
+        own.setAccessible(true);
+        own.setBoolean(win, false);
+      } catch (Throwable ignored) {
+      }
     }
 
     synchronized void setTransmitVideo(boolean transmit) {
@@ -1482,6 +1558,7 @@ final class SipService {
             events.log("通话", "通话已接通确认 (开始计时)");
           }
         } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
+          callDisconnected = true;
           boolean local = localHangup;
           synchronized (SipService.this) {
             if (activeCall == this) {

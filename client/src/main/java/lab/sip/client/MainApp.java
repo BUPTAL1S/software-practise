@@ -564,7 +564,7 @@ public final class MainApp extends Application {
     callVideo.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
     previewBtn = getPreviewBtn();
     answerVideo = new Button("接听(视频)");
-    answerVideo.getStyleClass().setAll("btn-success");
+    answerVideo.getStyleClass().setAll("btn-primary");
     answerAudio = new Button("接听(语音)");
     answerAudio.getStyleClass().setAll("btn-primary");
     hangup = new Button("挂断");
@@ -1232,6 +1232,7 @@ public final class MainApp extends Application {
     boolean on = sip.isStarted();
     boolean reg = sip.isRegistered();
     boolean incoming = sip.hasIncoming();
+    boolean incomingVideo = incoming && sip.isIncomingVideo();
     SipService.VideoDetails vd = sip.queryVideoDetails();
     boolean videoSupported = vd.supported;
     boolean hasCapture = vd.captureDevId >= 0;
@@ -1268,15 +1269,21 @@ public final class MainApp extends Application {
     callAudio.setDisable(!reg);
     callVideo.setDisable(!reg || !videoSupported);
 
+    boolean canAnswerVideo = incoming && incomingVideo && videoSupported;
     answerAudio.setDisable(!incoming);
-    answerVideo.setDisable(!incoming || !videoSupported);
+    answerAudio.setText(incomingVideo ? "仅接听语音" : "接听(语音)");
+    answerVideo.setDisable(!canAnswerVideo);
+    answerVideo.setVisible(canAnswerVideo);
+    answerVideo.setManaged(canAnswerVideo);
     incomingBox.setVisible(incoming);
     incomingBox.setManaged(incoming);
     if (incoming) {
-      if (videoSupported) {
-        incomingNotice.setText("收到来电：可选择【接听(视频)】或【接听(语音)】");
+      if (incomingVideo && videoSupported) {
+        incomingNotice.setText("收到视频来电：可接听视频，或仅接听语音");
+      } else if (incomingVideo) {
+        incomingNotice.setText("收到视频来电：本机未启用视频，请选择【接听(语音)】");
       } else {
-        incomingNotice.setText("收到来电：当前为纯音频模式，请选择【接听(语音)】");
+        incomingNotice.setText("收到语音来电：请选择【接听(语音)】");
       }
     }
 
