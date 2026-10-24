@@ -427,7 +427,7 @@ final class SipService {
       call = activeCall;
       ringing = incomingRinging;
     }
-    if (call == null) {
+    if (call == null || call.isOutgoing) {
       return false;
     }
     try {
@@ -437,6 +437,15 @@ final class SipService {
     } catch (Exception e) {
       return ringing;
     }
+  }
+
+  /** 当前来电是否带视频 offer。只在真正的 incoming call 上有效。 */
+  synchronized boolean isIncomingVideo() {
+    ClientCall call = activeCall;
+    if (call == null || call.isOutgoing) {
+      return false;
+    }
+    return call.offersVideo();
   }
 
   private volatile String mockTarget = null;
@@ -1415,6 +1424,23 @@ final class SipService {
           CallMediaInfo media = ci.getMedia().get(i);
           if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO
               && media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
+            return true;
+          }
+        }
+      } catch (Throwable ignored) {
+      }
+      return false;
+    }
+
+    /** 来电 SDP 里是否包含视频媒体（不要求已经协商为 ACTIVE）。 */
+    synchronized boolean offersVideo() {
+      if (videoConfigured || videoStreamActive || activeVideoWindow != null) {
+        return true;
+      }
+      try {
+        CallInfo ci = getInfo();
+        for (int i = 0; i < ci.getMedia().size(); i++) {
+          if (ci.getMedia().get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
             return true;
           }
         }
