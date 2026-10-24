@@ -820,6 +820,7 @@ public final class MainApp extends Application {
   private CheckBox cameraToggleBox;
   private MainViewAssembler assembler;
   private CallWindow callWindow;
+  private VideoCallWindow videoCallWindow;
   private Timeline pipLayoutTimeline;
   private boolean callPreviewErrorLogged;
   private boolean callPreviewStarted;
@@ -1815,16 +1816,7 @@ public final class MainApp extends Application {
     boolean inCall = sip.isInCall();
     boolean connected = sip.isCallConnected();
     if (!inCall || (!connected && sip.hasIncoming())) {
-      if (callWindow != null) {
-        callWindow.close();
-        callWindow = null;
-      }
-      stopPipLayout();
-      if (callPreviewStarted && sip.isPreviewActive()) {
-        sip.stopPreview();
-      }
-      callPreviewStarted = false;
-      callPreviewErrorLogged = false;
+      closeCallWindows();
       return;
     }
 
@@ -1834,50 +1826,120 @@ public final class MainApp extends Application {
     }
     boolean video = sip.isCurrentCallVideo();
     boolean cameraOn = sip.isCameraEnabled();
-    if (callWindow == null) {
-      callWindow = new CallWindow(primaryStage);
-    }
-    if (!callWindow.isShowing()) {
-      callWindow.show(
-          target,
-          video,
-          cameraOn,
-          connected,
-          () -> run(sip::hangup),
-          muted -> {
-            sip.setAudioMuted(muted);
-            if (callWindow != null) {
-              callWindow.setMuted(muted);
-            }
-          },
-          enabled -> setCallCamera(enabled));
-    } else {
-      callWindow.update(target, video, cameraOn, connected);
-    }
+    final String callTarget = target;
+    final boolean callCamera = cameraOn;
 
-    if (connected && video && cameraOn && sip.getActiveVideoWindowHandle() != 0) {
-      if (!sip.isPreviewActive()) {
-        try {
-          sip.startCallPreview();
-          callPreviewStarted = true;
-          callPreviewErrorLogged = false;
-        } catch (Exception ex) {
-          if (!callPreviewErrorLogged) {
-            callPreviewErrorLogged = true;
-            logs.append("警告", "本地小窗预览启动失败: " + ex.getMessage());
-          }
-        }
-      } else {
-        callPreviewStarted = true;
+    if (video) {
+      if (callWindow != null) {
+        callWindow.close();
+        callWindow = null;
       }
-      startPipLayout();
+      if (videoCallWindow == null) {
+        videoCallWindow = new VideoCallWindow(primaryStage);
+      }
+      if (!videoCallWindow.isShowing()) {
+        videoCallWindow.show(
+            target,
+            cameraOn,
+            connected,
+            () -> {
+              // Detach native children before PJSIP tears down the windows.
+              if (videoCallWindow != null) {
+                videoCallWindow.close();
+                videoCallWindow = null;
+              }
+              run(sip::hangup);
+            },
+            muted -> {
+              sip.setAudioMuted(muted);
+              if (videoCallWindow != null) {
+                videoCallWindow.update(callTarget, callCamera, sip.isCallConnected());
+              }
+            },
+            enabled -> setCallCamera(enabled));
+      } else {
+        videoCallWindow.update(target, cameraOn, connected);
+      }
+
+      long remote = sip.getActiveVideoWindowHandle();
+      if (connected && remote != 0) {
+        long pip = 0;
+        if (cameraOn) {
+          if (!sip.isPreviewActive()) {
+            try {
+              sip.startCallPreview();
+              callPreviewStarted = true;
+              callPreviewErrorLogged = false;
+            } catch (Exception ex) {
+              if (!callPreviewErrorLogged) {
+                callPreviewErrorLogged = true;
+                logs.append("警告", "本地小窗预览启动失败: " + ex.getMessage());
+              }
+            }
+          } else {
+            callPreviewStarted = true;
+          }
+          pip = sip.getPreviewWindowHandle();
+        } else {
+          videoCallWindow.detachPip();
+          if (callPreviewStarted && sip.isPreviewActive()) {
+            sip.stopPreview();
+          }
+          callPreviewStarted = false;
+        }
+        videoCallWindow.attachNative(remote, pip);
+        startPipLayout();
+      } else {
+        stopPipLayout();
+      }
     } else {
+      if (videoCallWindow != null) {
+        videoCallWindow.close();
+        videoCallWindow = null;
+      }
+      if (callWindow == null) {
+        callWindow = new CallWindow(primaryStage);
+      }
+      if (!callWindow.isShowing()) {
+        callWindow.show(
+            target,
+            false,
+            cameraOn,
+            connected,
+            () -> run(sip::hangup),
+            muted -> {
+              sip.setAudioMuted(muted);
+              if (callWindow != null) {
+                callWindow.setMuted(muted);
+              }
+            },
+            enabled -> setCallCamera(enabled));
+      } else {
+        callWindow.update(target, false, cameraOn, connected);
+      }
       if (callPreviewStarted && sip.isPreviewActive()) {
         sip.stopPreview();
       }
       callPreviewStarted = false;
       stopPipLayout();
     }
+  }
+
+  private void closeCallWindows() {
+    if (videoCallWindow != null) {
+      videoCallWindow.close();
+      videoCallWindow = null;
+    }
+    if (callWindow != null) {
+      callWindow.close();
+      callWindow = null;
+    }
+    stopPipLayout();
+    if (callPreviewStarted && sip.isPreviewActive()) {
+      sip.stopPreview();
+    }
+    callPreviewStarted = false;
+    callPreviewErrorLogged = false;
   }
 
   private void setCallCamera(boolean enabled) {
@@ -1898,10 +1960,13 @@ public final class MainApp extends Application {
             new KeyFrame(
                 Duration.millis(500),
                 e -> {
+                  if (videoCallWindow == null || !sip.isInCall()) {
+                    return;
+                  }
                   long remote = sip.getActiveVideoWindowHandle();
-                  long pip = sip.getPreviewWindowHandle();
-                  if (remote != 0 && pip != 0) {
-                    WindowLayout.placePip(remote, pip);
+                  long pip = sip.isPreviewActive() ? sip.getPreviewWindowHandle() : 0;
+                  if (remote != 0) {
+                    videoCallWindow.attachNative(remote, pip);
                   }
                 }));
     pipLayoutTimeline.setCycleCount(Timeline.INDEFINITE);
@@ -1912,10 +1977,6 @@ public final class MainApp extends Application {
     if (pipLayoutTimeline != null) {
       pipLayoutTimeline.stop();
       pipLayoutTimeline = null;
-    }
-    long pip = sip.getPreviewWindowHandle();
-    if (pip != 0) {
-      WindowLayout.restore(pip);
     }
   }
 
@@ -3067,6 +3128,10 @@ public final class MainApp extends Application {
 
   @Override
   public void stop() throws Exception {
+    if (videoCallWindow != null) {
+      videoCallWindow.close();
+      videoCallWindow = null;
+    }
     if (callWindow != null) {
       callWindow.close();
       callWindow = null;
