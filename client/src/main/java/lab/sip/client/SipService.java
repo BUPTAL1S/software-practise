@@ -1445,20 +1445,41 @@ final class SipService {
       if (!disconnected) {
         try {
           disconnected = getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED;
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+          disconnected = true;
         }
       }
-      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port；此时再 Show(false)
-      // 会以空 vp 调 pjmedia_vid_port_set_show，触发 vid_port.c:728 断言。
-      // 只释放 Java 侧窗口包装，不再触碰原生视频端口。
-      if (!disconnected) {
-        try {
-          win.Show(false);
-        } catch (Throwable ignored) {
-        }
+      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port 和 vid_win。
+      // 此时 Show(false) 会以空 vp 触发 vid_port.c:728，
+      // delete() 又会以失效的 wid 触发 pjsua_vid.c:1843。
+      // 断开后只能丢弃 Java 侧包装，不能再触碰任何原生窗口接口。
+      if (disconnected) {
+        abandonVideoWindow(win);
+        return;
+      }
+      try {
+        win.Show(false);
+      } catch (Throwable ignored) {
       }
       try {
         win.delete();
+      } catch (Throwable ignored) {
+      }
+    }
+
+    private static void abandonVideoWindow(VideoWindow win) {
+      if (win == null) {
+        return;
+      }
+      // 不再调用任何会查 wid / vp 的原生方法；把 SWIG 指针清零，
+      // 让 delete() 和 finalize() 都变成空操作，避免进程退出时再次断言。
+      try {
+        java.lang.reflect.Field ptr = VideoWindow.class.getDeclaredField("swigCPtr");
+        ptr.setAccessible(true);
+        ptr.setLong(win, 0L);
+        java.lang.reflect.Field own = VideoWindow.class.getDeclaredField("swigCMemOwn");
+        own.setAccessible(true);
+        own.setBoolean(win, false);
       } catch (Throwable ignored) {
       }
     }
