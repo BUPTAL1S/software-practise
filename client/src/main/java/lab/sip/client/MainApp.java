@@ -821,6 +821,8 @@ public final class MainApp extends Application {
   private MainViewAssembler assembler;
   private CallWindow callWindow;
   private VideoCallWindow videoCallWindow;
+  private IncomingCallWindow incomingCallWindow;
+  private boolean incomingAnswered;
   private Timeline pipLayoutTimeline;
   private boolean callPreviewErrorLogged;
   private boolean callPreviewStarted;
@@ -1644,6 +1646,31 @@ public final class MainApp extends Application {
     boolean hasCapture = vd.captureDevId >= 0;
 
     boolean cameraOn = sip.isCameraEnabled();
+    boolean callUiActive = sip.isInCall();
+    if (incomingBox != null) {
+      incomingBox.setVisible(false);
+      incomingBox.setManaged(false);
+    }
+    if (callVideo != null) {
+      callVideo.setVisible(!callUiActive);
+      callVideo.setManaged(!callUiActive);
+    }
+    if (callAudio != null) {
+      callAudio.setVisible(!callUiActive);
+      callAudio.setManaged(!callUiActive);
+    }
+    if (hangup != null) {
+      hangup.setVisible(!callUiActive);
+      hangup.setManaged(!callUiActive);
+    }
+    if (cameraToggleBox != null) {
+      cameraToggleBox.setVisible(!callUiActive);
+      cameraToggleBox.setManaged(!callUiActive);
+    }
+    if (previewBtn != null) {
+      previewBtn.setVisible(!callUiActive);
+      previewBtn.setManaged(!callUiActive);
+    }
     if (cameraToggleBox != null) {
       if (cameraToggleBox.isSelected() != cameraOn) {
         cameraToggleBox.setSelected(cameraOn);
@@ -1683,17 +1710,8 @@ public final class MainApp extends Application {
     answerVideo.setDisable(!canAnswerVideo);
     answerVideo.setVisible(canAnswerVideo);
     answerVideo.setManaged(canAnswerVideo);
-    incomingBox.setVisible(incoming);
-    incomingBox.setManaged(incoming);
-    if (incoming) {
-      if (incomingVideo && videoSupported) {
-        incomingNotice.setText("收到视频来电：可接听视频，或仅接听语音");
-      } else if (incomingVideo) {
-        incomingNotice.setText("收到视频来电：本机未启用视频，请选择【接听(语音)】");
-      } else {
-        incomingNotice.setText("收到语音来电：请选择【接听(语音)】");
-      }
-    }
+    incomingBox.setVisible(false);
+    incomingBox.setManaged(false);
 
     hangup.setDisable(!on && !sip.isInCall());
     boolean inRoom = sip.isInRoomCall();
@@ -1815,7 +1833,45 @@ public final class MainApp extends Application {
   private void syncCallWindow() {
     boolean inCall = sip.isInCall();
     boolean connected = sip.isCallConnected();
-    if (!inCall || (!connected && sip.hasIncoming())) {
+    boolean incoming = sip.hasIncoming();
+
+    if (!inCall) {
+      closeIncomingWindow();
+      incomingAnswered = false;
+      closeCallWindows();
+      return;
+    }
+
+    if (incoming && !connected && !incomingAnswered) {
+      if (videoCallWindow != null) {
+        videoCallWindow.close();
+        videoCallWindow = null;
+      }
+      if (callWindow != null) {
+        callWindow.close();
+        callWindow = null;
+      }
+      String incomingTarget = extractUser(sip.currentCallTarget());
+      if (incomingTarget.isBlank()) {
+        incomingTarget = "来电";
+      }
+      if (incomingCallWindow == null) {
+        incomingCallWindow = new IncomingCallWindow(primaryStage);
+      }
+      incomingCallWindow.show(
+          incomingTarget,
+          sip.isIncomingVideo(),
+          () -> answerIncoming(true),
+          () -> answerIncoming(false),
+          this::rejectIncoming);
+      return;
+    }
+
+    closeIncomingWindow();
+    if (connected) {
+      incomingAnswered = false;
+    }
+    if (!connected && sip.hasIncoming()) {
       closeCallWindows();
       return;
     }
@@ -1922,6 +1978,27 @@ public final class MainApp extends Application {
       }
       callPreviewStarted = false;
       stopPipLayout();
+    }
+  }
+
+  private void answerIncoming(boolean video) {
+    incomingAnswered = true;
+    closeIncomingWindow();
+    run(() -> sip.answer(video));
+    Platform.runLater(this::syncCallWindow);
+  }
+
+  private void rejectIncoming() {
+    incomingAnswered = false;
+    closeIncomingWindow();
+    run(sip::hangup);
+    Platform.runLater(this::syncCallWindow);
+  }
+
+  private void closeIncomingWindow() {
+    if (incomingCallWindow != null) {
+      incomingCallWindow.close();
+      incomingCallWindow = null;
     }
   }
 
