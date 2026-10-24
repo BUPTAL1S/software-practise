@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 客户端 SIP + 音视频 | [pjsip/pjproject](https://github.com/pjsip/pjproject) | **2.17**（[tag](https://github.com/pjsip/pjproject/releases/tag/2.17)） | 源码不入库；预编译放到 `native/<平台>/`（git 忽略） |
 | SIP 代理 | [kamailio/kamailio](https://github.com/kamailio/kamailio) | **5.8.3**，镜像 `ghcr.io/kamailio/kamailio-ci:5.8.3-alpine`（与 compose 一致） | `server/kamailio/` 只放我们的 cfg |
-| 房间 MCU | FreeSWITCH `mod_conference` | **1.11.3**，compose profile `mcu`，镜像 `safarov/freeswitch:1.11.3`（阶段 5 钉死版本，与 compose 一致） | `server/freeswitch/` 存放 3×3 混流与 ESL 会议配置 |
+| 房间 MCU | FreeSWITCH `mod_conference` | **1.11.3**，compose profile `mcu`，镜像 `safarov/freeswitch:1.11.3`（阶段 5 钉死版本，与 compose 一致）。会议 RTP 为 UDP `21000-21099` | `server/freeswitch/` 存放 3×3 混流与 ESL 会议配置 |
 | ESL | 原生 Java Socket 客户端（或 Netty 客户端） | 后台内置轻量原生 Socket 客户端订阅维护事件 | `admin/src/main/java/com/lab/sipim/esl/` |
 | 后台 | Spring Boot **3.3.x** + Java **17** | POM 锁定 | `admin/` |
 | UI | JavaFX（与 JDK 17 匹配的 OpenJFX） | POM 锁定 | `client/` |
