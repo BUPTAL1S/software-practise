@@ -39,6 +39,7 @@ public class MeController {
         java.util.LinkedHashMap<String, String> resp = new java.util.LinkedHashMap<>();
         resp.put("username", u.getUsername());
         resp.put("sipId", u.getSipId());
+        resp.put("role", u.getRole() == null ? "USER" : u.getRole());
         if (u.getAvatarUrl() != null) {
             resp.put("avatarUrl", u.getAvatarUrl());
         }
