@@ -14,6 +14,8 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
@@ -35,6 +37,10 @@ final class VideoCallWindow {
   private Label statusLabel;
   private Label timerLabel;
   private Label placeholder;
+  private StackPane avatarOverlay;
+  private Label avatarInitial;
+  private Label avatarHint;
+  private boolean remoteAvatarOff;
   private Button muteBtn;
   private Button cameraBtn;
   private Button hangupBtn;
@@ -91,8 +97,12 @@ final class VideoCallWindow {
       cameraBtn.setStyle(cameraOn ? normalStyle() : dangerStyle());
     }
     if (placeholder != null) {
-      placeholder.setVisible(!connected || remoteHandle == 0);
-      placeholder.setManaged(!connected || remoteHandle == 0);
+      placeholder.setVisible(!connected || (remoteHandle == 0 && !remoteAvatarOff));
+      placeholder.setManaged(!connected || (remoteHandle == 0 && !remoteAvatarOff));
+    }
+    if (avatarOverlay != null) {
+      avatarOverlay.setVisible(remoteAvatarOff);
+      avatarOverlay.setManaged(remoteAvatarOff);
     }
     if (connected) {
       startTimer();
@@ -105,7 +115,7 @@ final class VideoCallWindow {
 
   /** Reparent the PJSIP windows into this stage. Safe to call repeatedly. */
   boolean attachNative(long remote, long pip) {
-    if (stage == null || !stage.isShowing() || remote == 0) {
+    if (stage == null || !stage.isShowing() || remote == 0 || remoteAvatarOff) {
       return false;
     }
     if (!WindowLayout.isAvailable()) {
@@ -145,6 +155,29 @@ final class VideoCallWindow {
     if (pipHandle != 0) {
       WindowLayout.detach(0, pipHandle);
       pipHandle = 0;
+    }
+  }
+
+  /** Hide the remote native video and show the peer avatar instead. */
+  void setRemoteAvatarOff(boolean off, String peerName) {
+    this.remoteAvatarOff = off;
+    if (off) {
+      if (remoteHandle != 0) {
+        WindowLayout.detach(remoteHandle, 0);
+        remoteHandle = 0;
+      }
+      if (avatarInitial != null) {
+        String name = peerName == null || peerName.isBlank() ? "?" : peerName.trim();
+        avatarInitial.setText(name.substring(0, 1).toUpperCase());
+      }
+    }
+    if (avatarOverlay != null) {
+      avatarOverlay.setVisible(off);
+      avatarOverlay.setManaged(off);
+    }
+    if (placeholder != null) {
+      placeholder.setVisible(!off && (remoteHandle == 0));
+      placeholder.setManaged(!off && (remoteHandle == 0));
     }
   }
 
@@ -195,6 +228,20 @@ final class VideoCallWindow {
     placeholder = new Label("正在连接视频…");
     placeholder.setStyle("-fx-text-fill: #94A3B8; -fx-font-size: 14px;");
     videoArea.getChildren().add(placeholder);
+
+    Circle avatarCircle = new Circle(46, Color.web("#2481CC"));
+    avatarInitial = new Label("?");
+    avatarInitial.setStyle("-fx-text-fill: white; -fx-font-size: 30px; -fx-font-weight: bold;");
+    StackPane avatar = new StackPane(avatarCircle, avatarInitial);
+    avatarHint = new Label("对方已关闭摄像头");
+    avatarHint.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 13px;");
+    VBox avatarBox = new VBox(12, avatar, avatarHint);
+    avatarBox.setAlignment(Pos.CENTER);
+    avatarOverlay = new StackPane(avatarBox);
+    avatarOverlay.setStyle("-fx-background-color: #0B1220;");
+    avatarOverlay.setVisible(false);
+    avatarOverlay.setManaged(false);
+    videoArea.getChildren().add(avatarOverlay);
 
     muteBtn = new Button("静音");
     muteBtn.setStyle(normalStyle());

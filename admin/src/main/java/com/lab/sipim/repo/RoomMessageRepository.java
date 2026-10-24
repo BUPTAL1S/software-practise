@@ -9,4 +9,6 @@ public interface RoomMessageRepository extends JpaRepository<RoomMessage, Long> 
     List<RoomMessage> findByRoomUriIgnoreCaseAndIdGreaterThanOrderByIdAsc(String roomUri, Long afterId);
 
     List<RoomMessage> findByRoomUriIgnoreCaseOrderByIdAsc(String roomUri);
+
+    List<RoomMessage> findAllByOrderByIdDesc();
 }

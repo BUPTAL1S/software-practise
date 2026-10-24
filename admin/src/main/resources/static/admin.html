@@ -544,9 +544,45 @@
         </table>
       </div>
     </div>
-  </div>
 
-  <div id="toast" class="toast"></div>
+    <div class="card">
+      <div class="card-title">
+        <span>聊天室记录 (Room Messages)</span>
+        <span class="badge badge-primary" id="roomChatBadge">0 条</span>
+      </div>
+      <div class="form-inline">
+        <div class="input-group">
+          <span class="input-label">房间:</span>
+          <input type="text" id="chatRoomFilter" placeholder="如 room-101" style="width: 130px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">发送方:</span>
+          <input type="text" id="chatRoomSenderFilter" placeholder="如 1002" style="width: 100px;">
+        </div>
+        <button class="btn btn-accent btn-sm" onclick="loadRoomChatMessages()">查询聊天室记录</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+        会议室聊天由客户端通过 HTTP 写入 `room_messages`，这里展示持久化后的房间聊天记录。
+      </div>
+      <div style="overflow-x: auto; margin-top: 12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>房间</th>
+              <th>发送方</th>
+              <th>内容</th>
+              <th>文件</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="roomChatTableBody">
+            <tr><td colspan="6" class="empty-state">请先用 1001 登录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
   <script>
     if (location.protocol === 'file:') {
@@ -925,6 +961,7 @@
         document.getElementById('chatLoginBadge').innerText = '管理员 ' + me.username;
         document.getElementById('chatLoginBadge').className = 'badge badge-success';
         await loadChatMessages();
+        await loadRoomChatMessages();
       } catch (err) {
         showToast('登录失败: ' + err.message, true);
       }
@@ -981,6 +1018,55 @@
       }
     }
 
+    async function loadRoomChatMessages() {
+      if (!chatAdminToken) {
+        return;
+      }
+      const room = document.getElementById('chatRoomFilter').value.trim();
+      const sender = document.getElementById('chatRoomSenderFilter').value.trim();
+      const limit = document.getElementById('chatLimit').value;
+      const params = new URLSearchParams({limit});
+      if (room) params.set('room', room);
+      if (sender) params.set('sender', sender);
+      const tbody = document.getElementById('roomChatTableBody');
+      const badge = document.getElementById('roomChatBadge');
+      try {
+        const res = await fetch('/api/admin/room-messages?' + params.toString(), {
+          headers: {Authorization: 'Bearer ' + chatAdminToken}
+        });
+        if (res.status === 401 || res.status === 403) {
+          chatAdminToken = '';
+          sessionStorage.removeItem('chatAdminToken');
+          document.getElementById('chatLoginBadge').innerText = '未登录';
+          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">登录已过期，请重新登录</td></tr>';
+          if (badge) badge.innerText = '0 条';
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '查询失败');
+        const list = Array.isArray(data) ? data : [];
+        if (badge) badge.innerText = list.length + ' 条';
+        if (list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无聊天室记录</td></tr>';
+          return;
+        }
+        tbody.innerHTML = list.map(m => `
+          <tr>
+            <td><span class="badge badge-gray">#${m.id}</span></td>
+            <td><span class="badge badge-primary">${escapeHtml(m.room_uri || m.roomUri)}</span></td>
+            <td><span class="badge badge-gray">${escapeHtml(m.sender)}</span></td>
+            <td style="max-width: 420px; word-break: break-all;">${escapeHtml(m.content)}</td>
+            <td>${m.is_file || m.isFile ? '📎 文件' : '文字'}</td>
+            <td style="color:var(--text-muted)">${formatTime(m.created_at || m.createdAt)}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">' + escapeHtml(err.message) + '</td></tr>';
+        showToast('聊天室记录查询失败: ' + err.message, true);
+      }
+    }
+
     async function checkHealth() {
       try {
         const res = await fetch('/api/health');
@@ -1011,6 +1097,7 @@
       loadFiles();
       if (chatAdminToken) {
         loadChatMessages();
+        loadRoomChatMessages();
       }
     }
 

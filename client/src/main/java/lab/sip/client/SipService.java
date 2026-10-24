@@ -50,6 +50,13 @@ import org.pjsip.pjsua2.pjsua_call_media_status;
 
 /** PJSUA2 wrapper: REGISTER + audio and video + instant messaging. */
 final class SipService {
+  static final String VIDEO_AVATAR_OFF = "[VIDEO_AVATAR_OFF]";
+  static final String VIDEO_AVATAR_ON = "[VIDEO_AVATAR_ON]";
+
+  static boolean isVideoAvatarControl(String body) {
+    return VIDEO_AVATAR_OFF.equals(body) || VIDEO_AVATAR_ON.equals(body);
+  }
+
   interface Events {
     void log(String msg);
 
@@ -62,6 +69,8 @@ final class SipService {
     default void instantMessageReceived(String fromUri, String toUri, String body, String contentType) {}
 
     default void instantMessageStatus(String toUri, String body, int statusCode, String reason) {}
+
+    default void videoAvatarChanged(String fromUri, boolean off) {}
 
     default void callEnded(
         String callId, String caller, String calleeOrRoom, java.time.Instant startedAt, long durationSec, boolean wasConnected) {
@@ -1521,6 +1530,10 @@ final class SipService {
       String toUri = nullToEmpty(prm.getToUri());
       String body = nullToEmpty(prm.getMsgBody());
       String contentType = nullToEmpty(prm.getContentType());
+      if (isVideoAvatarControl(body)) {
+        events.videoAvatarChanged(fromUri, VIDEO_AVATAR_OFF.equals(body));
+        return;
+      }
       String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;
       events.log("消息", "收到来自 " + fromUri + " 的消息：" + logBody);
       events.instantMessageReceived(fromUri, toUri, body, contentType);
@@ -1956,6 +1969,10 @@ final class SipService {
       String toUri = nullToEmpty(prm.getToUri());
       String body = nullToEmpty(prm.getMsgBody());
       String contentType = nullToEmpty(prm.getContentType());
+      if (isVideoAvatarControl(body)) {
+        events.videoAvatarChanged(fromUri, VIDEO_AVATAR_OFF.equals(body));
+        return;
+      }
       String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;
       events.log("消息", "收到通话内来自 " + fromUri + " 的消息：" + logBody);
       events.instantMessageReceived(fromUri, toUri, body, contentType);
