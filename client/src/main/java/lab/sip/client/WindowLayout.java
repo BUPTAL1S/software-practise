@@ -4,12 +4,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Cross-platform native window helper for the local PiP window.
- *
- * <p>PJSIP renders both the remote video and the camera preview into native SDL
- * windows. JavaFX cannot place those windows directly, so a tiny JNI helper
- * positions the preview window over the remote window. If the helper is missing
- * the feature degrades gracefully and the preview stays a normal window.
+ * Cross-platform native window helper for embedding PJSIP's native remote video
+ * and camera preview windows into the single JavaFX call window.
  */
 public final class WindowLayout {
   private static volatile boolean attempted;
@@ -22,9 +18,37 @@ public final class WindowLayout {
     return loaded;
   }
 
-  /** Position {@code pip} as a small always-on-top window in the remote window's lower-right corner. */
-  public static void placePip(long remoteWindow, long pipWindow) {
-    if (remoteWindow == 0 || pipWindow == 0) {
+  /** Find a top-level window by its exact title (JavaFX stage title). */
+  public static long findWindow(String title) {
+    if (title == null || title.isBlank()) {
+      return 0;
+    }
+    ensureLoaded();
+    if (!loaded) {
+      return 0;
+    }
+    try {
+      return findWindowNative(title);
+    } catch (Throwable ignored) {
+      return 0;
+    }
+  }
+
+  /**
+   * Reparent the PJSIP remote video and preview windows into the JavaFX window,
+   * positioning them inside the video area.
+   *
+   * @param parent  JavaFX top-level native window handle
+   * @param remote  PJSIP VideoWindow native handle
+   * @param pip     PJSIP VideoPreview native handle, 0 for none
+   * @param x       video area x in the JavaFX client area
+   * @param y       video area y in the JavaFX client area
+   * @param w       video area width
+   * @param h       video area height
+   */
+  public static void attach(
+      long parent, long remote, long pip, int x, int y, int w, int h) {
+    if (parent == 0 || remote == 0 || w <= 0 || h <= 0) {
       return;
     }
     ensureLoaded();
@@ -32,22 +56,19 @@ public final class WindowLayout {
       return;
     }
     try {
-      placePipNative(remoteWindow, pipWindow);
+      attachNative(parent, remote, pip, x, y, w, h);
     } catch (Throwable ignored) {
     }
   }
 
-  /** Restore the preview window to a normal top-level window. */
-  public static void restore(long pipWindow) {
-    if (pipWindow == 0) {
-      return;
-    }
+  /** Detach PJSIP windows from the JavaFX parent before closing the call window. */
+  public static void detach(long remote, long pip) {
     ensureLoaded();
     if (!loaded) {
       return;
     }
     try {
-      restoreNative(pipWindow);
+      detachNative(remote, pip);
     } catch (Throwable ignored) {
     }
   }
@@ -65,10 +86,11 @@ public final class WindowLayout {
         lib = root.resolve("native/windows-x64/callwindow.dll");
       } else if (os.contains("mac")) {
         String arch = System.getProperty("os.arch", "").toLowerCase();
-        Path dir = root.resolve(
-            (arch.contains("aarch64") || arch.contains("arm64"))
-                ? "native/macos-arm64"
-                : "native/macos-x64");
+        Path dir =
+            root.resolve(
+                (arch.contains("aarch64") || arch.contains("arm64"))
+                    ? "native/macos-arm64"
+                    : "native/macos-x64");
         lib = dir.resolve("libcallwindow.dylib");
       } else {
         return;
@@ -83,7 +105,10 @@ public final class WindowLayout {
     }
   }
 
-  private static native void placePipNative(long remoteWindow, long pipWindow);
+  private static native long findWindowNative(String title);
 
-  private static native void restoreNative(long pipWindow);
+  private static native void attachNative(
+      long parent, long remote, long pip, int x, int y, int w, int h);
+
+  private static native void detachNative(long remote, long pip);
 }
