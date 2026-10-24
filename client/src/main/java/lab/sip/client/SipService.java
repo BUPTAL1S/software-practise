@@ -88,6 +88,9 @@ final class SipService {
   /** 最近一次创建的通话包装对象；关机时必须显式 delete，否则 finalize 会在库销毁后断言。 */
   private volatile ClientCall lastCall;
   private VideoPreview videoPreview;
+  private AudioMedia callAudioMedia;
+  private AudioMedia captureAudioMedia;
+  private volatile boolean audioMuted;
   private boolean started;
   private boolean incomingRinging;
   private int boundPort;
@@ -250,6 +253,88 @@ final class SipService {
     return activeCall != null;
   }
 
+  /** True only after the INVITE has been confirmed. */
+  public synchronized boolean isCallConnected() {
+    if (activeCall == null) {
+      return false;
+    }
+    try {
+      return activeCall.getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED;
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  public boolean isAudioMuted() {
+    return audioMuted;
+  }
+
+  public synchronized void setAudioMuted(boolean muted) {
+    this.audioMuted = muted;
+    if (callAudioMedia != null && captureAudioMedia != null) {
+      try {
+        ensureThreadRegistered();
+        if (muted) {
+          captureAudioMedia.stopTransmit(callAudioMedia);
+        } else {
+          captureAudioMedia.startTransmit(callAudioMedia);
+        }
+        events.log("通话", muted ? "麦克风已静音" : "麦克风已恢复");
+      } catch (Throwable t) {
+        events.log("警告", "切换静音失败: " + t.getMessage());
+      }
+    }
+    events.stateChanged();
+  }
+
+  /** Native handle of the remote PJSIP video window (HWND on Windows, NSWindow on macOS). */
+  public synchronized long getActiveVideoWindowHandle() {
+    if (activeCall == null) {
+      return 0;
+    }
+    try {
+      ensureThreadRegistered();
+    } catch (Throwable ignored) {
+    }
+    return nativeVideoWindowHandle(activeCall.getActiveVideoWindow());
+  }
+
+  /** Native handle of the PJSIP camera preview window. */
+  public synchronized long getPreviewWindowHandle() {
+    if (videoPreview == null) {
+      return 0;
+    }
+    try {
+      ensureThreadRegistered();
+      return nativeVideoWindowHandle(videoPreview.getVideoWindow());
+    } catch (Throwable ignored) {
+      return 0;
+    }
+  }
+
+  private static long nativeVideoWindowHandle(VideoWindow win) {
+    if (win == null) {
+      return 0;
+    }
+    VideoWindowInfo info = null;
+    try {
+      info = win.getInfo();
+      if (info == null || info.getWinHandle() == null || info.getWinHandle().getHandle() == null) {
+        return 0;
+      }
+      return info.getWinHandle().getHandle().getWindow();
+    } catch (Throwable ignored) {
+      return 0;
+    } finally {
+      if (info != null) {
+        try {
+          info.delete();
+        } catch (Throwable ignored) {
+        }
+      }
+    }
+  }
+
   public synchronized String getActiveCallRemoteUri() {
     if (activeCall != null) {
       try {
@@ -320,10 +405,19 @@ final class SipService {
   }
 
   synchronized void startPreview() throws Exception {
+    startPreviewInternal(false);
+  }
+
+  /** Start the camera preview during an active video call (local PiP). */
+  synchronized void startCallPreview() throws Exception {
+    startPreviewInternal(true);
+  }
+
+  private void startPreviewInternal(boolean allowDuringCall) throws Exception {
     if (!started || endpoint == null) {
       throw new IllegalStateException("请先启动引擎");
     }
-    if (activeCall != null) {
+    if (activeCall != null && !allowDuringCall) {
       throw new IllegalStateException("通话中不能打开独立摄像头预览，请使用通话窗口里的摄像头开关");
     }
     if (!cameraEnabled) {
@@ -1634,6 +1728,9 @@ final class SipService {
             if (activeCall == this) {
               activeCall = null;
               incomingRinging = false;
+              callAudioMedia = null;
+              captureAudioMedia = null;
+              audioMuted = false;
             }
           }
           String detail = ci.getLastStatusCode() + " " + ci.getLastReason();
@@ -1710,9 +1807,14 @@ final class SipService {
           CallMediaInfo media = mediaVec.get(i);
           if (media.getType() == pjmedia_type.PJMEDIA_TYPE_AUDIO) {
             AudioMedia audio = getAudioMedia(i);
-            endpoint.audDevManager().getCaptureDevMedia().startTransmit(audio);
+            AudioMedia capture = endpoint.audDevManager().getCaptureDevMedia();
+            callAudioMedia = audio;
+            captureAudioMedia = capture;
+            if (!audioMuted) {
+              capture.startTransmit(audio);
+            }
             audio.startTransmit(endpoint.audDevManager().getPlaybackDevMedia());
-            events.log("通话", "音频已接通");
+            events.log("通话", "音频已接通" + (audioMuted ? "（静音中）" : ""));
 
           } else if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
             if (media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
@@ -1777,6 +1879,11 @@ final class SipService {
                       vidWin.Show(true);
                     } catch (Throwable t) {
                       events.log("警告", "显示视频窗口失败: " + t.getMessage());
+                    }
+                    // 视频通话使用独立远端窗口并尽量全屏；本地 PiP 由原生窗口叠加。
+                    try {
+                      vidWin.setFullScreen(true);
+                    } catch (Throwable ignored) {
                     }
                   }
                   if (isRoom) {
