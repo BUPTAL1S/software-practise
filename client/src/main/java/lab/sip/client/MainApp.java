@@ -819,6 +819,10 @@ public final class MainApp extends Application {
   private Button loginBtn;
   private CheckBox cameraToggleBox;
   private MainViewAssembler assembler;
+  private CallWindow callWindow;
+  private Timeline pipLayoutTimeline;
+  private boolean callPreviewErrorLogged;
+  private boolean callPreviewStarted;
 
   private String campusIp = "";
 
@@ -1791,6 +1795,114 @@ public final class MainApp extends Application {
         videoBadge.getStyleClass().setAll("badge-warn");
         videoDetailLabel.setText("底层未启用 H.264；引擎已启动，等待 SIP 注册上线。");
       }
+    }
+    syncCallWindow();
+  }
+
+  private void syncCallWindow() {
+    boolean connected = sip.isCallConnected();
+    if (!connected) {
+      if (callWindow != null) {
+        callWindow.close();
+        callWindow = null;
+      }
+      stopPipLayout();
+      if (callPreviewStarted && sip.isPreviewActive()) {
+        sip.stopPreview();
+      }
+      callPreviewStarted = false;
+      callPreviewErrorLogged = false;
+      return;
+    }
+
+    String target = extractUser(sip.currentCallTarget());
+    if (target.isBlank()) {
+      target = "通话";
+    }
+    boolean video = sip.isCurrentCallVideo();
+    boolean cameraOn = sip.isCameraEnabled();
+    if (callWindow == null) {
+      callWindow = new CallWindow(primaryStage);
+    }
+    if (!callWindow.isShowing()) {
+      callWindow.show(
+          target,
+          video,
+          cameraOn,
+          true,
+          () -> run(sip::hangup),
+          muted -> {
+            sip.setAudioMuted(muted);
+            if (callWindow != null) {
+              callWindow.setMuted(muted);
+            }
+          },
+          enabled -> setCallCamera(enabled));
+    } else {
+      callWindow.update(target, video, cameraOn, true);
+    }
+
+    if (video && cameraOn && sip.getActiveVideoWindowHandle() != 0) {
+      if (!sip.isPreviewActive()) {
+        try {
+          sip.startCallPreview();
+          callPreviewStarted = true;
+          callPreviewErrorLogged = false;
+        } catch (Exception ex) {
+          if (!callPreviewErrorLogged) {
+            callPreviewErrorLogged = true;
+            logs.append("警告", "本地小窗预览启动失败: " + ex.getMessage());
+          }
+        }
+      } else {
+        callPreviewStarted = true;
+      }
+      startPipLayout();
+    } else {
+      if (callPreviewStarted && sip.isPreviewActive()) {
+        sip.stopPreview();
+      }
+      callPreviewStarted = false;
+      stopPipLayout();
+    }
+  }
+
+  private void setCallCamera(boolean enabled) {
+    if (cameraToggleBox == null) {
+      sip.setCameraEnabled(enabled);
+      return;
+    }
+    cameraToggleBox.setSelected(enabled);
+    cameraToggleBox.fire();
+  }
+
+  private void startPipLayout() {
+    if (pipLayoutTimeline != null) {
+      return;
+    }
+    pipLayoutTimeline =
+        new Timeline(
+            new KeyFrame(
+                Duration.millis(500),
+                e -> {
+                  long remote = sip.getActiveVideoWindowHandle();
+                  long pip = sip.getPreviewWindowHandle();
+                  if (remote != 0 && pip != 0) {
+                    WindowLayout.placePip(remote, pip);
+                  }
+                }));
+    pipLayoutTimeline.setCycleCount(Timeline.INDEFINITE);
+    pipLayoutTimeline.play();
+  }
+
+  private void stopPipLayout() {
+    if (pipLayoutTimeline != null) {
+      pipLayoutTimeline.stop();
+      pipLayoutTimeline = null;
+    }
+    long pip = sip.getPreviewWindowHandle();
+    if (pip != 0) {
+      WindowLayout.restore(pip);
     }
   }
 
@@ -2942,6 +3054,19 @@ public final class MainApp extends Application {
 
   @Override
   public void stop() throws Exception {
+    if (callWindow != null) {
+      callWindow.close();
+      callWindow = null;
+    }
+    stopPipLayout();
+    if (sip != null) {
+      try {
+        if (sip.isPreviewActive()) {
+          sip.stopPreview();
+        }
+      } catch (Throwable ignored) {
+      }
+    }
     if (httpFileClient != null) {
       try {
         httpFileClient.logout();
