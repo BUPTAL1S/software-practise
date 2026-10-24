@@ -667,6 +667,14 @@ final class SipService {
     return activeCall.isVideoActive();
   }
 
+  /** True if the call was offered/started as a video call, even if it was answered audio-only. */
+  synchronized boolean isCurrentCallVideoIntent() {
+    if (mockVideo != null) {
+      return mockVideo;
+    }
+    return activeCall != null && activeCall.hasVideoIntent();
+  }
+
   synchronized void closeActiveVideoWindow() {
     ensureThreadRegistered();
     if (testNativeVideoWindow != null) {
@@ -1500,6 +1508,7 @@ final class SipService {
         activeCall = incoming;
         lastCall = incoming;
         incomingRinging = true;
+        incoming.setVideoIntent(incoming.offersVideo());
       }
       String remote = "";
       String callId = "";
@@ -1565,12 +1574,15 @@ final class SipService {
     private volatile boolean callDisconnected;
     private volatile boolean callEndedDispatched;
     private volatile int videoMediaIndex = -1;
+    /** Whether the call was originally offered as video, even if answered voice-only. */
+    private volatile boolean videoIntent;
 
     ClientCall(Account acc, String dialedDst, boolean videoConfigured) {
       super(acc);
       this.isOutgoing = true;
       this.dialedDst = dialedDst != null ? dialedDst : "";
       this.videoConfigured = videoConfigured;
+      this.videoIntent = videoConfigured;
     }
 
     ClientCall(Account acc, String dialedDst) {
@@ -1586,6 +1598,17 @@ final class SipService {
 
     synchronized void setVideoConfigured(boolean video) {
       this.videoConfigured = video;
+      if (video) {
+        this.videoIntent = true;
+      }
+    }
+
+    synchronized void setVideoIntent(boolean video) {
+      this.videoIntent = video;
+    }
+
+    synchronized boolean hasVideoIntent() {
+      return videoIntent;
     }
 
     synchronized boolean isVideoActive() {
