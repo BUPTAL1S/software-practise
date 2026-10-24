@@ -528,7 +528,8 @@ public final class MainApp extends Application {
    */
   private void archiveOutgoingPrivateMessage(String toUri, String body, int code) {
     String receiver = extractUser(toUri);
-    if (receiver.isBlank() || receiver.startsWith("room-") || body == null || body.isBlank()) {
+    if (receiver.isBlank() || receiver.startsWith("room-") || body == null || body.isBlank()
+        || SipService.isVideoAvatarControl(body)) {
       return;
     }
     String status;
@@ -703,6 +704,18 @@ public final class MainApp extends Application {
             }
 
             @Override
+            public void videoAvatarChanged(String fromUri, boolean off) {
+              Platform.runLater(
+                  () -> {
+                    remoteAvatarOff = off;
+                    if (videoCallWindow != null && videoCallWindow.isShowing()) {
+                      videoCallWindow.setRemoteAvatarOff(
+                          off, extractUser(sip.currentCallTarget()));
+                    }
+                  });
+            }
+
+            @Override
             public void instantMessageStatus(
                 String toUri, String body, int statusCode, String reason) {
               archiveOutgoingPrivateMessage(toUri, body, statusCode);
@@ -823,6 +836,7 @@ public final class MainApp extends Application {
   private VideoCallWindow videoCallWindow;
   private IncomingCallWindow incomingCallWindow;
   private boolean incomingAnswered;
+  private boolean remoteAvatarOff;
   private Timeline pipLayoutTimeline;
   private boolean callPreviewErrorLogged;
   private boolean callPreviewStarted;
@@ -854,6 +868,8 @@ public final class MainApp extends Application {
                   ? "本地摄像头已开启，MCU 会议室画面已恢复实时视频"
                   : "本地摄像头已关闭，MCU 会议室画面已切换为您的个人头像");
             }
+          } else {
+            sendAvatarControl(!enabled);
           }
         }
         refreshButtons();
@@ -1916,6 +1932,7 @@ public final class MainApp extends Application {
       } else {
         videoCallWindow.update(target, cameraOn, connected);
       }
+      videoCallWindow.setRemoteAvatarOff(remoteAvatarOff, target);
 
       long remote = sip.getActiveVideoWindowHandle();
       if (connected && remote != 0) {
@@ -2003,6 +2020,7 @@ public final class MainApp extends Application {
   }
 
   private void closeCallWindows() {
+    remoteAvatarOff = false;
     if (videoCallWindow != null) {
       videoCallWindow.close();
       videoCallWindow = null;
@@ -2017,6 +2035,25 @@ public final class MainApp extends Application {
     }
     callPreviewStarted = false;
     callPreviewErrorLogged = false;
+  }
+
+  private void sendAvatarControl(boolean off) {
+    String remote = sip.getActiveCallRemoteUri();
+    String peer = extractUser(remote);
+    if (peer.isBlank() || peer.startsWith("room-") || !sip.isCurrentCallVideo()) {
+      return;
+    }
+    String body = off ? SipService.VIDEO_AVATAR_OFF : SipService.VIDEO_AVATAR_ON;
+    run(
+        () -> {
+          try {
+            sip.sendMessage(peer, domain.getText().trim(), body);
+          } catch (Exception ex) {
+            if (logs != null) {
+              logs.append("警告", "发送摄像头头像状态失败: " + ex.getMessage());
+            }
+          }
+        });
   }
 
   private void setCallCamera(boolean enabled) {
