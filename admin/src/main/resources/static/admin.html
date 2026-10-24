@@ -549,6 +549,17 @@
   <div id="toast" class="toast"></div>
 
   <script>
+    if (location.protocol === 'file:') {
+      document.body.innerHTML =
+        '<div style="max-width:760px;margin:80px auto;padding:28px;border:1px solid #334155;' +
+        'border-radius:8px;background:#1e293b;color:#f8fafc;font-family:Arial,sans-serif;line-height:1.8;">' +
+        '<h2>请通过后台地址打开管理页</h2>' +
+        '<p>不要直接双击 admin.html 文件，否则浏览器无法访问 <code>/api/login</code>。</p>' +
+        '<p>请打开：<a style="color:#60a5fa" href="http://127.0.0.1:8080/admin.html">' +
+        'http://127.0.0.1:8080/admin.html</a></p>' +
+        '</div>';
+      throw new Error('admin.html must be served over HTTP');
+    }
     let autoRefreshTimer = null;
 
     function showToast(msg, isError = false) {
