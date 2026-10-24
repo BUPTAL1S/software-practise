@@ -1896,7 +1896,8 @@ public final class MainApp extends Application {
     if (target.isBlank()) {
       target = "通话";
     }
-    boolean video = sip.isCurrentCallVideo();
+    boolean video = sip.isCurrentCallVideoIntent();
+    boolean videoActive = sip.isCurrentCallVideo();
     boolean cameraOn = sip.isCameraEnabled();
     final String callTarget = target;
     final boolean callCamera = cameraOn;
@@ -1932,10 +1933,11 @@ public final class MainApp extends Application {
       } else {
         videoCallWindow.update(target, cameraOn, connected);
       }
-      videoCallWindow.setRemoteAvatarOff(remoteAvatarOff, target);
+      boolean showAvatar = connected && (remoteAvatarOff || !videoActive);
+      videoCallWindow.setRemoteAvatarOff(showAvatar, target);
 
       long remote = sip.getActiveVideoWindowHandle();
-      if (connected && remote != 0) {
+      if (connected && !showAvatar && remote != 0) {
         long pip = 0;
         if (cameraOn) {
           if (!sip.isPreviewActive()) {
@@ -1963,6 +1965,13 @@ public final class MainApp extends Application {
         videoCallWindow.attachNative(remote, pip);
         startPipLayout();
       } else {
+        if (showAvatar) {
+          videoCallWindow.detachPip();
+          if (callPreviewStarted && sip.isPreviewActive()) {
+            sip.stopPreview();
+          }
+          callPreviewStarted = false;
+        }
         stopPipLayout();
       }
     } else {
