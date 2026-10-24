@@ -1439,12 +1439,26 @@ final class SipService {
       }
       try {
         CallInfo ci = getInfo();
-        for (int i = 0; i < ci.getMedia().size(); i++) {
-          if (ci.getMedia().get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
-            return true;
-          }
+        if (ci.getRemVideoCount() > 0) {
+          return true;
+        }
+        // 振铃阶段 getMedia() 还没有 active 媒体，视频 offer 在 provMedia 里。
+        if (containsVideo(ci.getMedia()) || containsVideo(ci.getProvMedia())) {
+          return true;
         }
       } catch (Throwable ignored) {
+      }
+      return false;
+    }
+
+    private static boolean containsVideo(org.pjsip.pjsua2.CallMediaInfoVector media) {
+      if (media == null) {
+        return false;
+      }
+      for (int i = 0; i < media.size(); i++) {
+        if (media.get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
+          return true;
+        }
       }
       return false;
     }
