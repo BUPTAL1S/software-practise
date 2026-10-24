@@ -417,6 +417,12 @@ public final class MainApp extends Application {
   private HBox inRoomBanner;
   private Label inRoomBannerLabel;
   private Button inRoomExitBtn;
+  private Label roomHintLabel;
+  /** 最近一次 refreshButtons 探测到的视频能力，避免每个单元格都去枚举一次原生设备。 */
+  private volatile boolean videoReadyForCall;
+  /** 入会失败/降级的提示要压住 hint 行一段时间，不然下一轮刷新就被覆盖了。 */
+  private volatile String roomHintNotice;
+  private volatile long roomHintNoticeUntil;
 
   private TabPane rightTabPane;
   private Tab chatTab;
@@ -1235,6 +1241,7 @@ public final class MainApp extends Application {
     boolean incomingVideo = incoming && sip.isIncomingVideo();
     SipService.VideoDetails vd = sip.queryVideoDetails();
     boolean videoSupported = vd.supported;
+    videoReadyForCall = videoSupported;
     boolean hasCapture = vd.captureDevId >= 0;
 
     boolean cameraOn = sip.isCameraEnabled();
@@ -1316,6 +1323,25 @@ public final class MainApp extends Application {
     }
     if (roomTableView != null) {
       roomTableView.refresh();
+    }
+    if (roomHintLabel != null) {
+      long now = System.currentTimeMillis();
+      if (roomHintNotice != null && now < roomHintNoticeUntil) {
+        roomHintLabel.setText(roomHintNotice);
+        roomHintLabel.setStyle(
+            "-fx-font-size: 11px; -fx-text-fill: #B42318; -fx-font-weight: bold; -fx-padding: 2 0 2 0;");
+      } else {
+        roomHintNotice = null;
+        roomHintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B; -fx-padding: 2 0 2 0;");
+        if (!on) {
+          roomHintLabel.setText("提示：引擎还没启动，点【启动引擎】并注册成功后才能加入会议。");
+        } else if (!reg) {
+          roomHintLabel.setText("提示：SIP 尚未注册成功，注册完成后才能加入会议。");
+        } else {
+          roomHintLabel.setText(
+              "提示：点【加入会议】按当前设备自动选音视频；点【视频】强制拉 3×3 混流画布；点【语音】纯音频入会。");
+        }
+      }
     }
 
     String fullSip = sip.statusText();
@@ -1786,6 +1812,8 @@ public final class MainApp extends Application {
 
     Label hintLabel = new Label("提示：房间标识由后台分配。点击【视频参会】拉起 3×3 MCU 混流画布；点击【语音参会】仅通话无视频弹窗。");
     hintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B; -fx-padding: 2 0 2 0;");
+    hintLabel.setWrapText(true);
+    roomHintLabel = hintLabel;
 
     roomTableView = new TableView<>(roomRecords);
     roomTableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
@@ -1904,6 +1932,9 @@ public final class MainApp extends Application {
         if (!row.isEmpty()) {
           HttpFileClient.RoomInfo room = row.getItem();
           boolean isCur = room != null && sip.isCurrentRoom(room.sipUri());
+          boolean ready = sip.isStarted() && sip.isRegistered() && !sip.isInCall();
+          videoItem.setDisable(!ready);
+          audioItem.setDisable(!ready);
           menu.getItems().clear();
           if (isCur) {
             menu.getItems().addAll(exitItem, selectItem, copyItem);
@@ -1951,11 +1982,19 @@ public final class MainApp extends Application {
         if (room != null && room.sipUri() != null) {
           peer.setText(room.sipUri());
           boolean useVideo = sip.isVideoCallAllowed();
-          if (sip.isStarted() && sip.isRegistered()) {
-            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
-            run(() -> sip.call(room.sipUri(), dom, useVideo));
+          String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+          String blocked = roomJoinBlocker(useVideo);
+          if (blocked != null) {
+            blockRoomJoin(blocked);
+            return;
           }
-          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
+          if (!useVideo && videoReadyForCall) {
+            noticeRoomJoin("摄像头未开启或没有可用的采集设备，本次以【语音】入会。需要画面请先打开摄像头再用【视频】入会。");
+          }
+          logs.append(
+              "操作",
+              "加入会议 " + room.sipUri() + "：" + (useVideo ? "视频入会（3×3 混流）" : "语音入会（纯音频）"));
+          run(() -> sip.call(room.sipUri(), dom, useVideo));          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
             rightTabPane.getSelectionModel().select(0);
           }
         }
@@ -1968,10 +2007,14 @@ public final class MainApp extends Application {
         HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
         if (room != null && room.sipUri() != null) {
           peer.setText(room.sipUri());
-          if (sip.isStarted() && sip.isRegistered()) {
-            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
-            run(() -> sip.call(room.sipUri(), dom, true));
+          String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+          String blocked = roomJoinBlocker(true);
+          if (blocked != null) {
+            blockRoomJoin(blocked);
+            return;
           }
+          logRoomAction("操作", "加入会议 " + room.sipUri() + "：视频入会（3×3 混流）");
+          run(() -> sip.call(room.sipUri(), dom, true));
         }
       });
 
@@ -1982,10 +2025,14 @@ public final class MainApp extends Application {
         HttpFileClient.RoomInfo room = getTableView().getItems().get(getIndex());
         if (room != null && room.sipUri() != null) {
           peer.setText(room.sipUri());
-          if (sip.isStarted() && sip.isRegistered()) {
-            String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
-            run(() -> sip.call(room.sipUri(), dom, false));
+          String dom = (domain != null && domain.getText() != null) ? domain.getText().trim() : "lab";
+          String blocked = roomJoinBlocker(false);
+          if (blocked != null) {
+            blockRoomJoin(blocked);
+            return;
           }
+          logRoomAction("操作", "加入会议 " + room.sipUri() + "：语音入会（纯音频）");
+          run(() -> sip.call(room.sipUri(), dom, false));
         }
       });
 
@@ -2022,17 +2069,23 @@ public final class MainApp extends Application {
           setGraphic(inMeetingBox);
         } else {
           boolean inAnyCall = sip.isInCall();
-          if (inAnyCall) {
-            joinMainBtn.setDisable(true);
-            joinMainBtn.setTooltip(new Tooltip("当前已在通话/会议中，请先退出当前通话"));
-            joinVideoBtn.setDisable(true);
-            joinAudioBtn.setDisable(true);
-          } else {
-            joinMainBtn.setDisable(false);
-            joinMainBtn.setTooltip(new Tooltip("一键进入研讨室并切换至聊天（智能根据设备开启音视频）"));
-            joinVideoBtn.setDisable(!sip.hasVideoSupport());
-            joinAudioBtn.setDisable(false);
-          }
+          // 注意：这里不按「引擎/注册是否就绪」禁用按钮。
+          // 禁用等于点了没反应，用户看不到任何原因；改为可点 + 点击后明确告知缺什么。
+          joinMainBtn.setDisable(inAnyCall);
+          joinMainBtn.setTooltip(new Tooltip(inAnyCall
+              ? "当前已在通话/会议中，请先退出当前通话"
+              : "一键进入研讨室并切换至聊天（当前将以"
+                  + (sip.isVideoCallAllowed() ? "视频" : "语音") + "入会）"));
+          joinVideoBtn.setDisable(inAnyCall);
+          joinVideoBtn.setTooltip(new Tooltip(inAnyCall
+              ? "当前已在通话/会议中，请先退出当前通话"
+              : (videoReadyForCall
+                  ? "发起视频呼叫接入 FreeSWITCH MCU 会议室并拉起 3×3 混流画布"
+                  : "本机未检测到可用的视频能力，点击后会提示改用语音入会")));
+          joinAudioBtn.setDisable(inAnyCall);
+          joinAudioBtn.setTooltip(new Tooltip(inAnyCall
+              ? "当前已在通话/会议中，请先退出当前通话"
+              : "发起纯音频呼叫接入会议室（不开启视频，无黑框弹出）"));
           setGraphic(defaultBox);
         }
       }
@@ -2369,6 +2422,53 @@ public final class MainApp extends Application {
 
   Button getInRoomExitBtn() {
     return inRoomExitBtn;
+  }
+
+  Label getRoomHintLabel() {
+    return roomHintLabel;
+  }
+
+  /**
+   * 入会前的前置检查。返回 null 表示可以入会，否则返回要告诉用户的原因。
+   * 之前这里是静默 return，点按钮没有任何反应，用户完全不知道缺什么。
+   */
+  private String roomJoinBlocker(boolean wantVideo) {
+    if (!sip.isStarted()) {
+      return "引擎还没启动，请先点【启动引擎】，等状态变成已注册后再入会。";
+    }
+    if (!sip.isRegistered()) {
+      return "SIP 还没注册成功（当前状态：" + sip.statusText() + "），注册完成后才能加入会议。";
+    }
+    if (sip.isInCall()) {
+      return "当前已经在通话/会议中，请先点【挂断】退出，再加入新的会议。";
+    }
+    if (wantVideo && !sip.hasVideoSupport()) {
+      return "本机没有可用的视频能力（未启用 H.264 或没有视频设备），请改用【语音】入会。";
+    }
+    return null;
+  }
+
+  /** 把「为什么现在入不了会」同时写到提示行和控制台，避免点了没反应。 */
+  private void blockRoomJoin(String reason) {
+    noticeRoomJoin("暂时无法加入会议：" + reason);
+    logRoomAction("警告", "入会被拒绝：" + reason);
+  }
+
+  private void noticeRoomJoin(String message) {
+    roomHintNotice = message;
+    roomHintNoticeUntil = System.currentTimeMillis() + 12000;
+    if (roomHintLabel != null) {
+      roomHintLabel.setText(message);
+      roomHintLabel.setStyle(
+          "-fx-font-size: 11px; -fx-text-fill: #B42318; -fx-font-weight: bold; -fx-padding: 2 0 2 0;");
+    }
+  }
+
+  /** logs 只有在 start() 之后才存在；入会按钮在单元测试里也会被直接触发。 */
+  private void logRoomAction(String category, String message) {
+    if (logs != null) {
+      logs.append(category, message);
+    }
   }
 
   public TableView<HttpFileClient.RoomInfo> getRoomTableView() {
