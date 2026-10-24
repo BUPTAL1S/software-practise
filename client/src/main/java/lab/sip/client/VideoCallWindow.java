@@ -108,6 +108,14 @@ final class VideoCallWindow {
     if (stage == null || !stage.isShowing() || remote == 0) {
       return false;
     }
+    if (!WindowLayout.isAvailable()) {
+      if (placeholder != null) {
+        placeholder.setText("本机未安装 callwindow 原生库，远端画面在独立窗口");
+        placeholder.setVisible(true);
+        placeholder.setManaged(true);
+      }
+      return false;
+    }
     long parent = WindowLayout.findWindow(stage.getTitle());
     if (parent == 0) {
       return false;
