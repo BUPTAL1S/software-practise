@@ -323,6 +323,9 @@ final class SipService {
     if (!started || endpoint == null) {
       throw new IllegalStateException("请先启动引擎");
     }
+    if (activeCall != null) {
+      throw new IllegalStateException("通话中不能打开独立摄像头预览，请使用通话窗口里的摄像头开关");
+    }
     if (!cameraEnabled) {
       throw new IllegalStateException("本地摄像头已被禁用，请先启用摄像头");
     }
@@ -1779,7 +1782,10 @@ final class SipService {
                   if (isRoom) {
                     boolean hasCap = hasCaptureDevice();
                     boolean camOn = isCameraEnabled();
-                    if (hasCap && camOn && media.getVideoCapDev() < 0) {
+                    // 会议室里必须显式启动本地视频推流。不能只看 getVideoCapDev()：
+                    // 有些 PJSIP 版本会填默认采集设备号，但实际并没有开始发送，
+                    // FreeSWITCH 就会一直用头像代替这个成员。
+                    if (hasCap && camOn) {
                       try {
                         int devId = findDefaultCaptureDev();
                         if (devId >= 0) {

@@ -1253,8 +1253,10 @@ public final class MainApp extends Application {
       cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
     }
     if (previewBtn != null) {
-      previewBtn.setDisable(!on || !videoSupported || !hasCapture || !cameraOn);
-      if (!cameraOn) {
+      previewBtn.setDisable(!on || !videoSupported || !hasCapture || !cameraOn || sip.isInCall());
+      if (sip.isInCall()) {
+        previewBtn.setText("通话中请用摄像头开关");
+      } else if (!cameraOn) {
         previewBtn.setText("摄像头已禁用");
       } else if (!hasCapture && videoSupported) {
         previewBtn.setText("无摄像头");
