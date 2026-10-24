@@ -1376,6 +1376,7 @@ final class SipService {
     private volatile boolean videoStreamActive;
     private volatile VideoWindow activeVideoWindow;
     private volatile boolean localHangup;
+    private volatile boolean callDisconnected;
     private volatile boolean callEndedDispatched;
     private volatile int videoMediaIndex = -1;
 
@@ -1433,19 +1434,33 @@ final class SipService {
 
     synchronized void closeVideoWindow() {
       ensureThreadRegistered();
-      if (activeVideoWindow != null) {
-        try {
-          activeVideoWindow.Show(false);
-        } catch (Throwable ignored) {
-        }
-        try {
-          activeVideoWindow.delete();
-        } catch (Throwable ignored) {
-        }
-        activeVideoWindow = null;
-      }
+      VideoWindow win = activeVideoWindow;
+      activeVideoWindow = null;
       videoStreamActive = false;
       videoMediaIndex = -1;
+      if (win == null) {
+        return;
+      }
+      boolean disconnected = callDisconnected;
+      if (!disconnected) {
+        try {
+          disconnected = getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED;
+        } catch (Throwable ignored) {
+        }
+      }
+      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port；此时再 Show(false)
+      // 会以空 vp 调 pjmedia_vid_port_set_show，触发 vid_port.c:728 断言。
+      // 只释放 Java 侧窗口包装，不再触碰原生视频端口。
+      if (!disconnected) {
+        try {
+          win.Show(false);
+        } catch (Throwable ignored) {
+        }
+      }
+      try {
+        win.delete();
+      } catch (Throwable ignored) {
+      }
     }
 
     synchronized void setTransmitVideo(boolean transmit) {
@@ -1482,6 +1497,7 @@ final class SipService {
             events.log("通话", "通话已接通确认 (开始计时)");
           }
         } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
+          callDisconnected = true;
           boolean local = localHangup;
           synchronized (SipService.this) {
             if (activeCall == this) {
