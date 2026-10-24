@@ -1077,12 +1077,24 @@ public final class MainApp extends Application {
                 }));
 
     callAudio.setOnAction(
-        e -> run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), false)));
+        e -> {
+          run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), false));
+          Platform.runLater(this::syncCallWindow);
+        });
     callVideo.setOnAction(
-        e -> run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), true)));
+        e -> {
+          run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), true));
+          Platform.runLater(this::syncCallWindow);
+        });
 
-    answerAudio.setOnAction(e -> run(() -> sip.answer(false)));
-    answerVideo.setOnAction(e -> run(() -> sip.answer(true)));
+    answerAudio.setOnAction(e -> {
+      run(() -> sip.answer(false));
+      Platform.runLater(this::syncCallWindow);
+    });
+    answerVideo.setOnAction(e -> {
+      run(() -> sip.answer(true));
+      Platform.runLater(this::syncCallWindow);
+    });
     hangup.setOnAction(e -> run(sip::hangup));
 
     ContextMenu previewMenu = new ContextMenu();
