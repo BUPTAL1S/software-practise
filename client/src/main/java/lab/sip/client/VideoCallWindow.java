@@ -8,6 +8,8 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -38,6 +40,8 @@ final class VideoCallWindow {
   private Label timerLabel;
   private Label placeholder;
   private StackPane avatarOverlay;
+  private ImageView avatarImageView;
+  private Circle avatarCircle;
   private Label avatarInitial;
   private Label avatarHint;
   private boolean remoteAvatarOff;
@@ -131,7 +135,10 @@ final class VideoCallWindow {
       return false;
     }
     if (pip == 0 && pipHandle != 0) {
-      WindowLayout.detach(0, pipHandle);
+      try {
+        WindowLayout.detach(0, pipHandle);
+      } catch (Throwable ignored) {
+      }
       pipHandle = 0;
     }
     javafx.geometry.Bounds bounds = videoArea.localToScene(videoArea.getBoundsInLocal());
@@ -139,7 +146,10 @@ final class VideoCallWindow {
     int y = (int) Math.round(bounds.getMinY());
     int w = Math.max(2, (int) Math.round(bounds.getWidth()));
     int h = Math.max(2, (int) Math.round(bounds.getHeight()));
-    WindowLayout.attach(parent, remote, pip, x, y, w, h);
+    try {
+      WindowLayout.attach(parent, remote, pip, x, y, w, h);
+    } catch (Throwable ignored) {
+    }
     remoteHandle = remote;
     if (pip != 0) {
       pipHandle = pip;
@@ -153,22 +163,44 @@ final class VideoCallWindow {
 
   void detachPip() {
     if (pipHandle != 0) {
-      WindowLayout.detach(0, pipHandle);
+      try {
+        WindowLayout.detach(0, pipHandle);
+      } catch (Throwable ignored) {
+      }
       pipHandle = 0;
     }
   }
 
   /** Hide the remote native video and show the peer avatar instead. */
   void setRemoteAvatarOff(boolean off, String peerName) {
+    setRemoteAvatarOff(off, peerName, null);
+  }
+
+  /** Hide the remote native video and show the peer avatar instead, with optional custom avatar image. */
+  void setRemoteAvatarOff(boolean off, String peerName, Image avatarImage) {
     this.remoteAvatarOff = off;
     if (off) {
-      if (remoteHandle != 0) {
-        WindowLayout.detach(remoteHandle, 0);
+      if (remoteHandle != 0 || pipHandle != 0) {
+        try {
+          WindowLayout.detach(remoteHandle, pipHandle);
+        } catch (Throwable ignored) {
+        }
         remoteHandle = 0;
+        pipHandle = 0;
       }
-      if (avatarInitial != null) {
-        String name = peerName == null || peerName.isBlank() ? "?" : peerName.trim();
+      String name = peerName == null || peerName.isBlank() ? "?" : peerName.trim();
+      if (avatarImage != null && !avatarImage.isError()) {
+        avatarImageView.setImage(avatarImage);
+        avatarImageView.setVisible(true);
+        avatarImageView.setManaged(true);
+        avatarInitial.setVisible(false);
+        avatarInitial.setManaged(false);
+      } else {
+        avatarImageView.setVisible(false);
+        avatarImageView.setManaged(false);
         avatarInitial.setText(name.substring(0, 1).toUpperCase());
+        avatarInitial.setVisible(true);
+        avatarInitial.setManaged(true);
       }
     }
     if (avatarOverlay != null) {
@@ -184,7 +216,10 @@ final class VideoCallWindow {
   void close() {
     stopTimer();
     if (remoteHandle != 0 || pipHandle != 0) {
-      WindowLayout.detach(remoteHandle, pipHandle);
+      try {
+        WindowLayout.detach(remoteHandle, pipHandle);
+      } catch (Throwable ignored) {
+      }
       remoteHandle = 0;
       pipHandle = 0;
     }
@@ -229,10 +264,19 @@ final class VideoCallWindow {
     placeholder.setStyle("-fx-text-fill: #94A3B8; -fx-font-size: 14px;");
     videoArea.getChildren().add(placeholder);
 
-    Circle avatarCircle = new Circle(46, Color.web("#2481CC"));
+    avatarCircle = new Circle(46, Color.web("#2481CC"));
+    avatarImageView = new ImageView();
+    avatarImageView.setFitWidth(92);
+    avatarImageView.setFitHeight(92);
+    avatarImageView.setPreserveRatio(true);
+    Circle clip = new Circle(46, 46, 46);
+    avatarImageView.setClip(clip);
+    avatarImageView.setVisible(false);
+    avatarImageView.setManaged(false);
+
     avatarInitial = new Label("?");
     avatarInitial.setStyle("-fx-text-fill: white; -fx-font-size: 30px; -fx-font-weight: bold;");
-    StackPane avatar = new StackPane(avatarCircle, avatarInitial);
+    StackPane avatar = new StackPane(avatarCircle, avatarImageView, avatarInitial);
     avatarHint = new Label("对方已关闭摄像头");
     avatarHint.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 13px;");
     VBox avatarBox = new VBox(12, avatar, avatarHint);

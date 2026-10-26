@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
@@ -584,17 +585,30 @@ public final class MainApp extends Application {
     if (httpBaseUrl == null || httpBaseUrl.isBlank()) {
       httpBaseUrl = "http://127.0.0.1:8080";
     }
+    String effective = HttpFileClient.rewriteLocalHairpinIfApplicable(httpBaseUrl);
+    boolean ready = checkMcuHealth(effective);
+    if (!ready && (effective.contains(":8080") || effective.contains(":8088"))) {
+      String alt = effective.contains(":8080") ? effective.replace(":8080", ":8088") : effective.replace(":8088", ":8080");
+      ready = checkMcuHealth(alt);
+    }
+    return ready;
+  }
+
+  private static boolean checkMcuHealth(String baseUrl) {
     try {
       java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
           .connectTimeout(java.time.Duration.ofMillis(800)).build();
       java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-          .uri(java.net.URI.create(httpBaseUrl.replaceAll("/+$", "") + "/api/health"))
+          .uri(java.net.URI.create(baseUrl.replaceAll("/+$", "") + "/api/health"))
           .timeout(java.time.Duration.ofMillis(1200))
           .GET()
           .build();
       java.net.http.HttpResponse<String> resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
-      String b = resp.body();
-      return resp.statusCode() == 200 && b != null && b.contains("\"connected\":true");
+      if (resp.statusCode() == 200) {
+        String b = resp.body();
+        return b != null && b.contains("\"connected\":true");
+      }
+      return false;
     } catch (Exception e) {
       return false;
     }
@@ -709,8 +723,9 @@ public final class MainApp extends Application {
                   () -> {
                     remoteAvatarOff = off;
                     if (videoCallWindow != null && videoCallWindow.isShowing()) {
-                      videoCallWindow.setRemoteAvatarOff(
-                          off, extractUser(sip.currentCallTarget()));
+                      String peer = extractUser(sip.currentCallTarget());
+                      Image avatarImg = assembler != null ? assembler.getContactAvatarImage(peer) : null;
+                      videoCallWindow.setRemoteAvatarOff(off, peer, avatarImg);
                     }
                   });
             }
@@ -982,7 +997,7 @@ public final class MainApp extends Application {
     callVideo.setStyle("-fx-background-color: #1f6feb; -fx-text-fill: white; -fx-font-weight: bold;");
     previewBtn = getPreviewBtn();
     answerVideo = new Button("接听(视频)");
-    answerVideo.getStyleClass().setAll("btn-primary");
+    answerVideo.getStyleClass().setAll("btn-success");
     answerAudio = new Button("接听(语音)");
     answerAudio.getStyleClass().setAll("btn-primary");
     hangup = new Button("挂断");
@@ -1146,6 +1161,15 @@ public final class MainApp extends Application {
     Label peerLabel = new Label("呼叫/聊天:");
     peerLabel.setStyle("-fx-font-weight: bold;");
 
+    Button chip1001 = new Button("1001 (测试账号 1)");
+    chip1001.setOnAction(e -> peer.setText("1001"));
+    Button chip1002 = new Button("1002 (测试账号 2)");
+    chip1002.setOnAction(e -> peer.setText("1002"));
+    Button chip1003 = new Button("1003 (测试账号 3)");
+    chip1003.setOnAction(e -> peer.setText("1003"));
+    Button chipRoom = new Button("room-101 (MCU 研讨室)");
+    chipRoom.setOnAction(e -> peer.setText("room-101"));
+
     // 来电提示横幅
     incomingNotice = new Label("收到来电");
     incomingNotice.setStyle("-fx-font-weight: bold; -fx-text-fill: #1a7f37;");
@@ -1258,7 +1282,7 @@ public final class MainApp extends Application {
             videoDetailLabel,
             httpStatusBadge,
             peer,
-            new Button[0],
+            new Button[] {chip1001, chip1002, chip1003, chipRoom},
             callVideo,
             callAudio,
             hangup,
@@ -1418,10 +1442,11 @@ public final class MainApp extends Application {
           }
 
           boolean mcuReady = probeRoomMcuReady(httpServerField != null ? httpServerField.getText().trim() : "http://127.0.0.1:8080");
+          boolean roomOnline = mcuReady || sip.isRegistered();
           if (assembler != null) {
             for (String target : allTargets) {
               if (target.startsWith("room")) {
-                assembler.updateContactStatus(target, mcuReady);
+                assembler.updateContactStatus(target, roomOnline);
               }
             }
           }
@@ -1658,11 +1683,12 @@ public final class MainApp extends Application {
     boolean incomingVideo = incoming && sip.isIncomingVideo();
     SipService.VideoDetails vd = sip.queryVideoDetails();
     boolean videoSupported = vd.supported;
-    videoReadyForCall = videoSupported;
     boolean hasCapture = vd.captureDevId >= 0;
+    videoReadyForCall = videoSupported;
 
     boolean cameraOn = sip.isCameraEnabled();
-    boolean callUiActive = sip.isInCall();
+    boolean isOneToOneCall = sip.isInCall() && !sip.isInRoomCall();
+    boolean callUiActive = isOneToOneCall;
     if (incomingBox != null) {
       incomingBox.setVisible(false);
       incomingBox.setManaged(false);
@@ -1758,25 +1784,6 @@ public final class MainApp extends Application {
     }
     if (roomTableView != null) {
       roomTableView.refresh();
-    }
-    if (roomHintLabel != null) {
-      long now = System.currentTimeMillis();
-      if (roomHintNotice != null && now < roomHintNoticeUntil) {
-        roomHintLabel.setText(roomHintNotice);
-        roomHintLabel.setStyle(
-            "-fx-font-size: 11px; -fx-text-fill: #B42318; -fx-font-weight: bold; -fx-padding: 2 0 2 0;");
-      } else {
-        roomHintNotice = null;
-        roomHintLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #64748B; -fx-padding: 2 0 2 0;");
-        if (!on) {
-          roomHintLabel.setText("提示：引擎还没启动，点【启动引擎】并注册成功后才能加入会议。");
-        } else if (!reg) {
-          roomHintLabel.setText("提示：SIP 尚未注册成功，注册完成后才能加入会议。");
-        } else {
-          roomHintLabel.setText(
-              "提示：点【加入会议】按当前设备自动选音视频；点【视频】强制拉 3×3 混流画布；点【语音】纯音频入会。");
-        }
-      }
     }
 
     String fullSip = sip.statusText();
@@ -1874,9 +1881,11 @@ public final class MainApp extends Application {
       if (incomingCallWindow == null) {
         incomingCallWindow = new IncomingCallWindow(primaryStage);
       }
+      Image avatarImg = assembler != null ? assembler.getContactAvatarImage(incomingTarget) : null;
       incomingCallWindow.show(
           incomingTarget,
           sip.isIncomingVideo(),
+          avatarImg,
           () -> answerIncoming(true),
           () -> answerIncoming(false),
           this::rejectIncoming);
@@ -1893,8 +1902,9 @@ public final class MainApp extends Application {
     }
 
     String target = extractUser(sip.currentCallTarget());
-    if (target.isBlank()) {
-      target = "通话";
+    if (target.isBlank() || target.startsWith("room-")) {
+      closeCallWindows();
+      return;
     }
     boolean video = sip.isCurrentCallVideoIntent();
     boolean videoActive = sip.isCurrentCallVideo();
@@ -1934,7 +1944,8 @@ public final class MainApp extends Application {
         videoCallWindow.update(target, cameraOn, connected);
       }
       boolean showAvatar = connected && (remoteAvatarOff || !videoActive);
-      videoCallWindow.setRemoteAvatarOff(showAvatar, target);
+      Image avatarImg = assembler != null ? assembler.getContactAvatarImage(target) : null;
+      videoCallWindow.setRemoteAvatarOff(showAvatar, target, avatarImg);
 
       long remote = sip.getActiveVideoWindowHandle();
       if (connected && !showAvatar && remote != 0) {
@@ -1956,7 +1967,6 @@ public final class MainApp extends Application {
           }
           pip = sip.getPreviewWindowHandle();
         } else {
-          videoCallWindow.detachPip();
           if (callPreviewStarted && sip.isPreviewActive()) {
             sip.stopPreview();
           }
@@ -2635,9 +2645,6 @@ public final class MainApp extends Application {
         if (!row.isEmpty()) {
           HttpFileClient.RoomInfo room = row.getItem();
           boolean isCur = room != null && sip.isCurrentRoom(room.sipUri());
-          boolean ready = sip.isStarted() && sip.isRegistered() && !sip.isInCall();
-          videoItem.setDisable(!ready);
-          audioItem.setDisable(!ready);
           menu.getItems().clear();
           if (isCur) {
             menu.getItems().addAll(exitItem, selectItem, copyItem);
@@ -2697,7 +2704,8 @@ public final class MainApp extends Application {
           logs.append(
               "操作",
               "加入会议 " + room.sipUri() + "：" + (useVideo ? "视频入会（3×3 混流）" : "语音入会（纯音频）"));
-          run(() -> sip.call(room.sipUri(), dom, useVideo));          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
+          run(() -> sip.call(room.sipUri(), dom, useVideo));
+          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
             rightTabPane.getSelectionModel().select(0);
           }
         }
@@ -2716,7 +2724,7 @@ public final class MainApp extends Application {
             blockRoomJoin(blocked);
             return;
           }
-          logRoomAction("操作", "加入会议 " + room.sipUri() + "：视频入会（3×3 混流）");
+          logs.append("操作", "发起视频会议 " + room.sipUri() + "（3×3 混流）");
           run(() -> sip.call(room.sipUri(), dom, true));
         }
       });
@@ -2734,7 +2742,7 @@ public final class MainApp extends Application {
             blockRoomJoin(blocked);
             return;
           }
-          logRoomAction("操作", "加入会议 " + room.sipUri() + "：语音入会（纯音频）");
+          logs.append("操作", "发起语音会议 " + room.sipUri() + "（纯音频）");
           run(() -> sip.call(room.sipUri(), dom, false));
         }
       });
@@ -2772,8 +2780,6 @@ public final class MainApp extends Application {
           setGraphic(inMeetingBox);
         } else {
           boolean inAnyCall = sip.isInCall();
-          // 注意：这里不按「引擎/注册是否就绪」禁用按钮。
-          // 禁用等于点了没反应，用户看不到任何原因；改为可点 + 点击后明确告知缺什么。
           joinMainBtn.setDisable(inAnyCall);
           joinMainBtn.setTooltip(new Tooltip(inAnyCall
               ? "当前已在通话/会议中，请先退出当前通话"
@@ -2799,11 +2805,6 @@ public final class MainApp extends Application {
     refreshDirectory();
   }
 
-  /**
-   * Refreshes both the room table and the left contact/room directory from the
-   * backend. The old implementation only refreshed rooms, so newly registered
-   * users never appeared in the sidebar.
-   */
   private void refreshDirectory() {
     String httpUrl = httpServerField.getText().trim();
     httpFileClient.setBaseUrl(httpUrl);
@@ -2812,8 +2813,6 @@ public final class MainApp extends Application {
               try {
                 List<HttpFileClient.UserSummary> users = httpFileClient.fetchUsers();
                 if (users.isEmpty()) {
-                  // fetchUsers() returns an empty list for both "no users" and
-                  // an expired token; try a lazy re-login once.
                   reloginHttp();
                   users = httpFileClient.fetchUsers();
                 }
@@ -2848,7 +2847,7 @@ public final class MainApp extends Application {
                     () -> {
                       if (!roomRefreshFailed) {
                         roomRefreshFailed = true;
-                        logs.append("警告", "刷新通讯录失败: " + ex.getMessage());
+                        logs.append("警告", "刷新通讯录与研讨室失败: " + ex.getMessage());
                       }
                     });
               }
@@ -3033,10 +3032,8 @@ public final class MainApp extends Application {
       statusLabel.setText(item.getStatus());
       if ("已送达".equals(item.getStatus())) {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #10B981; -fx-font-weight: bold;");
-      } else if (item.getStatus().startsWith("发送未送达") || "发送失败".equals(item.getStatus())) {
+      } else if (item.getStatus().startsWith("发送未送达")) {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #EF4444; -fx-font-weight: bold;");
-      } else if ("待送达".equals(item.getStatus())) {
-        statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #F59E0B; -fx-font-weight: bold;");
       } else {
         statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #94A3B8;");
       }
@@ -3259,14 +3256,9 @@ public final class MainApp extends Application {
       callWindow.close();
       callWindow = null;
     }
-    stopPipLayout();
-    if (sip != null) {
-      try {
-        if (sip.isPreviewActive()) {
-          sip.stopPreview();
-        }
-      } catch (Throwable ignored) {
-      }
+    if (incomingCallWindow != null) {
+      incomingCallWindow.close();
+      incomingCallWindow = null;
     }
     if (httpFileClient != null) {
       try {

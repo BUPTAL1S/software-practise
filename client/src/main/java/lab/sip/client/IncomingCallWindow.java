@@ -5,6 +5,8 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
@@ -20,6 +22,8 @@ final class IncomingCallWindow {
   private Label nameLabel;
   private Label typeLabel;
   private Label initialLabel;
+  private ImageView avatarImageView;
+  private Circle avatarCircle;
   private Button answerVideoBtn;
   private Button answerAudioBtn;
   private Button rejectBtn;
@@ -34,6 +38,7 @@ final class IncomingCallWindow {
   void show(
       String target,
       boolean video,
+      Image avatarImage,
       Runnable answerVideo,
       Runnable answerAudio,
       Runnable reject) {
@@ -43,9 +48,19 @@ final class IncomingCallWindow {
     if (stage == null) {
       build();
     }
-    nameLabel.setText(target == null || target.isBlank() ? "来电" : target);
-    if (initialLabel != null) {
-      String name = target == null || target.isBlank() ? "?" : target.trim();
+    String name = target == null || target.isBlank() ? "来电" : target.trim();
+    nameLabel.setText(name);
+    if (avatarImage != null && !avatarImage.isError()) {
+      avatarImageView.setImage(avatarImage);
+      avatarImageView.setVisible(true);
+      avatarImageView.setManaged(true);
+      initialLabel.setVisible(false);
+      initialLabel.setManaged(false);
+    } else {
+      avatarImageView.setVisible(false);
+      avatarImageView.setManaged(false);
+      initialLabel.setVisible(true);
+      initialLabel.setManaged(true);
       initialLabel.setText(name.substring(0, 1).toUpperCase());
     }
     typeLabel.setText(video ? "视频来电" : "语音来电");
@@ -80,10 +95,19 @@ final class IncomingCallWindow {
     }
     stage.setResizable(false);
 
-    Circle avatar = new Circle(46, Color.web("#2481CC"));
+    avatarCircle = new Circle(46, Color.web("#2481CC"));
+    avatarImageView = new ImageView();
+    avatarImageView.setFitWidth(92);
+    avatarImageView.setFitHeight(92);
+    avatarImageView.setPreserveRatio(true);
+    Circle clip = new Circle(46, 46, 46);
+    avatarImageView.setClip(clip);
+    avatarImageView.setVisible(false);
+    avatarImageView.setManaged(false);
+
     initialLabel = new Label("?");
     initialLabel.setStyle("-fx-text-fill: white; -fx-font-size: 30px; -fx-font-weight: bold;");
-    StackPane avatarPane = new StackPane(avatar, initialLabel);
+    StackPane avatarPane = new StackPane(avatarCircle, avatarImageView, initialLabel);
 
     nameLabel = new Label("来电");
     nameLabel.setStyle("-fx-text-fill: white; -fx-font-size: 22px; -fx-font-weight: bold;");

@@ -1,6 +1,7 @@
 package lab.sip.client;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -21,6 +22,9 @@ class CallRoomCrashReproTest {
 
   @Test
   void testCallRoom101Repro() throws Exception {
+    boolean kamailioUp = CampusLan.probeTcp("127.0.0.1");
+    assumeTrue(kamailioUp, "Kamailio 5060 not running, skip live call room crash repro test");
+
     CountDownLatch regLatch = new CountDownLatch(1);
     CountDownLatch callLatch = new CountDownLatch(1);
 
