@@ -103,12 +103,30 @@ final class CallUi {
   }
 
   static void state(Button button, String text, boolean selected) {
-    button.setText(text);
-    button.setAccessibleText(text);
-    button.setTooltip(new Tooltip(text));
-    button.pseudoClassStateChanged(PseudoClass.getPseudoClass("selected"), selected);
+    PseudoClass selectedPseudo = PseudoClass.getPseudoClass("selected");
+    boolean textChanged = !text.equals(button.getText());
+    boolean selectionChanged = button.getPseudoClassStates().contains(selectedPseudo) != selected;
+    if (!textChanged && !selectionChanged && button.getTooltip() != null) {
+      return;
+    }
+    if (textChanged) {
+      button.setText(text);
+      button.setAccessibleText(text);
+    }
+    if (button.getTooltip() == null || textChanged) {
+      button.setTooltip(new Tooltip(text));
+    }
+    if (!selectionChanged) {
+      return;
+    }
+    button.pseudoClassStateChanged(selectedPseudo, selected);
     StackPane disk = (StackPane) button.getGraphic();
-    if (disk.getChildren().size() > 1) disk.getChildren().remove(1);
+    if (disk == null) {
+      return;
+    }
+    if (disk.getChildren().size() > 1) {
+      disk.getChildren().remove(1);
+    }
     if (selected) {
       SVGPath slash = new SVGPath();
       slash.setContent("M2 2L24 24");

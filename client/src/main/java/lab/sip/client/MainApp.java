@@ -774,6 +774,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   private Label fileProgressLabel;
   private boolean roomRefreshFailed = false;
+  private Boolean lastInRoomUiState;
 
   // CDR and Stats UI elements
   private final ObservableList<HttpFileClient.CdrRecord> cdrRecords = FXCollections.observableArrayList();
@@ -1821,7 +1822,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       }
       hangup.setText("挂断");
     }
-    if (roomTableView != null) {
+    if (roomTableView != null
+        && (lastInRoomUiState == null || lastInRoomUiState != inRoom)) {
+      lastInRoomUiState = inRoom;
       roomTableView.refresh();
     }
     if (roomHintLabel != null) {
