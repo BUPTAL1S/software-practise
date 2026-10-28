@@ -92,6 +92,9 @@ final class CallUiCoordinator implements AutoCloseable {
           boolean enabled = cameraToggleBox.isSelected();
           callPreviewErrorLogged = false;
           sip.setCameraEnabled(enabled);
+          if (videoCallWindow != null) {
+            videoCallWindow.setCameraState(enabled);
+          }
           cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
           cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
           String remote = sip.isCallActive() ? sip.getActiveCallRemoteUri() : "";

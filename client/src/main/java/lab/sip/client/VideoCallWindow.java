@@ -151,6 +151,14 @@ final class VideoCallWindow {
     if (muteBtn != null) muteBtn.setDisable(busy);
   }
 
+  /** Update only the camera affordance; safe to call before the next full sync. */
+  void setCameraState(boolean enabled) {
+    this.cameraOn = enabled;
+    if (cameraBtn != null) {
+      CallUi.state(cameraBtn, enabled ? "关闭摄像头" : "开启摄像头", !enabled);
+    }
+  }
+
   void setAvatar(javafx.scene.image.Image image) {
     if (waitingAvatar != null) CallUi.photo(waitingAvatar, image);
     if (peerAvatar != null) CallUi.photo(peerAvatar, image);
