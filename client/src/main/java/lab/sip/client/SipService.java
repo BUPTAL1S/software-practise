@@ -568,17 +568,24 @@ final class SipService {
 
   private volatile String mockTarget = null;
   private volatile Boolean mockVideo = null;
+  private volatile Boolean mockVideoIntent = null;
   private volatile VideoWindow testNativeVideoWindow = null;
 
   synchronized void setMockCallStateForTest(String target, boolean isVideo) {
+    setMockCallStateForTest(target, isVideo, isVideo);
+  }
+
+  synchronized void setMockCallStateForTest(String target, boolean isVideo, boolean isVideoIntent) {
     this.mockTarget = target;
     this.mockVideo = isVideo;
+    this.mockVideoIntent = isVideoIntent;
     events.stateChanged();
   }
 
   synchronized void clearMockCallStateForTest() {
     this.mockTarget = null;
     this.mockVideo = null;
+    this.mockVideoIntent = null;
     events.stateChanged();
   }
 
@@ -669,6 +676,9 @@ final class SipService {
 
   /** True if the call was offered/started as a video call, even if it was answered audio-only. */
   synchronized boolean isCurrentCallVideoIntent() {
+    if (mockVideoIntent != null) {
+      return mockVideoIntent;
+    }
     if (mockVideo != null) {
       return mockVideo;
     }
@@ -1615,7 +1625,7 @@ final class SipService {
       if (videoStreamActive || activeVideoWindow != null) {
         return true;
       }
-      if (videoConfigured) {
+      if (connectTime == null && videoConfigured) {
         return true;
       }
       try {
@@ -1690,22 +1700,11 @@ final class SipService {
           disconnected = true;
         }
       }
-      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port 和 vid_win。
-      // 此时 Show(false) 会以空 vp 触发 vid_port.c:728，
-      // delete() 又会以失效的 wid 触发 pjsua_vid.c:1843。
-      // 断开后只能丢弃 Java 侧包装，不能再触碰任何原生窗口接口。
-      if (disconnected) {
-        abandonVideoWindow(win);
-        return;
-      }
-      try {
-        win.Show(false);
-      } catch (Throwable ignored) {
-      }
-      try {
-        win.delete();
-      } catch (Throwable ignored) {
-      }
+      // 在通话结束、切流或释放窗口时，PJSIP 底层正处于或即将进入媒体流回收阶段。
+      // 调用 win.Show(false) 会穿透到 pjsua_vid_win_set_show 解引用空指针 vp 触发 vid_port.c:728 断言 abort。
+      // delete() 又可能以失效的 wid 触发断言 abort。
+      // 严禁对关闭中的视频窗口调用 Show(false)，直接丢弃 Java 侧包装并清零 SWIG 原生指针。
+      abandonVideoWindow(win);
     }
 
     private static void abandonVideoWindow(VideoWindow win) {

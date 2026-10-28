@@ -3,16 +3,1118 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="refresh" content="0; url=/admin.html?v=20261024">
-  <title>跳转到管理控制台</title>
+  <title>Java SIP & Admin 控制台 - 统计与记录</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-           background: #0f172a; color: #f8fafc; padding: 40px; }
-    a { color: #60a5fa; }
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --accent: #10b981;
+      --accent-hover: #059669;
+      --danger: #ef4444;
+      --badge-bg: #334155;
+      --badge-text: #e2e8f0;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-title h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-title p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      padding: 8px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-accent { background: var(--accent); color: #fff; }
+    .btn-accent:hover { background: var(--accent-hover); }
+    .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-outline:hover { background: #334155; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+    .stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .stat-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.15s ease;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--primary);
+    }
+    .tab-btn.active::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--primary);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .form-inline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .input-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .input-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    input, select {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: var(--primary);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+    th {
+      background: #111827;
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+    }
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    tr:hover td {
+      background: #243248;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+    }
+    .badge-primary { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+    .badge-success { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+    .badge-gray { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.3); }
+    .empty-state {
+      text-align: center;
+      padding: 32px 16px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .text-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: var(--radius);
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+      font-size: 13px;
+      display: none;
+      z-index: 1000;
+    }
   </style>
 </head>
 <body>
-  <p>正在跳转到管理控制台…如果页面没有自动跳转，请点击 <a href="/admin.html?v=20261024">打开管理控制台</a>。</p>
-  <script>location.replace('/admin.html?v=20261024');</script>
+
+  <div class="header">
+    <div class="header-title">
+      <h1><span>📡</span> Java SIP & Admin 控制台</h1>
+      <p>Spring Boot 3.3 · SQLite · 阶段 5 房间 MCU 与 ESL 人数统计大盘</p>
+    </div>
+    <div class="header-actions">
+      <span id="syncStatus" class="badge badge-success">● 系统在线</span>
+      <span id="eslStatus" class="badge badge-gray">● ESL 监听中</span>
+      <button class="btn btn-outline btn-sm" onclick="loadAllData()">🔄 刷新数据</button>
+      <label style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+        <input type="checkbox" id="autoRefreshToggle" checked onchange="toggleAutoRefresh(this.checked)"> 自动刷新 (5s)
+      </label>
+    </div>
+  </div>
+
+  <!-- 看板指标卡片 -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">
+        <span>后台在线会话</span>
+        <span>🟢</span>
+      </div>
+      <div class="stat-value" id="statOnlineUsers">0</div>
+      <div class="stat-desc" id="statOnlineUsersDesc">持有活跃 HTTP Token</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">
+        <span>总通话次数</span>
+        <span>📞</span>
+      </div>
+      <div class="stat-value" id="statTotalCalls">0</div>
+      <div class="stat-desc">系统累计已上报有效 CDR</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">
+        <span>累计通话时长</span>
+        <span>⏱️</span>
+      </div>
+      <div class="stat-value" id="statTotalDuration">0s</div>
+      <div class="stat-desc" id="statTotalDurationDesc">0 分 0 秒</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">
+        <span>平均单次通话时长</span>
+        <span>⏳</span>
+      </div>
+      <div class="stat-value" id="statAvgDuration">0.0s</div>
+      <div class="stat-desc">按总有效通话均衡计算</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">
+        <span>房间最高并发峰值</span>
+        <span>👥</span>
+      </div>
+      <div class="stat-value" id="statPeakRoomMembers">0</div>
+      <div class="stat-desc">扫描线区间重叠计算</div>
+    </div>
+  </div>
+
+  <!-- 选项卡切换 -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('tab-cdr')">📞 通话记录 (CDR)</button>
+    <button class="tab-btn" onclick="switchTab('tab-rooms')">👥 会议房间 (Rooms)</button>
+    <button class="tab-btn" onclick="switchTab('tab-users')">👤 用户列表 (Users)</button>
+    <button class="tab-btn" onclick="switchTab('tab-files')">📁 文件记录 (Files)</button>
+    <button class="tab-btn" onclick="switchTab('tab-chat')">💬 聊天记录 (仅 1001)</button>
+  </div>
+
+  <!-- Tab 1: 通话记录 -->
+  <div id="tab-cdr" class="tab-content active">
+    <div class="card">
+      <div class="card-title">
+        <span>通话话单列表 (CDR)</span>
+        <span class="badge badge-primary" id="cdrCountBadge">0 条</span>
+      </div>
+      <div class="form-inline">
+        <div class="input-group">
+          <span class="input-label">主叫:</span>
+          <input type="text" id="filterCaller" placeholder="如 1001" style="width: 100px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">被叫/房间:</span>
+          <input type="text" id="filterCallee" placeholder="如 1002 或 room-101" style="width: 140px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">限制:</span>
+          <select id="filterLimit">
+            <option value="50">50 条</option>
+            <option value="100" selected>100 条</option>
+            <option value="200">200 条</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="loadCdrList()">查询筛选</button>
+        <button class="btn btn-outline btn-sm" onclick="resetCdrFilter()">重置</button>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>SIP Call-ID</th>
+              <th>主叫 (Caller)</th>
+              <th>被叫 / 房间 (Callee / Room)</th>
+              <th>开始时间</th>
+              <th>通话时长</th>
+            </tr>
+          </thead>
+          <tbody id="cdrTableBody">
+            <tr><td colspan="6" class="empty-state">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: 会议房间 -->
+  <div id="tab-rooms" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>新建研讨/会议房间</span>
+      </div>
+      <form class="form-inline" onsubmit="handleCreateRoom(event)">
+        <div class="input-group">
+          <span class="input-label">房间名称:</span>
+          <input type="text" id="roomNameInput" placeholder="如 研发周会室" required>
+        </div>
+        <div class="input-group">
+          <span class="input-label">最大容纳人数:</span>
+          <input type="number" id="roomMaxMembersInput" value="8" min="2" max="16" style="width: 80px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">自定义 URI (可选):</span>
+          <input type="text" id="roomSipUriInput" placeholder="留空自动分配 room-<id>">
+        </div>
+        <button type="submit" class="btn btn-accent btn-sm">➕ 创建房间</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>房间清单</span>
+        <span class="badge badge-primary" id="roomCountBadge">0 间</span>
+      </div>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>房间名称</th>
+              <th>SIP URI</th>
+              <th>最大人数限制</th>
+              <th>当前在会</th>
+              <th>呼叫提示 / 操作</th>
+            </tr>
+          </thead>
+          <tbody id="roomsTableBody">
+            <tr><td colspan="6" class="empty-state">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 3: 用户列表 -->
+  <div id="tab-users" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>快速注册 / 添加用户</span>
+      </div>
+      <form class="form-inline" onsubmit="handleRegisterUser(event)">
+        <div class="input-group">
+          <span class="input-label">用户名:</span>
+          <input type="text" id="regUsername" placeholder="如 1009" required style="width: 110px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">登录密码:</span>
+          <input type="password" id="regPassword" placeholder="密码" required style="width: 110px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">SIP 标识 (可选):</span>
+          <input type="text" id="regSipId" placeholder="默认与用户名相同" style="width: 140px;">
+        </div>
+        <button type="submit" class="btn btn-accent btn-sm">👤 注册用户</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>已注册用户 (Users)</span>
+        <span class="badge badge-primary" id="userCountBadge">0 人</span>
+      </div>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>用户 ID</th>
+              <th>用户名</th>
+              <th>SIP 分机号 (sip_id)</th>
+              <th>后台会话状态</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody">
+            <tr><td colspan="4" class="empty-state">加载中...</td></tr>
+          </tbody>
+        </table>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">注：此处显示 HTTP 业务管理后台会话状态（2小时无操作自动过期）；SIP 语音与视频通话信令在线状态请以客户端 Kamailio 注册为准。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 4: 文件传输记录 -->
+  <div id="tab-files" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>文件传输索引 (Files)</span>
+        <span class="badge badge-primary" id="fileCountBadge">0 个</span>
+      </div>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>文件 ID</th>
+              <th>原始文件名</th>
+              <th>大小</th>
+              <th>发送方 (From)</th>
+              <th>接收方 / 目标 (To)</th>
+              <th>上传时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="filesTableBody">
+            <tr><td colspan="7" class="empty-state">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 5: 私聊记录（仅管理员 1001） -->
+  <div id="tab-chat" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>私聊记录查询（仅管理员 1001 可见）</span>
+        <span class="badge badge-primary" id="chatLoginBadge">未登录</span>
+      </div>
+      <div class="form-inline">
+        <div class="input-group">
+          <span class="input-label">管理员账号:</span>
+          <input type="text" id="chatAdminUser" value="1001" style="width: 90px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">密码:</span>
+          <input type="password" id="chatAdminPass" placeholder="1001" style="width: 110px;">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="chatAdminLogin()">登录并查询</button>
+      </div>
+      <div class="form-inline" style="margin-top: 8px;">
+        <div class="input-group">
+          <span class="input-label">用户过滤:</span>
+          <input type="text" id="chatUserFilter" placeholder="如 1002" style="width: 100px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">对方过滤:</span>
+          <input type="text" id="chatPeerFilter" placeholder="如 1003" style="width: 100px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">限制:</span>
+          <select id="chatLimit">
+            <option value="100">100 条</option>
+            <option value="200" selected>200 条</option>
+            <option value="500">500 条</option>
+          </select>
+        </div>
+        <button class="btn btn-accent btn-sm" onclick="loadChatMessages()">查询聊天记录</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+        私聊消息由客户端在 SIP 送达后写入后台；对方离线时状态为 PENDING，对方重新上线后通过 HTTP 拉取并标记 DELIVERED。
+      </div>
+      <div style="overflow-x: auto; margin-top: 12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>发送方</th>
+              <th>接收方</th>
+              <th>内容</th>
+              <th>文件</th>
+              <th>状态</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="chatTableBody">
+            <tr><td colspan="7" class="empty-state">请先用 1001 登录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>聊天室记录 (Room Messages)</span>
+        <span class="badge badge-primary" id="roomChatBadge">0 条</span>
+      </div>
+      <div class="form-inline">
+        <div class="input-group">
+          <span class="input-label">房间:</span>
+          <input type="text" id="chatRoomFilter" placeholder="如 room-101" style="width: 130px;">
+        </div>
+        <div class="input-group">
+          <span class="input-label">发送方:</span>
+          <input type="text" id="chatRoomSenderFilter" placeholder="如 1002" style="width: 100px;">
+        </div>
+        <button class="btn btn-accent btn-sm" onclick="loadRoomChatMessages()">查询聊天室记录</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+        会议室聊天由客户端通过 HTTP 写入 `room_messages`，这里展示持久化后的房间聊天记录。
+      </div>
+      <div style="overflow-x: auto; margin-top: 12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>房间</th>
+              <th>发送方</th>
+              <th>内容</th>
+              <th>文件</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="roomChatTableBody">
+            <tr><td colspan="6" class="empty-state">请先用 1001 登录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (location.protocol === 'file:') {
+      document.body.innerHTML =
+        '<div style="max-width:760px;margin:80px auto;padding:28px;border:1px solid #334155;' +
+        'border-radius:8px;background:#1e293b;color:#f8fafc;font-family:Arial,sans-serif;line-height:1.8;">' +
+        '<h2>请通过后台地址打开管理页</h2>' +
+        '<p>不要直接双击 admin.html 文件，否则浏览器无法访问 <code>/api/login</code>。</p>' +
+        '<p>请打开：<a style="color:#60a5fa" href="http://127.0.0.1:8080/admin.html">' +
+        'http://127.0.0.1:8080/admin.html</a></p>' +
+        '</div>';
+      throw new Error('admin.html must be served over HTTP');
+    }
+    let autoRefreshTimer = null;
+
+    function showToast(msg, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.style.borderColor = isError ? '#ef4444' : '#10b981';
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 2600);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('已复制: ' + text);
+        }).catch(() => {
+          showToast('已复制: ' + text);
+        });
+      } else {
+        showToast('已复制: ' + text);
+      }
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    function formatDuration(sec) {
+      if (!sec || sec <= 0) return '0s';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      if (m > 0) return `${m}分 ${s}秒 (${sec}s)`;
+      return `${sec}s`;
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatTime(isoStr) {
+      if (!isoStr) return '-';
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleString('zh-CN', { hour12: false });
+      } catch (e) {
+        return isoStr;
+      }
+    }
+
+    function getFileIcon(filename) {
+      if (!filename) return '📄';
+      const parts = filename.split('.');
+      if (parts.length < 2) return '📄';
+      const ext = parts.pop().toLowerCase();
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return '🖼️';
+      if (['mp3', 'wav', 'aac', 'ogg', 'm4a'].includes(ext)) return '🎵';
+      if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) return '🎬';
+      if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return '📦';
+      if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) return '📑';
+      return '📄';
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/cdr/stats');
+        if (!res.ok) throw new Error('拉取统计失败');
+        const data = await res.json();
+        document.getElementById('statTotalCalls').innerText = data.totalCalls ?? 0;
+        const totalSec = data.totalDurationSec ?? 0;
+        document.getElementById('statTotalDuration').innerText = totalSec + 's';
+        const mins = Math.floor(totalSec / 60);
+        const remSec = totalSec % 60;
+        document.getElementById('statTotalDurationDesc').innerText = `${mins} 分 ${remSec} 秒`;
+        document.getElementById('statAvgDuration').innerText = (data.averageDurationSec ?? 0) + 's';
+        document.getElementById('statPeakRoomMembers').innerText = data.peakRoomMembers ?? 0;
+      } catch (err) {
+        console.error('Stats error:', err);
+      }
+    }
+
+    async function loadCdrList() {
+      const caller = document.getElementById('filterCaller').value.trim();
+      const callee = document.getElementById('filterCallee').value.trim();
+      const limit = document.getElementById('filterLimit').value;
+
+      let url = `/api/cdr?limit=${limit}`;
+      if (caller) url += `&caller=${encodeURIComponent(caller)}`;
+      if (callee) url += `&callee=${encodeURIComponent(callee)}`;
+
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('拉取 CDR 失败');
+        const list = await res.json();
+
+        let totalDuration = 0;
+        for (const c of list) {
+          totalDuration += (c.duration_sec ?? c.durationSec ?? 0);
+        }
+        document.getElementById('cdrCountBadge').innerText = `${list.length} 条 · 累计 ${formatDuration(totalDuration)}`;
+
+        const tbody = document.getElementById('cdrTableBody');
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">暂无通话记录</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = list.map(c => `
+          <tr>
+            <td><span class="badge badge-gray">#${c.id}</span></td>
+            <td><span class="text-mono">${c.call_id || c.callId || '<span style="color:var(--text-muted)">-</span>'}</span></td>
+            <td><strong style="cursor:pointer; text-decoration:underline;" title="点击按此主叫筛选" onclick="quickFilterCaller('${c.caller}')">${c.caller}</strong></td>
+            <td><span class="badge ${c.callee_or_room && c.callee_or_room.startsWith('room') ? 'badge-primary' : 'badge-gray'}" style="cursor:pointer;" title="点击按此被叫筛选" onclick="quickFilterCallee('${c.callee_or_room}')">${c.callee_or_room}</span></td>
+            <td style="color:var(--text-muted)">${formatTime(c.started_at || c.startedAt)}</td>
+            <td><span class="badge badge-success">${formatDuration(c.duration_sec ?? c.durationSec)}</span></td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('CDR error:', err);
+      }
+    }
+
+    function quickFilterCaller(val) {
+      document.getElementById('filterCaller').value = val;
+      loadCdrList();
+    }
+
+    function quickFilterCallee(val) {
+      document.getElementById('filterCallee').value = val;
+      loadCdrList();
+    }
+
+    function resetCdrFilter() {
+      document.getElementById('filterCaller').value = '';
+      document.getElementById('filterCallee').value = '';
+      document.getElementById('filterLimit').value = '100';
+      loadCdrList();
+    }
+
+    async function loadRooms() {
+      try {
+        const res = await fetch('/api/rooms');
+        if (!res.ok) throw new Error('拉取房间失败');
+        const list = await res.json();
+        document.getElementById('roomCountBadge').innerText = `${list.length} 间`;
+
+        const tbody = document.getElementById('roomsTableBody');
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">暂无房间</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = list.map(r => `
+          <tr>
+            <td><span class="badge badge-gray">#${r.id}</span></td>
+            <td><strong>${r.name}</strong></td>
+            <td><span class="badge badge-primary text-mono">${r.sip_uri || r.sipUri}</span></td>
+            <td>${r.max_members || r.maxMembers} 人</td>
+            <td><span class="badge ${r.member_count > 0 ? 'badge-primary' : 'badge-gray'}">${r.member_count ?? r.memberCount ?? 0} 人 (当前在会)</span></td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="copyText('${r.sip_uri || r.sipUri}')">复制 URI</button>
+              <span style="color:var(--text-muted); margin-left: 6px; font-size: 12px;">客户端输入 <code>${r.sip_uri || r.sipUri}</code> 呼叫</span>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Rooms error:', err);
+      }
+    }
+
+    async function handleCreateRoom(e) {
+      e.preventDefault();
+      const name = document.getElementById('roomNameInput').value.trim();
+      const maxMembers = parseInt(document.getElementById('roomMaxMembersInput').value) || 8;
+      const sipUri = document.getElementById('roomSipUriInput').value.trim();
+
+      const payload = { name, max_members: maxMembers };
+      if (sipUri) payload.sip_uri = sipUri;
+
+      try {
+        const res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(data.error || '创建房间失败', true);
+          return;
+        }
+        showToast(`房间创建成功: ${data.name} (${data.sip_uri})`);
+        document.getElementById('roomNameInput').value = '';
+        document.getElementById('roomSipUriInput').value = '';
+        loadRooms();
+      } catch (err) {
+        showToast('请求异常: ' + err.message, true);
+      }
+    }
+
+    async function loadOnlineUsers() {
+      try {
+        const res = await fetch('/api/users/online');
+        if (!res.ok) throw new Error('拉取在线用户失败: ' + res.status);
+        const data = await res.json();
+        const names = Array.isArray(data.users) ? data.users : [];
+        const count = data.count ?? names.length;
+        const countEl = document.getElementById('statOnlineUsers');
+        if (countEl) countEl.innerText = count;
+        const descEl = document.getElementById('statOnlineUsersDesc');
+        if (descEl) {
+          descEl.innerText = names.length > 0
+            ? ('活跃: ' + names.join('、'))
+            : '暂无活跃会话 (未登录或已超时)';
+        }
+        return new Set(names);
+      } catch (err) {
+        console.error('Online users error:', err);
+        const countEl = document.getElementById('statOnlineUsers');
+        if (countEl && countEl.innerText === '0') countEl.innerText = '--';
+        const descEl = document.getElementById('statOnlineUsersDesc');
+        if (descEl) descEl.innerText = '拉取在线状态失败，稍后重试';
+        return new Set();
+      }
+    }
+
+    async function loadUsers() {
+      try {
+        const res = await fetch('/api/users');
+        if (!res.ok) throw new Error('拉取用户失败');
+        const list = await res.json();
+        const onlineSet = await loadOnlineUsers();
+        document.getElementById('userCountBadge').innerText = `${list.length} 人`;
+
+        const tbody = document.getElementById('usersTableBody');
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="4" class="empty-state">暂无用户</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = list.map(u => {
+          const isOnline = onlineSet.has(u.username) || onlineSet.has(u.sipId);
+          return `
+          <tr>
+            <td><span class="badge badge-gray">#${u.id}</span></td>
+            <td><strong>${u.username}</strong></td>
+            <td><span class="badge badge-primary text-mono">${u.sipId || u.sip_id || u.username}</span></td>
+            <td><span class="badge ${isOnline ? 'badge-success' : 'badge-gray'}" title="${isOnline ? '持有有效后台会话 (2小时自动过期)' : '未登录后台或会话已超时'}">${isOnline ? '后台已登录' : '未登录后台'}</span></td>
+          </tr>
+        `;
+        }).join('');
+      } catch (err) {
+        console.error('Users error:', err);
+      }
+    }
+
+    async function handleRegisterUser(e) {
+      e.preventDefault();
+      const username = document.getElementById('regUsername').value.trim();
+      const password = document.getElementById('regPassword').value.trim();
+      const sipId = document.getElementById('regSipId').value.trim();
+
+      const payload = { username, password };
+      if (sipId) payload.sip_id = sipId;
+
+      try {
+        const res = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(data.error || '注册用户失败', true);
+          return;
+        }
+        showToast(`用户 ${data.username} 注册成功!`);
+        document.getElementById('regUsername').value = '';
+        document.getElementById('regPassword').value = '';
+        document.getElementById('regSipId').value = '';
+        loadUsers();
+      } catch (err) {
+        showToast('请求异常: ' + err.message, true);
+      }
+    }
+
+    async function loadFiles() {
+      try {
+        const res = await fetch('/api/files');
+        if (!res.ok) throw new Error('拉取文件失败');
+        const list = await res.json();
+        document.getElementById('fileCountBadge').innerText = `${list.length} 个`;
+
+        const tbody = document.getElementById('filesTableBody');
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="7" class="empty-state">暂无文件记录</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = list.map(f => `
+          <tr>
+            <td><span class="badge badge-gray">#${f.id}</span></td>
+            <td><span>${getFileIcon(f.name)}</span> <strong>${f.name}</strong></td>
+            <td style="color:var(--text-muted)">${formatBytes(f.size)}</td>
+            <td><span class="badge badge-gray">${f.from}</span></td>
+            <td><span class="badge badge-primary">${f.to}</span></td>
+            <td style="color:var(--text-muted)">${formatTime(f.created_at || f.createdAt)}</td>
+            <td>
+              <a href="${f.url}" download="${f.name}" class="btn btn-outline btn-sm" style="text-decoration:none;">⬇️ 下载</a>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Files error:', err);
+      }
+    }
+
+    let chatAdminToken = sessionStorage.getItem('chatAdminToken') || '';
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function chatStatusBadge(status) {
+      const s = String(status || '').toUpperCase();
+      if (s === 'DELIVERED') return '<span class="badge badge-success">DELIVERED</span>';
+      if (s === 'FAILED') return '<span class="badge" style="background:#7f1d1d;color:#fecaca;">FAILED</span>';
+      return '<span class="badge" style="background:#78350f;color:#fde68a;">PENDING</span>';
+    }
+
+    async function chatAdminLogin() {
+      const username = document.getElementById('chatAdminUser').value.trim();
+      const password = document.getElementById('chatAdminPass').value;
+      if (!username || !password) {
+        showToast('请输入 1001 的账号和密码', true);
+        return;
+      }
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({username, password})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '登录失败');
+        chatAdminToken = data.token || '';
+        const meRes = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + chatAdminToken}});
+        const me = await meRes.json();
+        if (!meRes.ok || String(me.role || '').toUpperCase() !== 'ADMIN') {
+          chatAdminToken = '';
+          sessionStorage.removeItem('chatAdminToken');
+          document.getElementById('chatLoginBadge').innerText = '无权限';
+          showToast('只有管理员 1001 可以查看聊天记录', true);
+          return;
+        }
+        sessionStorage.setItem('chatAdminToken', chatAdminToken);
+        document.getElementById('chatLoginBadge').innerText = '管理员 ' + me.username;
+        document.getElementById('chatLoginBadge').className = 'badge badge-success';
+        await loadChatMessages();
+        await loadRoomChatMessages();
+      } catch (err) {
+        showToast('登录失败: ' + err.message, true);
+      }
+    }
+
+    async function loadChatMessages() {
+      if (!chatAdminToken) {
+        showToast('请先用 1001 登录', true);
+        return;
+      }
+      const user = document.getElementById('chatUserFilter').value.trim();
+      const peer = document.getElementById('chatPeerFilter').value.trim();
+      const limit = document.getElementById('chatLimit').value;
+      const params = new URLSearchParams({limit});
+      if (user) params.set('user', user);
+      if (peer) params.set('peer', peer);
+      const tbody = document.getElementById('chatTableBody');
+      try {
+        const res = await fetch('/api/admin/messages?' + params.toString(), {
+          headers: {Authorization: 'Bearer ' + chatAdminToken}
+        });
+        if (res.status === 401 || res.status === 403) {
+          chatAdminToken = '';
+          sessionStorage.removeItem('chatAdminToken');
+          document.getElementById('chatLoginBadge').innerText = '未登录';
+          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          const message = res.status === 401
+            ? '登录已过期，请重新用 1001 登录'
+            : '只有管理员 1001 可以查看聊天记录';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">' + message + '</td></tr>';
+          showToast(message, true);
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '查询失败');
+        if (!Array.isArray(data) || data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无聊天记录</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(m => `
+          <tr>
+            <td><span class="badge badge-gray">#${m.id}</span></td>
+            <td><span class="badge badge-gray">${escapeHtml(m.sender)}</span></td>
+            <td><span class="badge badge-primary">${escapeHtml(m.receiver)}</span></td>
+            <td style="max-width: 420px; word-break: break-all;">${escapeHtml(m.content)}</td>
+            <td>${m.is_file || m.isFile ? '📎 文件' : '文字'}</td>
+            <td>${chatStatusBadge(m.status)}</td>
+            <td style="color:var(--text-muted)">${formatTime(m.created_at || m.createdAt)}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">' + escapeHtml(err.message) + '</td></tr>';
+        showToast('查询失败: ' + err.message, true);
+      }
+    }
+
+    async function loadRoomChatMessages() {
+      if (!chatAdminToken) {
+        return;
+      }
+      const room = document.getElementById('chatRoomFilter').value.trim();
+      const sender = document.getElementById('chatRoomSenderFilter').value.trim();
+      const limit = document.getElementById('chatLimit').value;
+      const params = new URLSearchParams({limit});
+      if (room) params.set('room', room);
+      if (sender) params.set('sender', sender);
+      const tbody = document.getElementById('roomChatTableBody');
+      const badge = document.getElementById('roomChatBadge');
+      try {
+        const res = await fetch('/api/admin/room-messages?' + params.toString(), {
+          headers: {Authorization: 'Bearer ' + chatAdminToken}
+        });
+        if (res.status === 401 || res.status === 403) {
+          chatAdminToken = '';
+          sessionStorage.removeItem('chatAdminToken');
+          document.getElementById('chatLoginBadge').innerText = '未登录';
+          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">登录已过期，请重新登录</td></tr>';
+          if (badge) badge.innerText = '0 条';
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '查询失败');
+        const list = Array.isArray(data) ? data : [];
+        if (badge) badge.innerText = list.length + ' 条';
+        if (list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无聊天室记录</td></tr>';
+          return;
+        }
+        tbody.innerHTML = list.map(m => `
+          <tr>
+            <td><span class="badge badge-gray">#${m.id}</span></td>
+            <td><span class="badge badge-primary">${escapeHtml(m.room_uri || m.roomUri)}</span></td>
+            <td><span class="badge badge-gray">${escapeHtml(m.sender)}</span></td>
+            <td style="max-width: 420px; word-break: break-all;">${escapeHtml(m.content)}</td>
+            <td>${m.is_file || m.isFile ? '📎 文件' : '文字'}</td>
+            <td style="color:var(--text-muted)">${formatTime(m.created_at || m.createdAt)}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">' + escapeHtml(err.message) + '</td></tr>';
+        showToast('聊天室记录查询失败: ' + err.message, true);
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const d = await res.json();
+          const esl = d.esl;
+          const eslBadge = document.getElementById('eslStatus');
+          if (eslBadge && esl) {
+            if (esl.connected) {
+              eslBadge.className = 'badge badge-success';
+              eslBadge.innerText = '● FreeSWITCH ESL 在线';
+            } else {
+              eslBadge.className = 'badge badge-gray';
+              eslBadge.innerText = '● ESL 监听中 (' + esl.target + ')';
+            }
+          }
+        }
+      } catch (err) {
+      }
+    }
+
+    function loadAllData() {
+      checkHealth();
+      loadStats();
+      loadCdrList();
+      loadRooms();
+      loadUsers();
+      loadFiles();
+      if (chatAdminToken) {
+        loadChatMessages();
+        loadRoomChatMessages();
+      }
+    }
+
+    function toggleAutoRefresh(enable) {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+      if (enable) {
+        autoRefreshTimer = setInterval(loadAllData, 5000);
+      }
+    }
+
+    window.onload = function() {
+      loadAllData();
+      toggleAutoRefresh(true);
+    };
+  </script>
 </body>
 </html>

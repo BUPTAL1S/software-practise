@@ -4,9 +4,15 @@
 
 static NSWindow *as_window(jlong handle) {
     if (handle == 0) return nil;
-    id object = (__bridge id)(void *)(intptr_t)handle;
-    if ([object isKindOfClass:[NSWindow class]]) return (NSWindow *)object;
-    if ([object isKindOfClass:[NSView class]]) return [(NSView *)object window];
+    void *ptr = (void *)(intptr_t)handle;
+    for (NSWindow *window in [NSApp windows]) {
+        if ((__bridge void *)window == ptr) {
+            return window;
+        }
+        if ([window contentView] && (__bridge void *)[window contentView] == ptr) {
+            return window;
+        }
+    }
     return nil;
 }
 
@@ -49,7 +55,9 @@ Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
     CGFloat contentH = contentOnScreen.size.height;
 
     [remote setStyleMask:NSWindowStyleMaskBorderless];
-    [parent addChildWindow:remote ordered:NSWindowAbove];
+    if ([remote parentWindow] != parent) {
+        [parent addChildWindow:remote ordered:NSWindowAbove];
+    }
     [remote setFrame:NSMakeRect(baseX + x, baseY + contentH - y - h, w, h) display:YES];
     [remote orderFront:nil];
 
@@ -60,8 +68,10 @@ Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
         CGFloat pipH = pipW * 9.0 / 16.0;
         CGFloat margin = 16.0;
         [pip setStyleMask:NSWindowStyleMaskBorderless];
-        [parent addChildWindow:pip ordered:NSWindowAbove];
-        [pip setFrame:NSMakeRect(baseX + w - pipW - margin,
+        if ([pip parentWindow] != parent) {
+            [parent addChildWindow:pip ordered:NSWindowAbove];
+        }
+        [pip setFrame:NSMakeRect(baseX + x + w - pipW - margin,
                                  baseY + contentH - (y + h) + margin, pipW, pipH) display:YES];
         [pip orderFront:nil];
     }
