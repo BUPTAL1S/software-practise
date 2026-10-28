@@ -1303,27 +1303,50 @@ public final class MainApp extends Application {
 
     stage.setOnCloseRequest(
         e -> {
-          if (callPreviews.isBusy()) {
-            e.consume();
-            closeCallWindows();
-            callPreviews.execute(sip::shutdown, Platform::exit, error -> Platform.exit());
-            return;
-          }
           probeAndPollTimeline.stop();
           roomPollingTimeline.stop();
           if (logs != null) {
             logs.dockBack();
           }
           if (httpFileClient != null) {
-            new Thread(() -> {
-              try {
-                httpFileClient.logout();
-              } catch (Throwable ignored) {
-              }
-            }).start();
+            new Thread(
+                    () -> {
+                      try {
+                        httpFileClient.logout();
+                      } catch (Throwable ignored) {
+                      }
+                    },
+                    "client-logout")
+                .start();
           }
           closeCallWindows();
-          sip.shutdown();
+          // Never queue shutdown behind a stuck camera-preview task. The old
+          // busy branch left the JavaFX process alive and Windows reported AppHang.
+          Thread shutdown =
+              new Thread(
+                  () -> {
+                    try {
+                      sip.shutdown();
+                    } catch (Throwable ignored) {
+                    } finally {
+                      Platform.runLater(Platform::exit);
+                    }
+                  },
+                  "client-shutdown");
+          shutdown.setDaemon(true);
+          shutdown.start();
+          Thread watchdog =
+              new Thread(
+                  () -> {
+                    try {
+                      Thread.sleep(2500);
+                    } catch (InterruptedException ignored) {
+                    }
+                    Platform.runLater(Platform::exit);
+                  },
+                  "client-exit-watchdog");
+          watchdog.setDaemon(true);
+          watchdog.start();
         });
     boolean loginRequired = getParameters() != null && !named.containsKey("snapshot")
         && System.getProperty("ui.snapshot") == null;
@@ -1995,6 +2018,7 @@ public final class MainApp extends Application {
     }
     boolean video = sip.isCurrentCallVideoIntent();
     boolean videoActive = sip.isCurrentCallVideo();
+    boolean inRoom = sip.isInRoomCall();
     boolean cameraOn = sip.isCameraEnabled();
 
     if (video) {
@@ -2005,16 +2029,22 @@ public final class MainApp extends Application {
       if (videoCallWindow == null) {
         videoCallWindow = new VideoCallWindow(primaryStage);
       }
+      if (videoCallWindow.isHangingUp()) {
+        // Do not reopen the window or touch native handles while the BYE is
+        // still in flight; callEnded() will close it.
+        return;
+      }
       if (!videoCallWindow.isShowing()) {
         videoCallWindow.show(
             target,
             cameraOn,
             connected,
+            inRoom,
             () -> {
-              // Detach native children before PJSIP tears down the windows.
+              // Let PJSUA destroy the native video children first. Hiding is
+              // immediate; closeCallWindows() detaches only after callEnded.
               if (videoCallWindow != null) {
-                videoCallWindow.close();
-                videoCallWindow = null;
+                videoCallWindow.hideForHangup();
               }
               run(sip::hangup);
             },
@@ -2038,7 +2068,7 @@ public final class MainApp extends Application {
       long remote = sip.getActiveVideoWindowHandle();
       if (connected && !showAvatar && remote != 0) {
         long pip = 0;
-        if (cameraOn) {
+        if (cameraOn && !inRoom) {
           if (!sip.isPreviewActive() && !callPreviews.isBusy()) {
             if (!callPreviewErrorLogged) {
               VideoCallWindow expectedWindow = videoCallWindow;
@@ -2151,7 +2181,7 @@ public final class MainApp extends Application {
   private void closeCallWindows() {
     remoteAvatarOff = false;
     if (videoCallWindow != null) {
-      videoCallWindow.close();
+      videoCallWindow.closeWithoutDetach();
       videoCallWindow = null;
     }
     if (callWindow != null) {
@@ -3378,42 +3408,37 @@ public final class MainApp extends Application {
   @Override
   public void stop() throws Exception {
     roomCameraUpdates.shutdownNow();
-    if (callPreviews.isBusy()) {
-      closeCallWindows();
-      callPreviews.execute(sip::shutdown, () -> {}, error -> {});
-      callPreviews.close();
-      super.stop();
-      return;
-    }
     callPreviews.close();
-    if (videoCallWindow != null) {
-      videoCallWindow.close();
-      videoCallWindow = null;
-    }
-    if (callWindow != null) {
-      callWindow.close();
-      callWindow = null;
-    }
+    closeCallWindows();
     stopPipLayout();
-    if (sip != null) {
-      try {
-        if (sip.isPreviewActive()) {
-          sip.stopPreview();
-        }
-      } catch (Throwable ignored) {
-      }
-    }
     if (httpFileClient != null) {
-      try {
-        httpFileClient.logout();
-      } catch (Throwable ignored) {
-      }
+      Thread logout =
+          new Thread(
+              () -> {
+                try {
+                  httpFileClient.logout();
+                } catch (Throwable ignored) {
+                }
+              },
+              "client-logout-final");
+      logout.setDaemon(true);
+      logout.start();
     }
     if (sip != null) {
-      try {
-        sip.shutdown();
-      } catch (Throwable ignored) {
-      }
+      Thread shutdown =
+          new Thread(
+              () -> {
+                try {
+                  if (sip.isPreviewActive()) {
+                    sip.stopPreview();
+                  }
+                  sip.shutdown();
+                } catch (Throwable ignored) {
+                }
+              },
+              "client-shutdown-final");
+      shutdown.setDaemon(true);
+      shutdown.start();
     }
     super.stop();
   }

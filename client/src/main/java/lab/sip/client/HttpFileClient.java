@@ -105,6 +105,14 @@ public final class HttpFileClient {
   private static final Pattern ROOM_MEMBER_COUNT_PATTERN = Pattern.compile("\"(?:member_count|memberCount|peak_members|peakMembers)\"\\s*:\\s*(\\d+)");
   private static final Pattern AVATAR_URL_PATTERN = Pattern.compile("\"avatarUrl\"\\s*:\\s*\"([^\"]+)\"");
 
+  // Reuse one probe client. Creating an HttpClient per health poll leaks its
+  // selector threads and eventually makes the whole JavaFX UI sluggish.
+  private static final HttpClient PROBE_CLIENT =
+      HttpClient.newBuilder()
+          .connectTimeout(Duration.ofMillis(800))
+          .followRedirects(HttpClient.Redirect.NORMAL)
+          .build();
+
   private final HttpClient httpClient;
   private volatile String baseUrl;
   private volatile String authToken;
@@ -269,8 +277,13 @@ public final class HttpFileClient {
         builder.header("Authorization", "Bearer " + authToken);
       }
 
-      httpClient.sendAsync(builder.build(), HttpResponse.BodyHandlers.discarding());
-      return true;
+      // Called by the serial room-camera worker: preserve mute/unmute ordering
+      // and report the backend result instead of only successful submission.
+      HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+      return response.statusCode() == 200 && jsonBool(response.body(), "success", false);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      return false;
     } catch (Throwable t) {
       return false;
     }
@@ -416,18 +429,14 @@ public final class HttpFileClient {
     }
     try {
       String url = normalizeBaseUrl(candidateBaseUrl);
-      HttpClient probeClient =
-          HttpClient.newBuilder()
-              .connectTimeout(Duration.ofMillis(800))
-              .followRedirects(HttpClient.Redirect.NORMAL)
-              .build();
       HttpRequest req =
           HttpRequest.newBuilder()
               .uri(URI.create(url + "/api/health"))
               .timeout(Duration.ofMillis(800))
               .GET()
               .build();
-      HttpResponse<String> resp = probeClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      HttpResponse<String> resp =
+          PROBE_CLIENT.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       return resp.statusCode() == 200
           && resp.body() != null
           && resp.body().contains("\"status\"")

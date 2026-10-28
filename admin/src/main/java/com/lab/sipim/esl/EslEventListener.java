@@ -46,6 +46,7 @@ public class EslEventListener implements AutoCloseable {
     private volatile boolean connected = false;
     private Thread workerThread;
     private Socket activeSocket;
+    private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceMemberMap = new java.util.concurrent.ConcurrentHashMap<>();
 
     public EslEventListener(RoomRepository roomRepo) {
@@ -60,6 +61,14 @@ public class EslEventListener implements AutoCloseable {
         }
         workerThread = new Thread(this::runLoop, "esl-listener-worker");
         workerThread.setDaemon(true);
+        reconciliationWorker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "esl-room-reconciliation");
+            thread.setDaemon(true);
+            return thread;
+        });
+        reconciliationWorker.scheduleWithFixedDelay(() -> {
+            if (running && connected) refreshConferenceState();
+        }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
         workerThread.start();
     }
 
@@ -68,6 +77,7 @@ public class EslEventListener implements AutoCloseable {
     public void close() {
         running = false;
         connected = false;
+        if (reconciliationWorker != null) reconciliationWorker.shutdownNow();
         if (activeSocket != null) {
             try {
                 activeSocket.close();
@@ -126,6 +136,8 @@ public class EslEventListener implements AutoCloseable {
                 log.info("FreeSWITCH ESL event subscription response: {}", subReplyHeaders.get("Reply-Text"));
 
                 connected = true;
+                // Event subscription does not replay existing members or prior room destruction.
+                reconciliationWorker.execute(this::refreshConferenceState);
 
                 // 3. Main event processing loop
                 while (running && !socket.isClosed()) {
@@ -254,14 +266,24 @@ public class EslEventListener implements AutoCloseable {
                 try {
                     int mId = Integer.parseInt(memberIdStr.trim());
                     String cleanCaller = callerNumber.trim();
+                    java.util.Map<String, Integer> map =
+                            conferenceMemberMap.computeIfAbsent(
+                                    roomKey, k -> new java.util.concurrent.ConcurrentHashMap<>());
                     if ("add-member".equalsIgnoreCase(action)) {
-                        conferenceMemberMap.computeIfAbsent(roomKey, k -> new java.util.concurrent.ConcurrentHashMap<>())
-                                .put(cleanCaller, mId);
-                    } else if ("del-member".equalsIgnoreCase(action)) {
-                        java.util.Map<String, Integer> map = conferenceMemberMap.get(roomKey);
-                        if (map != null) {
-                            map.remove(cleanCaller);
+                        Integer oldId = map.put(cleanCaller, mId);
+                        if (oldId != null && oldId != mId) {
+                            // FreeSWITCH does not enforce one member per caller number. If a
+                            // client was killed, its old channel stays in the conference and the
+                            // same user would appear twice after reconnecting.
+                            String result = executeApi("conference " + roomKey + " kick " + oldId);
+                            log.info(
+                                    "[ESL] Duplicate member {} in {}: kicked old id {} for new id {} -> {}",
+                                    cleanCaller, roomKey, oldId, mId, result);
                         }
+                    } else if ("del-member".equalsIgnoreCase(action)) {
+                        // Only remove the entry for the member that actually left. A late
+                        // del-member event for the kicked old channel must not erase the new one.
+                        map.remove(cleanCaller, mId);
                     }
                 } catch (NumberFormatException ignored) {
                 }
@@ -330,15 +352,67 @@ public class EslEventListener implements AutoCloseable {
         return s.trim();
     }
 
+    private synchronized void refreshConferenceState() {
+        reconcileConferenceSnapshot(executeApi("conference xml_list"));
+    }
+
+    /** Apply only a complete, valid snapshot. API failures must never zero live room counts. */
+    public boolean reconcileConferenceSnapshot(String xml) {
+        if (xml == null || !xml.stripLeading().startsWith("<")) return false;
+        try {
+            var factory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            var document = factory.newDocumentBuilder().parse(new org.xml.sax.InputSource(new StringReader(xml)));
+            if (!"conferences".equals(document.getDocumentElement().getTagName())) return false;
+            Map<String, Integer> counts = new HashMap<>();
+            Map<String, Map<String, Integer>> memberMaps = new HashMap<>();
+            var conferences = document.getDocumentElement().getElementsByTagName("conference");
+            for (int i = 0; i < conferences.getLength(); i++) {
+                var conference = (org.w3c.dom.Element) conferences.item(i);
+                String name = normalizeConferenceName(conference.getAttribute("name"));
+                int count = Integer.parseInt(conference.getAttribute("member-count"));
+                if (name.isBlank() || count < 0) return false;
+                counts.put(name, count);
+                Map<String, Integer> members = new java.util.concurrent.ConcurrentHashMap<>();
+                var nodes = conference.getElementsByTagName("member");
+                for (int j = 0; j < nodes.getLength(); j++) {
+                    var member = (org.w3c.dom.Element) nodes.item(j);
+                    var ids = member.getElementsByTagName("id");
+                    var users = member.getElementsByTagName("caller_id_number");
+                    if (ids.getLength() > 0 && users.getLength() > 0) {
+                        try { members.put(users.item(0).getTextContent().trim(), Integer.parseInt(ids.item(0).getTextContent())); }
+                        catch (NumberFormatException ignored) { }
+                    }
+                }
+                memberMaps.put(name, members);
+            }
+            for (Room room : roomRepo.findAll()) {
+                int count = counts.getOrDefault(normalizeConferenceName(room.getSipUri()), 0);
+                if (room.getMemberCount() != count) {
+                    room.setMemberCount(count);
+                    roomRepo.save(room);
+                }
+            }
+            conferenceMemberMap.clear();
+            conferenceMemberMap.putAll(memberMaps);
+            return true;
+        } catch (Exception error) {
+            log.warn("Unable to reconcile conference snapshot: {}", error.getMessage());
+            return false;
+        }
+    }
+
     public String executeApi(String command) {
         if (!enabled) {
             return "-ERR ESL disabled";
         }
-        try (Socket s = new Socket(host, port);
-             java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(s.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
-             java.io.BufferedWriter out = new java.io.BufferedWriter(new java.io.OutputStreamWriter(s.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(host, port), 3000);
             s.setSoTimeout(3000);
+            InputStream in = s.getInputStream();
+            Writer out = new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8);
             readMimeHeaders(in);
             out.write("auth " + password + "\n\n");
             out.flush();
@@ -350,20 +424,32 @@ public class EslEventListener implements AutoCloseable {
             String clStr = headers.get("Content-Length");
             if (clStr != null) {
                 int len = Integer.parseInt(clStr.trim());
-                char[] buf = new char[len];
-                int total = 0;
-                while (total < len) {
-                    int r = in.read(buf, total, len - total);
-                    if (r < 0) break;
-                    total += r;
-                }
-                return new String(buf, 0, total).trim();
+                // ESL Content-Length counts UTF-8 bytes, not Java characters.
+                // Chinese caller names otherwise leave this read waiting forever.
+                byte[] body = in.readNBytes(len);
+                if (body.length != len) return "-ERR incomplete ESL response";
+                return new String(body, StandardCharsets.UTF_8).trim();
             }
             return headers.getOrDefault("Reply-Text", "+OK");
         } catch (Exception e) {
             log.warn("Failed to execute ESL api command '{}': {}", command, e.getMessage());
             return "-ERR " + e.getMessage();
         }
+    }
+
+    private Map<String, String> readMimeHeaders(InputStream input) throws IOException {
+        Map<String, String> headers = new LinkedHashMap<>();
+        ByteArrayOutputStream line = new ByteArrayOutputStream();
+        int value;
+        while ((value = input.read()) != -1) {
+            if (value != '\n') { line.write(value); continue; }
+            String text = line.toString(StandardCharsets.UTF_8).trim();
+            line.reset();
+            if (text.isEmpty()) break;
+            int colon = text.indexOf(':');
+            if (colon > 0) headers.put(text.substring(0, colon).trim(), text.substring(colon + 1).trim());
+        }
+        return headers;
     }
 
     public Integer lookupMemberId(String confName, String sipId) {
