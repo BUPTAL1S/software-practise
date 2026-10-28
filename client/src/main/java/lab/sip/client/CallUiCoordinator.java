@@ -58,6 +58,13 @@ final class CallUiCoordinator implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
           });
+  private final ExecutorService sipControl =
+      Executors.newSingleThreadExecutor(
+          task -> {
+            Thread thread = new Thread(task, "call-sip-control");
+            thread.setDaemon(true);
+            return thread;
+          });
 
   CallUiCoordinator(Host host) {
     this.host = host;
@@ -218,7 +225,7 @@ final class CallUiCoordinator implements AutoCloseable {
               if (videoCallWindow != null) {
                 videoCallWindow.hideForHangup();
               }
-              host.runAction(sip::hangup);
+              runSip(sip::hangup);
             },
             muted -> {
               sip.setAudioMuted(muted);
@@ -310,7 +317,7 @@ final class CallUiCoordinator implements AutoCloseable {
             false,
             cameraOn,
             connected,
-            () -> host.runAction(sip::hangup),
+            () -> runSip(sip::hangup),
             muted -> {
               sip.setAudioMuted(muted);
               if (callWindow != null) {
@@ -341,15 +348,19 @@ final class CallUiCoordinator implements AutoCloseable {
   void answer(boolean video) {
     incomingAnswered = true;
     closeIncomingWindow();
-    host.runAction(() -> host.sip().answer(video));
-    Platform.runLater(this::sync);
+    runSip(() -> {
+      host.sip().answer(video);
+      Platform.runLater(this::sync);
+    });
   }
 
   void reject() {
     incomingAnswered = false;
     closeIncomingWindow();
-    host.runAction(host.sip()::hangup);
-    Platform.runLater(this::sync);
+    runSip(() -> {
+      host.sip().hangup();
+      Platform.runLater(this::sync);
+    });
   }
 
   void closeIncomingWindow() {
@@ -385,7 +396,7 @@ final class CallUiCoordinator implements AutoCloseable {
       return;
     }
     String body = off ? SipService.VIDEO_AVATAR_OFF : SipService.VIDEO_AVATAR_ON;
-    host.runAction(
+    runSip(
         () -> {
           try {
             sip.sendMessage(peer, host.domain(), body);
@@ -452,8 +463,26 @@ final class CallUiCoordinator implements AutoCloseable {
     return contact == null ? null : contact.contactImgView.getImage();
   }
 
+  private void runSip(Host.Throwing action) {
+    sipControl.execute(
+        () -> {
+          try {
+            action.run();
+          } catch (Throwable failure) {
+            Platform.runLater(
+                () -> {
+                  LogView logView = host.logs();
+                  if (logView != null) {
+                    logView.append("错误", failure.getClass().getSimpleName() + ": " + failure.getMessage());
+                  }
+                });
+          }
+        });
+  }
+
   @Override
   public void close() {
+    sipControl.shutdownNow();
     roomCameraUpdates.shutdownNow();
     callPreviews.close();
     closeWindows();
