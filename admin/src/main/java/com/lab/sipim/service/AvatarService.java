@@ -11,6 +11,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.beans.factory.annotation.Value;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -38,7 +39,11 @@ public class AvatarService implements ApplicationRunner {
 
     private final UserRepository userRepo;
     private final FileIndexRepository fileRepo;
-    private final Path uploadDir = Paths.get("uploads");
+    @Value("${sipim.avatar.upload-dir:uploads}")
+    private String configuredUploadDir;
+    @Value("${sipim.avatar.fs-dir:}")
+    private String configuredFsAvatarDir;
+    private Path uploadDir;
     private Path fsAvatarDir;
 
     public AvatarService(UserRepository userRepo, FileIndexRepository fileRepo) {
@@ -49,7 +54,9 @@ public class AvatarService implements ApplicationRunner {
     @PostConstruct
     public void init() {
         System.setProperty("java.awt.headless", "true");
-        fsAvatarDir = resolveFsAvatarDir();
+        uploadDir = Paths.get(configuredUploadDir);
+        fsAvatarDir = configuredFsAvatarDir == null || configuredFsAvatarDir.isBlank()
+                ? resolveFsAvatarDir() : Paths.get(configuredFsAvatarDir);
         try {
             Files.createDirectories(fsAvatarDir);
             Files.createDirectories(uploadDir);

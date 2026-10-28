@@ -27,3 +27,7 @@ users 表新增可空的 nickname 字段，由现有 Hibernate schema update 添
 
 后台 18 项测试覆盖新资料接口及已有登录、私聊和聊天室管理员权限。密码测试使用 target 下独立数据库，不更改真实账号密码。
 客户端检查覆盖自动选址、HTTP 昵称/密码接口与 token 轮换、昵称特殊字符解析、登录提交与截图，以及小窗口下可滚动访问密码表单。
+
+头像回归测试使用 `target/test-avatar.db`、`target/test-avatars` 和 `target/test-avatar-uploads`，
+默认不连接运行中的 FreeSWITCH。MCU 实机验证需显式启用 `sip.liveMcuTest` 并配置专用测试环境的头像映射目录；
+测试使用唯一的临时会议名，只清理该测试会议，不执行全局挂断。

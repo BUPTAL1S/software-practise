@@ -191,6 +191,11 @@ final class VideoCallWindow {
   }
 
   /** Hide the remote native video and show the peer avatar instead. */
+  void setRemoteAvatarOff(boolean off, String peerName, javafx.scene.image.Image avatarImage) {
+    setAvatar(avatarImage);
+    setRemoteAvatarOff(off, peerName);
+  }
+
   void setRemoteAvatarOff(boolean off, String peerName) {
     this.remoteAvatarOff = off;
     if (off) {

@@ -53,6 +53,10 @@ class CallConnectedNotificationTest {
         peer.answer(video);
         assertTrue(confirmed.await(5, TimeUnit.SECONDS), "PJSIP must confirm the answered call");
         assertTrue(sip.isCallConnected(), "Native call must actually be connected");
+        if (video) {
+          assertTrue(sip.isCurrentCallVideoIntent(), "Audio-only answer must preserve video intent");
+          assertFalse(sip.isCurrentCallVideo(), "Rejected video must not be reported as active video");
+        }
         assertTrue(uiConnected.await(2, TimeUnit.SECONDS),
             "CONFIRMED must dispatch stateChanged so the caller leaves the waiting screen");
       } finally {

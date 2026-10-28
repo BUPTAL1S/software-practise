@@ -24,6 +24,12 @@ final class IncomingCallWindow {
 
   IncomingCallWindow(Window owner) { this.owner = owner; }
 
+  void show(String target, boolean video, javafx.scene.image.Image avatarImage,
+      Runnable answerVideo, Runnable answerAudio, Runnable reject) {
+    show(target, video, answerVideo, answerAudio, reject);
+    setAvatar(avatarImage);
+  }
+
   void show(String target, boolean video, Runnable answerVideo, Runnable answerAudio, Runnable reject) {
     onVideo = answerVideo == null ? () -> {} : answerVideo;
     onAudio = answerAudio == null ? () -> {} : answerAudio;

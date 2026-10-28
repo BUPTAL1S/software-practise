@@ -590,13 +590,17 @@ final class MainViewAssembler {
       boolean hasRoom = false;
       for (HttpFileClient.RoomInfo room : safeRooms) {
         if (room == null) continue;
-        String target = firstNonBlank(room.sipUri());
-        if (target.isEmpty() || !seen.add(target.toLowerCase())) {
+        String rawTarget = firstNonBlank(room.sipUri(), room.name());
+        String target = rawTarget.replaceFirst("^sip:", "").replaceAll("@.*$", "").trim();
+        if (target.isEmpty()) {
+          target = "room-101";
+        }
+        if (!seen.add(target.toLowerCase())) {
           continue;
         }
         String display = firstNonBlank(room.name(), target);
         Button btn = new Button();
-        installContactCard(btn, target, display, target, "M", "#F59E0B", true);
+        installContactCard(btn, target, display, "MCU 研讨室", "M", "#F59E0B", true);
         btn.setMaxWidth(Double.MAX_VALUE);
         quickList.getChildren().add(btn);
         hasRoom = true;
@@ -964,6 +968,22 @@ final class MainViewAssembler {
           String name = (username != null && !username.isBlank()) ? username : "?";
           globalAvatarUserLbl.setText(name.length() > 4 ? name.substring(0, 4) : name);
         });
+  }
+
+  public String getContactAvatarUrl(String targetId) {
+    if (targetId == null) return null;
+    return contactAvatarMap.get(targetId.trim().toLowerCase());
+  }
+
+  public Image getContactAvatarImage(String targetId) {
+    String url = getContactAvatarUrl(targetId);
+    if (url != null && !url.isBlank()) {
+      try {
+        return new Image(url, true);
+      } catch (Exception ignored) {
+      }
+    }
+    return null;
   }
 
   public void updateContactAvatar(String targetId, String avatarUrl) {

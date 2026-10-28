@@ -1,6 +1,6 @@
 ================================================================================
   Java SIP 绿色便携包脱机免配置环境验收测试
-  测试时间: 2026-10-19 02:40:58
+  测试时间: 2026-10-26 13:27:24
 ================================================================================
 
 【步骤 1】环境净化与隔离模拟
@@ -22,7 +22,10 @@ OpenJDK 64-Bit Server VM Homebrew (build 17.0.20.1+0, mixed mode)
   -> 客户端 Fat JAR 大小: 10M
   -> 原生库清单:
       ()
+     build-callwindow.sh (287B)
      BUILD.md (2.4K)
+     CallWindow.m (3.5K)
+     libcallwindow.dylib (50K)
      libmacmirror.dylib (54K)
      libopenh264.dylib (942K)
      libpjsua2.dylib (4.1M)

@@ -571,17 +571,24 @@ final class SipService {
 
   private volatile String mockTarget = null;
   private volatile Boolean mockVideo = null;
+  private volatile Boolean mockVideoIntent = null;
   private volatile VideoWindow testNativeVideoWindow = null;
 
   synchronized void setMockCallStateForTest(String target, boolean isVideo) {
+    setMockCallStateForTest(target, isVideo, isVideo);
+  }
+
+  synchronized void setMockCallStateForTest(String target, boolean isVideo, boolean isVideoIntent) {
     this.mockTarget = target;
     this.mockVideo = isVideo;
+    this.mockVideoIntent = isVideoIntent;
     events.stateChanged();
   }
 
   synchronized void clearMockCallStateForTest() {
     this.mockTarget = null;
     this.mockVideo = null;
+    this.mockVideoIntent = null;
     events.stateChanged();
   }
 
@@ -672,6 +679,9 @@ final class SipService {
 
   /** True if the call was offered/started as a video call, even if it was answered audio-only. */
   synchronized boolean isCurrentCallVideoIntent() {
+    if (mockVideoIntent != null) {
+      return mockVideoIntent;
+    }
     if (mockVideo != null) {
       return mockVideo;
     }
@@ -1626,7 +1636,7 @@ final class SipService {
       if (videoStreamActive || activeVideoWindow != null) {
         return true;
       }
-      if (videoConfigured) {
+      if (connectTime == null && videoConfigured) {
         return true;
       }
       try {
@@ -1693,31 +1703,10 @@ final class SipService {
       if (win == null) {
         return;
       }
-      boolean disconnected = callDisconnected;
-      if (!disconnected) {
-        try {
-          disconnected = getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED;
-        } catch (Throwable t) {
-          disconnected = true;
-        }
-      }
-      // 对端发 BYE 后，PJSIP 已经销毁了底层 vid_port 和 vid_win。
-      // 此时 Show(false) 会以空 vp 触发 vid_port.c:728，
-      // delete() 又会以失效的 wid 触发 pjsua_vid.c:1843。
-      // 断开后只能丢弃 Java 侧包装，不能再触碰任何原生窗口接口。
-      if (disconnected) {
-        abandonVideoWindow(win);
-        return;
-      }
-      WindowLayout.detach(nativeVideoWindowHandle(win), 0);
-      try {
-        win.Show(false);
-      } catch (Throwable ignored) {
-      }
-      try {
-        win.delete();
-      } catch (Throwable ignored) {
-      }
+      // The UI detaches cached HWNDs before closing. PJSIP owns the renderer and
+      // may already be releasing it: even getInfo()/Show(false) can assert here.
+      // Keep preview detachment in stopPreview(), where its window is still valid.
+      abandonVideoWindow(win);
     }
 
     private static void abandonVideoWindow(VideoWindow win) {

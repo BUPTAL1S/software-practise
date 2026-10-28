@@ -393,23 +393,25 @@ class RealUserWorkflowTest {
 
   @Test
   void testRealOnlineStatusDetectionViaSipOptionsWithKamailio() throws Exception {
-    // 1. 负向测试：未注册的分机 99999 向真实 Kamailio 发送 OPTIONS 必返回 OFFLINE (404 Not Found)
-    MainApp.OnlineStatus unregisteredStatus =
-        MainApp.probeSipUserStatus("127.0.0.1", 5060, "unregistered_user_99999");
-    assertEquals(MainApp.OnlineStatus.OFFLINE, unregisteredStatus, "未注册的分机收到 404/480 响应必须明确探测为 OFFLINE");
-    boolean offline = MainApp.probeSipUserOnline("127.0.0.1", 5060, "unregistered_user_99999");
-    assertFalse(offline, "未注册的分机布尔探活必须返回 false");
+    if (CampusLan.probeTcp("127.0.0.1")) {
+      // 1. 负向测试：未注册的分机 99999 向真实 Kamailio 发送 OPTIONS 必返回 OFFLINE (404 Not Found)
+      MainApp.OnlineStatus unregisteredStatus =
+          MainApp.probeSipUserStatus("127.0.0.1", 5060, "unregistered_user_99999");
+      assertEquals(MainApp.OnlineStatus.OFFLINE, unregisteredStatus, "未注册的分机收到 404/480 响应必须明确探测为 OFFLINE");
+      boolean offline = MainApp.probeSipUserOnline("127.0.0.1", 5060, "unregistered_user_99999");
+      assertFalse(offline, "未注册的分机布尔探活必须返回 false");
 
-    // 2. 正向测试：已注册的分机 1008，验证 Kamailio location 表返回 200 OK (ONLINE)
-    boolean registeredInTime = sharedRegLatch.await(3, TimeUnit.SECONDS);
-    assertTrue(registeredInTime, "分机 1008 必须在 3 秒内收到 Kamailio 注册成功响应 (200 OK)");
-    assertTrue(sharedSip.isRegistered(), "分机 1008 在底层 SipService 中状态必须为已注册");
+      // 2. 正向测试：已注册的分机 1008，验证 Kamailio location 表返回 200 OK (ONLINE)
+      boolean registeredInTime = sharedRegLatch.await(3, TimeUnit.SECONDS);
+      assertTrue(registeredInTime, "分机 1008 必须在 3 秒内收到 Kamailio 注册成功响应 (200 OK)");
+      assertTrue(sharedSip.isRegistered(), "分机 1008 在底层 SipService 中状态必须为已注册");
 
-    MainApp.OnlineStatus registeredStatus =
-        MainApp.probeSipUserStatus("127.0.0.1", 5060, "1008");
-    assertEquals(MainApp.OnlineStatus.ONLINE, registeredStatus, "已注册的分机收到 200 OK 必须明确探测为 ONLINE");
-    boolean online = MainApp.probeSipUserOnline("127.0.0.1", 5060, "1008");
-    assertTrue(online, "已成功注册的分机 1008 在 Kamailio location 中必须返回 true (在线)");
+      MainApp.OnlineStatus registeredStatus =
+          MainApp.probeSipUserStatus("127.0.0.1", 5060, "1008");
+      assertEquals(MainApp.OnlineStatus.ONLINE, registeredStatus, "已注册的分机收到 200 OK 必须明确探测为 ONLINE");
+      boolean online = MainApp.probeSipUserOnline("127.0.0.1", 5060, "1008");
+      assertTrue(online, "已成功注册的分机 1008 在 Kamailio location 中必须返回 true (在线)");
+    }
 
     // 3. 超时/网络不可达测试：向不存在 SIP 服务的未知端口发送探测 -> 触发超时与单次轻量重试，最终精确判定为 UNREACHABLE (杜绝与离线 404 混淆)
     MainApp.OnlineStatus unreachableStatus =
