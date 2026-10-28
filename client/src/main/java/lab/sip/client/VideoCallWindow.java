@@ -16,6 +16,8 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
@@ -28,7 +30,16 @@ import java.util.function.Consumer;
  */
 final class VideoCallWindow {
   private final Window owner;
+  private final ExecutorService nativeWindowOps =
+      Executors.newSingleThreadExecutor(
+          task -> {
+            Thread thread = new Thread(task, "video-window-native");
+            thread.setDaemon(true);
+            return thread;
+          });
   private Stage stage;
+  private boolean hangupRequested;
+  private volatile boolean disposed;
   private StackPane videoArea;
   private Label titleLabel;
   private Label statusLabel;
@@ -67,6 +78,7 @@ final class VideoCallWindow {
       String target,
       boolean cameraOn,
       boolean connected,
+      boolean room,
       Runnable onHangup,
       Consumer<Boolean> onMute,
       Consumer<Boolean> onCamera) {
@@ -75,7 +87,7 @@ final class VideoCallWindow {
     this.onCamera = onCamera == null ? value -> {} : onCamera;
     this.cameraOn = cameraOn;
     if (stage == null) {
-      build(target);
+      build(target, room);
       stage.show();
       stage.toFront();
       stage.requestFocus();
@@ -124,6 +136,11 @@ final class VideoCallWindow {
     if (muteBtn != null) CallUi.state(muteBtn, muted ? "取消静音" : "静音", muted);
   }
 
+  void setMediaBusy(boolean busy) {
+    if (cameraBtn != null) cameraBtn.setDisable(busy);
+    if (muteBtn != null) muteBtn.setDisable(busy);
+  }
+
   void setAvatar(javafx.scene.image.Image image) {
     if (waitingAvatar != null) CallUi.photo(waitingAvatar, image);
     if (peerAvatar != null) CallUi.photo(peerAvatar, image);
@@ -143,7 +160,7 @@ final class VideoCallWindow {
 
   /** Reparent the PJSIP windows into this stage. Safe to call repeatedly. */
   boolean attachNative(long remote, long pip) {
-    if (stage == null || !stage.isShowing() || remote == 0 || remoteAvatarOff) {
+    if (disposed || stage == null || !stage.isShowing() || remote == 0 || remoteAvatarOff) {
       return false;
     }
     if (!WindowLayout.isAvailable()) {
@@ -158,8 +175,9 @@ final class VideoCallWindow {
       return false;
     }
     if (pip == 0 && pipHandle != 0) {
-      WindowLayout.detach(0, pipHandle);
+      long oldPip = pipHandle;
       pipHandle = 0;
+      runNative(() -> WindowLayout.detach(0, oldPip));
     }
     javafx.geometry.Bounds bounds = videoArea.localToScene(videoArea.getBoundsInLocal());
     int x = (int) Math.round(bounds.getMinX());
@@ -169,7 +187,10 @@ final class VideoCallWindow {
     NativeVideoPlacement.Bounds requested = new NativeVideoPlacement.Bounds(
         parent, remote, pip, x, y, w, h, stage.getOutputScaleX(), stage.getOutputScaleY());
     if (!placement.apply(requested,
-        () -> WindowLayout.attach(parent, remote, pip, x, y, w, h))) {
+        () -> {
+          runNative(() -> WindowLayout.attach(parent, remote, pip, x, y, w, h));
+          return true;
+        })) {
       return false;
     }
     remoteHandle = remote;
@@ -185,8 +206,49 @@ final class VideoCallWindow {
   void detachPip() {
     placement.invalidate();
     if (pipHandle != 0) {
-      WindowLayout.detach(0, pipHandle);
+      long oldPip = pipHandle;
       pipHandle = 0;
+      runNative(() -> WindowLayout.detach(0, oldPip));
+    }
+  }
+
+  /** Release SDL/JavaFX parenting before creating or restarting a native renderer. */
+  void detachNative() {
+    placement.invalidate();
+    long remote = remoteHandle;
+    long pip = pipHandle;
+    remoteHandle = 0;
+    pipHandle = 0;
+    if (remote != 0 || pip != 0) {
+      runNative(() -> WindowLayout.detach(remote, pip));
+    }
+  }
+
+  private void runNative(Runnable action) {
+    if (disposed) {
+      return;
+    }
+    String os = System.getProperty("os.name", "").toLowerCase();
+    if (os.contains("mac")) {
+      if (Platform.isFxApplicationThread()) {
+        if (!disposed) {
+          action.run();
+        }
+      } else {
+        Platform.runLater(
+            () -> {
+              if (!disposed) {
+                action.run();
+              }
+            });
+      }
+    } else {
+      nativeWindowOps.execute(
+          () -> {
+            if (!disposed) {
+              action.run();
+            }
+          });
     }
   }
 
@@ -201,8 +263,9 @@ final class VideoCallWindow {
     if (off) {
       if (remoteHandle != 0) {
         placement.invalidate();
-        WindowLayout.detach(remoteHandle, 0);
+        long oldRemote = remoteHandle;
         remoteHandle = 0;
+        runNative(() -> WindowLayout.detach(oldRemote, 0));
       }
       if (avatarInitial != null) {
         avatarInitial.setText(CallUi.initial(peerName));
@@ -217,14 +280,33 @@ final class VideoCallWindow {
     }
   }
 
-  void close() {
+  /**
+   * Hide the call surface but leave PJSIP's native children alone until the BYE
+   * has torn them down. Detaching a live SDL child while PJSUA is hanging up is
+   * the operation that made the JavaFX message pump unresponsive.
+   */
+  void hideForHangup() {
+    hangupRequested = true;
     placement.invalidate();
     stopTimer();
-    if (remoteHandle != 0 || pipHandle != 0) {
-      WindowLayout.detach(remoteHandle, pipHandle);
-      remoteHandle = 0;
-      pipHandle = 0;
+    if (stage != null) {
+      stage.setOnCloseRequest(null);
+      stage.hide();
     }
+  }
+
+  boolean isHangingUp() {
+    return hangupRequested;
+  }
+
+  /** Close after the SIP call has ended; PJSIP owns and has destroyed the native children. */
+  void closeWithoutDetach() {
+    disposed = true;
+    hangupRequested = false;
+    placement.invalidate();
+    stopTimer();
+    remoteHandle = 0;
+    pipHandle = 0;
     if (stage != null) {
       stage.setOnCloseRequest(null);
       stage.close();
@@ -232,11 +314,60 @@ final class VideoCallWindow {
     }
   }
 
+  void close() {
+    disposed = true;
+    boolean nativeAlreadyTornDown = hangupRequested;
+    hangupRequested = false;
+    placement.invalidate();
+    stopTimer();
+    final Stage closing = stage;
+    stage = null;
+    final long remote = remoteHandle;
+    final long pip = pipHandle;
+    remoteHandle = 0;
+    pipHandle = 0;
+    if (closing != null) {
+      closing.setOnCloseRequest(null);
+      closing.hide();
+    }
+    if (nativeAlreadyTornDown || (remote == 0 && pip == 0)) {
+      // PJSUA already destroyed the native video windows while processing BYE.
+      // Touching those handles here is a use-after-free (0xC0000005).
+      if (closing != null) {
+        closing.close();
+      }
+      return;
+    }
+    String os = System.getProperty("os.name", "").toLowerCase();
+    if (os.contains("mac")) {
+      // Cocoa window operations must stay on the JavaFX/AppKit thread.
+      WindowLayout.detach(remote, pip);
+      if (closing != null) {
+        closing.close();
+      }
+      return;
+    }
+    // SetParent on a live SDL child can block while Windows is pumping messages.
+    // Hide the JavaFX window first, detach off the FX thread, then close it.
+    new Thread(
+            () -> {
+              WindowLayout.detach(remote, pip);
+              Platform.runLater(
+                  () -> {
+                    if (closing != null) {
+                      closing.close();
+                    }
+                  });
+            },
+            "video-window-detach")
+        .start();
+  }
+
   boolean isShowing() {
     return stage != null && stage.isShowing();
   }
 
-  private void build(String target) {
+  private void build(String target, boolean room) {
     stage = new Stage();
     if (owner != null) {
       stage.initOwner(owner);
@@ -259,6 +390,7 @@ final class VideoCallWindow {
 
     videoArea = new StackPane();
     videoArea.getStyleClass().add("video-surface");
+    videoArea.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
     placeholder = CallUi.label("等待对方接听视频邀请…", "call-status");
     waitingInitial = new Label(CallUi.initial(target));
     waitingName = CallUi.label(CallUi.name(target), "call-name");
@@ -298,6 +430,14 @@ final class VideoCallWindow {
     root.getStyleClass().addAll("call-root", "video-root");
 
     stage.setScene(CallUi.scene(root, 1000, 740));
+    if (room) {
+      // Meeting-room MCU canvas has a fixed 16:9 layout; resizing the JavaFX
+      // window only creates a large unused background around the native child.
+      stage.setResizable(false);
+      stage.setMaximized(false);
+      stage.setWidth(1000);
+      stage.setHeight(740);
+    }
     stage.setOnCloseRequest(
         e -> {
           e.consume();
@@ -305,10 +445,18 @@ final class VideoCallWindow {
         });
     videoArea
         .widthProperty()
-        .addListener((obs, oldV, newV) -> Platform.runLater(this::layoutNative));
+        .addListener((obs, oldV, newV) -> requestLayoutNative());
     videoArea
         .heightProperty()
-        .addListener((obs, oldV, newV) -> Platform.runLater(this::layoutNative));
+        .addListener((obs, oldV, newV) -> requestLayoutNative());
+    stage.widthProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
+    stage.heightProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
+    stage.maximizedProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
+  }
+
+  private void requestLayoutNative() {
+    // Wait for BorderPane to finish the resize pass before measuring videoArea.
+    Platform.runLater(() -> Platform.runLater(this::layoutNative));
   }
 
   private void layoutNative() {

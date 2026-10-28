@@ -11,6 +11,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -23,6 +25,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 @SpringBootTest
 @TestPropertySource(properties = {
         "SIPIM_DB=./target/test-esl.db",
+        "sipim.avatar.fs-dir=target/test-esl-avatars",
+        "sipim.avatar.upload-dir=target/test-esl-uploads",
         "freeswitch.esl.enabled=false" // disabled by default in test, tested explicitly below
 })
 class EslEventListenerTest {
@@ -223,6 +227,57 @@ class EslEventListenerTest {
             } finally {
                 liveListener.close();
             }
+        }
+    }
+
+    @Test
+    void duplicateMemberJoinKicksOldMemberAndLateDelDoesNotEraseNewMember() {
+        Room room = roomRepo.findBySipUri("room-101").orElseGet(() -> {
+            Room r = new Room();
+            r.setName("Room 101");
+            r.setSipUri("room-101");
+            r.setMaxMembers(8);
+            r.setMemberCount(0);
+            return roomRepo.save(r);
+        });
+        room.setMemberCount(0);
+        roomRepo.save(room);
+
+        RecordingEslListener listener = new RecordingEslListener(roomRepo);
+        listener.processEvent(event("add-member", "7", "1001", "1"));
+        listener.processEvent(event("add-member", "8", "1001", "1"));
+        assertThat(listener.commands).containsExactly("conference room-101 kick 7");
+
+        // A late del-member for the kicked old channel must not remove the new member.
+        listener.processEvent(event("del-member", "7", "1001", "1"));
+        listener.processEvent(event("add-member", "9", "1001", "1"));
+        assertThat(listener.commands).containsExactly(
+                "conference room-101 kick 7",
+                "conference room-101 kick 8");
+    }
+
+    private static Map<String, String> event(String action, String memberId, String caller, String size) {
+        return Map.of(
+                "Event-Name", "CUSTOM",
+                "Event-Subclass", "conference::maintenance",
+                "Action", action,
+                "Conference-Name", "room-101@video-mcu-3x3",
+                "Conference-Size", size,
+                "Member-ID", memberId,
+                "Caller-Caller-ID-Number", caller);
+    }
+
+    private static final class RecordingEslListener extends EslEventListener {
+        private final List<String> commands = new ArrayList<>();
+
+        RecordingEslListener(RoomRepository roomRepo) {
+            super(roomRepo);
+        }
+
+        @Override
+        public String executeApi(String command) {
+            commands.add(command);
+            return "+OK";
         }
     }
 }
