@@ -27,6 +27,17 @@ public class User {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    @Column(name = "nickname")
+    private String nickname;
+
+    public String getNickname() {
+        return nickname == null || nickname.isBlank() ? username : nickname;
+    }
+
+    public void setNickname(String nickname) {
+        this.nickname = nickname;
+    }
+
     /** USER or ADMIN. Only 1001 is seeded as ADMIN for the chat audit page. */
     @Column(name = "role")
     private String role = "USER";

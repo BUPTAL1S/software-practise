@@ -5,7 +5,6 @@ import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
@@ -14,8 +13,6 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.shape.Circle;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
@@ -37,6 +34,12 @@ final class VideoCallWindow {
   private Label statusLabel;
   private Label timerLabel;
   private Label placeholder;
+  private VBox waitingPane;
+  private Label waitingInitial;
+  private Label waitingName;
+  private Label avatarName;
+  private StackPane waitingAvatar;
+  private StackPane peerAvatar;
   private StackPane avatarOverlay;
   private Label avatarInitial;
   private Label avatarHint;
@@ -48,6 +51,7 @@ final class VideoCallWindow {
   private long startedAt;
   private long remoteHandle;
   private long pipHandle;
+  private final NativeVideoPlacement placement = new NativeVideoPlacement();
   private boolean cameraOn;
   private boolean muted;
   private boolean connected;
@@ -87,30 +91,54 @@ final class VideoCallWindow {
     this.connected = connected;
     String name = target == null || target.isBlank() ? "视频通话" : target;
     titleLabel.setText(name);
-    statusLabel.setText(connected ? "视频通话 · 已接通" : "视频通话 · 正在连接…");
+    statusLabel.setText(connected ? "视频通话中" : "正在呼叫，等待对方接听…");
+    waitingInitial.setText(CallUi.initial(name));
+    waitingName.setText(name);
+    avatarName.setText(name);
     if (muteBtn != null) {
-      muteBtn.setText(muted ? "取消静音" : "静音");
-      muteBtn.setStyle(muted ? dangerStyle() : normalStyle());
+      CallUi.state(muteBtn, muted ? "取消静音" : "静音", muted);
     }
     if (cameraBtn != null) {
-      cameraBtn.setText(cameraOn ? "关闭摄像头" : "开启摄像头");
-      cameraBtn.setStyle(cameraOn ? normalStyle() : dangerStyle());
+      CallUi.state(cameraBtn, cameraOn ? "关闭摄像头" : "开启摄像头", !cameraOn);
     }
     if (placeholder != null) {
-      placeholder.setVisible(!connected || (remoteHandle == 0 && !remoteAvatarOff));
-      placeholder.setManaged(!connected || (remoteHandle == 0 && !remoteAvatarOff));
+      placeholder.setText(connected ? "正在加载对方画面…" : "等待对方接听视频邀请…");
+      showWaiting(!connected || (remoteHandle == 0 && !remoteAvatarOff));
     }
     if (avatarOverlay != null) {
       avatarOverlay.setVisible(remoteAvatarOff);
       avatarOverlay.setManaged(remoteAvatarOff);
     }
+    CallUi.state(hangupBtn, connected ? "挂断" : "取消呼叫", false);
+    timerLabel.setVisible(connected);
     if (connected) {
       startTimer();
     } else {
       stopTimer();
       timerLabel.setText("00:00");
     }
-    stage.toFront();
+  }
+
+  void setMuted(boolean muted) {
+    this.muted = muted;
+    if (muteBtn != null) CallUi.state(muteBtn, muted ? "取消静音" : "静音", muted);
+  }
+
+  void setAvatar(javafx.scene.image.Image image) {
+    if (waitingAvatar != null) CallUi.photo(waitingAvatar, image);
+    if (peerAvatar != null) CallUi.photo(peerAvatar, image);
+  }
+
+  private void showWaiting(boolean visible) {
+    // Every path that reveals this pane must use the current call state, including
+    // avatar/camera changes that do not go through update().
+    placeholder.setText(connected ? "通话已接通，正在等待对方视频画面…" : "等待对方接听视频邀请…");
+    waitingPane.setVisible(visible);
+    waitingPane.setManaged(visible);
+  }
+
+  void setAvatarHint(String hint) {
+    if (avatarHint != null) avatarHint.setText(hint);
   }
 
   /** Reparent the PJSIP windows into this stage. Safe to call repeatedly. */
@@ -120,9 +148,8 @@ final class VideoCallWindow {
     }
     if (!WindowLayout.isAvailable()) {
       if (placeholder != null) {
-        placeholder.setText("本机未安装 callwindow 原生库，远端画面在独立窗口");
-        placeholder.setVisible(true);
-        placeholder.setManaged(true);
+        showWaiting(true);
+        placeholder.setText("视频画面已在独立窗口中打开");
       }
       return false;
     }
@@ -139,19 +166,24 @@ final class VideoCallWindow {
     int y = (int) Math.round(bounds.getMinY());
     int w = Math.max(2, (int) Math.round(bounds.getWidth()));
     int h = Math.max(2, (int) Math.round(bounds.getHeight()));
-    WindowLayout.attach(parent, remote, pip, x, y, w, h);
+    NativeVideoPlacement.Bounds requested = new NativeVideoPlacement.Bounds(
+        parent, remote, pip, x, y, w, h, stage.getOutputScaleX(), stage.getOutputScaleY());
+    if (!placement.apply(requested,
+        () -> WindowLayout.attach(parent, remote, pip, x, y, w, h))) {
+      return false;
+    }
     remoteHandle = remote;
     if (pip != 0) {
       pipHandle = pip;
     }
     if (placeholder != null) {
-      placeholder.setVisible(false);
-      placeholder.setManaged(false);
+      showWaiting(false);
     }
     return true;
   }
 
   void detachPip() {
+    placement.invalidate();
     if (pipHandle != 0) {
       WindowLayout.detach(0, pipHandle);
       pipHandle = 0;
@@ -163,12 +195,12 @@ final class VideoCallWindow {
     this.remoteAvatarOff = off;
     if (off) {
       if (remoteHandle != 0) {
+        placement.invalidate();
         WindowLayout.detach(remoteHandle, 0);
         remoteHandle = 0;
       }
       if (avatarInitial != null) {
-        String name = peerName == null || peerName.isBlank() ? "?" : peerName.trim();
-        avatarInitial.setText(name.substring(0, 1).toUpperCase());
+        avatarInitial.setText(CallUi.initial(peerName));
       }
     }
     if (avatarOverlay != null) {
@@ -176,12 +208,12 @@ final class VideoCallWindow {
       avatarOverlay.setManaged(off);
     }
     if (placeholder != null) {
-      placeholder.setVisible(!off && (remoteHandle == 0));
-      placeholder.setManaged(!off && (remoteHandle == 0));
+      showWaiting(!off && remoteHandle == 0);
     }
   }
 
   void close() {
+    placement.invalidate();
     stopTimer();
     if (remoteHandle != 0 || pipHandle != 0) {
       WindowLayout.detach(remoteHandle, pipHandle);
@@ -205,68 +237,62 @@ final class VideoCallWindow {
       stage.initOwner(owner);
     }
     stage.setTitle("SIP 视频通话 - " + target + " - " + System.identityHashCode(this));
-    stage.setMinWidth(560);
-    stage.setMinHeight(400);
+    stage.setMinWidth(640);
+    stage.setMinHeight(540);
 
-    titleLabel = new Label(target);
-    titleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 15px; -fx-font-weight: bold;");
-    statusLabel = new Label("正在连接…");
-    statusLabel.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 12px;");
-    timerLabel = new Label("00:00");
-    timerLabel.setStyle("-fx-text-fill: #E2E8F0; -fx-font-size: 13px; -fx-font-family: monospace;");
+    titleLabel = CallUi.label(CallUi.name(target), "video-name");
+    titleLabel.setMaxWidth(380);
+    statusLabel = CallUi.label("正在呼叫，等待对方接听…", "call-subtle");
+    timerLabel = CallUi.label("00:00", "call-timer");
 
     VBox titleBox = new VBox(2, titleLabel, statusLabel);
     Region spacer = new Region();
     HBox.setHgrow(spacer, Priority.ALWAYS);
     HBox topBar = new HBox(10, titleBox, spacer, timerLabel);
     topBar.setAlignment(Pos.CENTER_LEFT);
-    topBar.setPadding(new Insets(8, 12, 8, 12));
-    topBar.setStyle("-fx-background-color: #0F172A;");
+    topBar.getStyleClass().add("video-header");
 
     videoArea = new StackPane();
-    videoArea.setStyle("-fx-background-color: #000000;");
-    placeholder = new Label("正在连接视频…");
-    placeholder.setStyle("-fx-text-fill: #94A3B8; -fx-font-size: 14px;");
-    videoArea.getChildren().add(placeholder);
+    videoArea.getStyleClass().add("video-surface");
+    placeholder = CallUi.label("等待对方接听视频邀请…", "call-status");
+    waitingInitial = new Label(CallUi.initial(target));
+    waitingName = CallUi.label(CallUi.name(target), "call-name");
+    waitingName.setMaxWidth(420);
+    waitingAvatar = CallUi.avatar(waitingInitial);
+    waitingPane = new VBox(18, waitingAvatar, waitingName, placeholder);
+    waitingPane.setAlignment(Pos.CENTER);
+    waitingPane.setPadding(new Insets(24));
+    videoArea.getChildren().add(waitingPane);
 
-    Circle avatarCircle = new Circle(46, Color.web("#2481CC"));
     avatarInitial = new Label("?");
-    avatarInitial.setStyle("-fx-text-fill: white; -fx-font-size: 30px; -fx-font-weight: bold;");
-    StackPane avatar = new StackPane(avatarCircle, avatarInitial);
-    avatarHint = new Label("对方已关闭摄像头");
-    avatarHint.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 13px;");
-    VBox avatarBox = new VBox(12, avatar, avatarHint);
+    peerAvatar = CallUi.avatar(avatarInitial);
+    avatarName = CallUi.label(CallUi.name(target), "call-name");
+    avatarName.setMaxWidth(420);
+    avatarHint = CallUi.label("对方已关闭摄像头", "call-status");
+    VBox avatarBox = new VBox(18, peerAvatar, avatarName, avatarHint);
     avatarBox.setAlignment(Pos.CENTER);
+    avatarBox.setPadding(new Insets(24));
     avatarOverlay = new StackPane(avatarBox);
-    avatarOverlay.setStyle("-fx-background-color: #0B1220;");
+    avatarOverlay.getStyleClass().add("video-surface");
     avatarOverlay.setVisible(false);
     avatarOverlay.setManaged(false);
     videoArea.getChildren().add(avatarOverlay);
 
-    muteBtn = new Button("静音");
-    muteBtn.setStyle(normalStyle());
-    muteBtn.setOnAction(e -> onMute.accept(!muted));
+    muteBtn = CallUi.action(CallUi.Icon.MIC, "静音", "neutral", () -> onMute.accept(!muted));
+    cameraBtn = CallUi.action(CallUi.Icon.VIDEO, "关闭摄像头", "neutral", () -> onCamera.accept(!cameraOn));
+    hangupBtn = CallUi.action(CallUi.Icon.HANGUP, "挂断", "end", () -> onHangup.run());
 
-    cameraBtn = new Button("关闭摄像头");
-    cameraBtn.setStyle(normalStyle());
-    cameraBtn.setOnAction(e -> onCamera.accept(!cameraOn));
-
-    hangupBtn = new Button("挂断");
-    hangupBtn.setStyle(dangerStyle());
-    hangupBtn.setOnAction(e -> onHangup.run());
-
-    HBox controls = new HBox(10, muteBtn, cameraBtn, hangupBtn);
+    HBox controls = new HBox(32, muteBtn, cameraBtn, hangupBtn);
     controls.setAlignment(Pos.CENTER);
-    controls.setPadding(new Insets(8));
-    controls.setStyle("-fx-background-color: #0F172A;");
+    controls.getStyleClass().add("video-controls");
 
     BorderPane root = new BorderPane();
     root.setTop(topBar);
     root.setCenter(videoArea);
     root.setBottom(controls);
-    root.setStyle("-fx-background-color: #0F172A;");
+    root.getStyleClass().addAll("call-root", "video-root");
 
-    stage.setScene(new Scene(root, 960, 640));
+    stage.setScene(CallUi.scene(root, 1000, 740));
     stage.setOnCloseRequest(
         e -> {
           e.consume();
@@ -290,14 +316,13 @@ final class VideoCallWindow {
     if (timer != null) {
       return;
     }
-    startedAt = System.currentTimeMillis();
+    startedAt = System.nanoTime();
     timer =
         new Timeline(
             new KeyFrame(
                 Duration.seconds(1),
                 e -> {
-                  long sec = Math.max(0, (System.currentTimeMillis() - startedAt) / 1000);
-                  timerLabel.setText(String.format("%02d:%02d", sec / 60, sec % 60));
+                  timerLabel.setText(CallUi.duration(System.nanoTime() - startedAt));
                 }));
     timer.setCycleCount(Timeline.INDEFINITE);
     timer.play();
@@ -310,13 +335,4 @@ final class VideoCallWindow {
     }
   }
 
-  private static String normalStyle() {
-    return "-fx-background-color: #1E293B; -fx-text-fill: #E2E8F0; -fx-font-size: 12px;"
-        + " -fx-padding: 7 14 7 14; -fx-background-radius: 8;";
-  }
-
-  private static String dangerStyle() {
-    return "-fx-background-color: #DC2626; -fx-text-fill: white; -fx-font-size: 12px;"
-        + " -fx-font-weight: bold; -fx-padding: 7 14 7 14; -fx-background-radius: 8;";
-  }
 }

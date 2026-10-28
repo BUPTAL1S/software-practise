@@ -156,9 +156,9 @@ public class UserController {
         ));
     }
 
-    public record UserView(Long id, String username, String sipId, String avatarUrl) {
+    public record UserView(Long id, String username, String sipId, String avatarUrl, String nickname) {
         static UserView from(User user) {
-            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl());
+            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl(), user.getNickname());
         }
     }
 }

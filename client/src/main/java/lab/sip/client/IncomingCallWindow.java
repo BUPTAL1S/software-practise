@@ -2,64 +2,51 @@ package lab.sip.client;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.StackPane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.shape.Circle;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
-/** Dedicated incoming-call prompt; replaces the old inline green banner. */
+/** Incoming call with clear accept/reject actions and an audio-only alternative. */
 final class IncomingCallWindow {
-  private Stage stage;
   private final Window owner;
-  private Label nameLabel;
-  private Label typeLabel;
-  private Label initialLabel;
-  private Button answerVideoBtn;
-  private Button answerAudioBtn;
-  private Button rejectBtn;
-  private Runnable onAnswerVideo = () -> {};
-  private Runnable onAnswerAudio = () -> {};
-  private Runnable onReject = () -> {};
+  private Stage stage;
+  private javafx.scene.layout.StackPane avatar;
+  private Label nameLabel, typeLabel, initialLabel;
+  private HBox actions;
+  private Button audioOnly, acceptBtn;
+  private boolean video, deciding;
+  private Runnable onVideo = () -> {}, onAudio = () -> {}, onReject = () -> {};
 
-  IncomingCallWindow(Window owner) {
-    this.owner = owner;
-  }
+  IncomingCallWindow(Window owner) { this.owner = owner; }
 
-  void show(
-      String target,
-      boolean video,
-      Runnable answerVideo,
-      Runnable answerAudio,
-      Runnable reject) {
-    this.onAnswerVideo = answerVideo == null ? () -> {} : answerVideo;
-    this.onAnswerAudio = answerAudio == null ? () -> {} : answerAudio;
-    this.onReject = reject == null ? () -> {} : reject;
-    if (stage == null) {
-      build();
-    }
-    nameLabel.setText(target == null || target.isBlank() ? "来电" : target);
-    if (initialLabel != null) {
-      String name = target == null || target.isBlank() ? "?" : target.trim();
-      initialLabel.setText(name.substring(0, 1).toUpperCase());
-    }
-    typeLabel.setText(video ? "视频来电" : "语音来电");
-    boolean showVideoAnswer = video;
-    answerVideoBtn.setVisible(showVideoAnswer);
-    answerVideoBtn.setManaged(showVideoAnswer);
-    answerAudioBtn.setText(video ? "仅接听语音" : "接听");
-    stage.setTitle(video ? "SIP 视频来电" : "SIP 语音来电");
+  void show(String target, boolean video, Runnable answerVideo, Runnable answerAudio, Runnable reject) {
+    onVideo = answerVideo == null ? () -> {} : answerVideo;
+    onAudio = answerAudio == null ? () -> {} : answerAudio;
+    onReject = reject == null ? () -> {} : reject;
+    this.video = video;
+    if (stage == null) build();
+    nameLabel.setText(CallUi.name(target));
+    initialLabel.setText(CallUi.initial(target));
+    typeLabel.setText(video ? "邀请你进行视频通话" : "邀请你进行语音通话");
+    CallUi.state(acceptBtn, video ? "接听视频" : "接听", false);
+    audioOnly.setVisible(video);
+    audioOnly.setManaged(video);
+    stage.setTitle(video ? "视频来电" : "语音来电");
     if (!stage.isShowing()) {
       stage.show();
+      stage.toFront();
+      stage.requestFocus();
     }
-    stage.toFront();
-    stage.requestFocus();
   }
+
+  boolean isShowing() { return stage != null && stage.isShowing(); }
+
+  void setAvatar(javafx.scene.image.Image image) { if (avatar != null) CallUi.photo(avatar, image); }
 
   void close() {
     if (stage != null) {
@@ -67,60 +54,46 @@ final class IncomingCallWindow {
       stage.close();
       stage = null;
     }
+    deciding = false;
   }
 
-  boolean isShowing() {
-    return stage != null && stage.isShowing();
+  private void choose(Runnable action) {
+    if (deciding) return;
+    deciding = true;
+    actions.setDisable(true);
+    audioOnly.setDisable(true);
+    action.run();
   }
 
   private void build() {
     stage = new Stage();
-    if (owner != null) {
-      stage.initOwner(owner);
-    }
-    stage.setResizable(false);
-
-    Circle avatar = new Circle(46, Color.web("#2481CC"));
-    initialLabel = new Label("?");
-    initialLabel.setStyle("-fx-text-fill: white; -fx-font-size: 30px; -fx-font-weight: bold;");
-    StackPane avatarPane = new StackPane(avatar, initialLabel);
-
-    nameLabel = new Label("来电");
-    nameLabel.setStyle("-fx-text-fill: white; -fx-font-size: 22px; -fx-font-weight: bold;");
-    typeLabel = new Label("语音来电");
-    typeLabel.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 13px;");
-
-    answerVideoBtn = new Button("接听视频");
-    answerVideoBtn.setStyle(
-        "-fx-background-color: #16A34A; -fx-text-fill: white; -fx-font-size: 13px;"
-            + " -fx-font-weight: bold; -fx-padding: 8 16 8 16; -fx-background-radius: 8;");
-    answerVideoBtn.setOnAction(e -> onAnswerVideo.run());
-
-    answerAudioBtn = new Button("接听");
-    answerAudioBtn.setStyle(
-        "-fx-background-color: #2563EB; -fx-text-fill: white; -fx-font-size: 13px;"
-            + " -fx-font-weight: bold; -fx-padding: 8 16 8 16; -fx-background-radius: 8;");
-    answerAudioBtn.setOnAction(e -> onAnswerAudio.run());
-
-    rejectBtn = new Button("拒绝");
-    rejectBtn.setStyle(
-        "-fx-background-color: #DC2626; -fx-text-fill: white; -fx-font-size: 13px;"
-            + " -fx-font-weight: bold; -fx-padding: 8 16 8 16; -fx-background-radius: 8;");
-    rejectBtn.setOnAction(e -> onReject.run());
-
-    HBox buttons = new HBox(10, answerVideoBtn, answerAudioBtn, rejectBtn);
-    buttons.setAlignment(Pos.CENTER);
-    buttons.setPadding(new Insets(10, 0, 0, 0));
-
-    VBox root = new VBox(16, avatarPane, nameLabel, typeLabel, buttons);
+    if (owner != null) stage.initOwner(owner);
+    stage.setMinWidth(380);
+    stage.setMinHeight(560);
+    initialLabel = new Label();
+    nameLabel = CallUi.label("来电", "call-name");
+    nameLabel.setMaxWidth(330);
+    typeLabel = CallUi.label("邀请你进行通话", "call-status");
+    avatar = CallUi.avatar(initialLabel);
+    VBox identity = new VBox(20, avatar, nameLabel, typeLabel);
+    identity.setAlignment(Pos.CENTER);
+    Button decline = CallUi.action(CallUi.Icon.HANGUP, "拒绝", "end", () -> choose(onReject));
+    acceptBtn = CallUi.action(video ? CallUi.Icon.VIDEO : CallUi.Icon.PHONE,
+        "接听", "accept", () -> choose(this.video ? onVideo : onAudio));
+    actions = new HBox(88, decline, acceptBtn);
+    actions.setAlignment(Pos.CENTER);
+    audioOnly = new Button("仅用语音接听");
+    audioOnly.getStyleClass().add("call-audio-answer");
+    audioOnly.setOnAction(e -> choose(onAudio));
+    Region above = new Region(), below = new Region();
+    VBox.setVgrow(above, Priority.ALWAYS);
+    VBox.setVgrow(below, Priority.ALWAYS);
+    VBox root = new VBox(14, CallUi.label("收到来电", "call-eyebrow"), above, identity,
+        below, actions, audioOnly);
     root.setAlignment(Pos.CENTER);
-    root.setPadding(new Insets(24));
-    root.setStyle("-fx-background-color: #0F172A;");
-    stage.setScene(new Scene(root, 380, 440));
-    stage.setOnCloseRequest(
-        e -> {
-          e.consume();
-          onReject.run();
-        });
+    root.setPadding(new Insets(20, 24, 24, 24));
+    root.getStyleClass().add("call-root");
+    stage.setScene(CallUi.scene(root, 420, 620));
+    stage.setOnCloseRequest(e -> { e.consume(); choose(onReject); });
   }
 }

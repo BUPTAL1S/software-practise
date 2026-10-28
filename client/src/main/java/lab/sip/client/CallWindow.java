@@ -1,254 +1,130 @@
 package lab.sip.client;
 
+import java.util.function.Consumer;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
-import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.StackPane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.shape.Circle;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
-import java.util.function.Consumer;
 
-/**
- * 独立通话窗口。
- *
- * <p>语音通话使用完整窗口；视频通话使用紧凑控制条，远端画面由 PJSIP 原生窗口
- * 独立显示，本地 PiP 由原生预览窗口叠加在远端窗口右下角。
- */
+/** Full outgoing/connected voice-call surface. */
 final class CallWindow {
   private final Window owner;
   private Stage stage;
-  private Label titleLabel;
-  private Label statusLabel;
-  private Label timerLabel;
-  private Label avatarLabel;
-  private StackPane avatarPane;
-  private Button muteBtn;
-  private Button cameraBtn;
-  private Button hangupBtn;
-
+  private javafx.scene.layout.StackPane avatar;
+  private Label nameLabel, initialLabel, statusLabel, timerLabel;
+  private Button muteBtn, cameraBtn, hangupBtn;
   private Timeline timer;
   private long startedAt;
-  private boolean video;
-  private boolean cameraOn;
-  private boolean muted;
-  private boolean connected;
+  private boolean muted, cameraOn, connected;
   private Runnable onHangup = () -> {};
   private Consumer<Boolean> onMute = value -> {};
   private Consumer<Boolean> onCamera = value -> {};
 
-  CallWindow(Window owner) {
-    this.owner = owner;
-  }
+  CallWindow(Window owner) { this.owner = owner; }
 
-  void show(
-      String target,
-      boolean video,
-      boolean cameraOn,
-      boolean connected,
-      Runnable onHangup,
-      Consumer<Boolean> onMute,
-      Consumer<Boolean> onCamera) {
+  void show(String target, boolean video, boolean cameraOn, boolean connected,
+      Runnable onHangup, Consumer<Boolean> onMute, Consumer<Boolean> onCamera) {
     this.onHangup = onHangup == null ? () -> {} : onHangup;
     this.onMute = onMute == null ? value -> {} : onMute;
     this.onCamera = onCamera == null ? value -> {} : onCamera;
-    this.video = video;
-    this.cameraOn = cameraOn;
-    this.connected = connected;
     if (stage == null) {
-      build(target);
+      build();
       stage.show();
       stage.toFront();
-      stage.requestFocus();
     }
-    update(target, video, cameraOn, connected, muted);
-    if (connected) {
-      startTimer();
-    }
+    update(target, video, cameraOn, connected);
   }
 
   void update(String target, boolean video, boolean cameraOn, boolean connected) {
-    update(target, video, cameraOn, connected, muted);
-  }
-
-  private void update(
-      String target, boolean video, boolean cameraOn, boolean connected, boolean muted) {
-    if (stage == null) {
-      return;
-    }
-    this.video = video;
-    this.cameraOn = cameraOn;
+    if (stage == null) return;
     this.connected = connected;
-    this.muted = muted;
-    String name = target == null || target.isBlank() ? "通话" : target;
-    titleLabel.setText(name);
-    avatarLabel.setText(initial(name));
-    statusLabel.setText(
-        (video ? "视频通话" : "语音通话") + (connected ? " · 已接通" : " · 正在连接…"));
-    if (muteBtn != null) {
-      muteBtn.setText(muted ? "取消静音" : "静音");
-      muteBtn.setStyle(muted ? dangerButtonStyle() : normalButtonStyle());
-    }
-    if (cameraBtn != null) {
-      cameraBtn.setText(cameraOn ? "关闭摄像头" : "开启摄像头");
-      cameraBtn.setStyle(cameraOn ? normalButtonStyle() : dangerButtonStyle());
-      cameraBtn.setVisible(video);
-      cameraBtn.setManaged(video);
-    }
-    if (avatarPane != null) {
-      avatarPane.setVisible(!video);
-      avatarPane.setManaged(!video);
-    }
-    if (stage != null) {
-      stage.setAlwaysOnTop(video);
-      stage.setWidth(360);
-      stage.setHeight(video ? 250 : 470);
-      stage.setTitle(video ? "SIP 视频通话控制" : "SIP 语音通话");
-      if (video) {
-        stage.toFront();
-      }
-    }
-    if (connected) {
-      startTimer();
-    } else {
-      stopTimer();
-      timerLabel.setText("00:00");
-    }
+    nameLabel.setText(CallUi.name(target));
+    initialLabel.setText(CallUi.initial(target));
+    refreshStatus();
+    setCameraOn(cameraOn);
+    cameraBtn.setVisible(video);
+    cameraBtn.setManaged(video);
+    CallUi.state(hangupBtn, connected ? "挂断" : "取消呼叫", false);
+    timerLabel.setVisible(connected);
+    if (connected) startTimer();
+    // Keep user-chosen size and focus when call state refreshes.
   }
 
-  void setMuted(boolean muted) {
-    this.muted = muted;
-    if (muteBtn != null) {
-      muteBtn.setText(muted ? "取消静音" : "静音");
-      muteBtn.setStyle(muted ? dangerButtonStyle() : normalButtonStyle());
-    }
+  void setMuted(boolean value) {
+    muted = value;
+    if (muteBtn != null) CallUi.state(muteBtn, value ? "取消静音" : "静音", value);
+    if (statusLabel != null) refreshStatus();
   }
 
-  void setCameraOn(boolean cameraOn) {
-    this.cameraOn = cameraOn;
-    if (cameraBtn != null) {
-      cameraBtn.setText(cameraOn ? "关闭摄像头" : "开启摄像头");
-      cameraBtn.setStyle(cameraOn ? normalButtonStyle() : dangerButtonStyle());
-    }
+  private void refreshStatus() {
+    statusLabel.setText(connected ? (muted ? "麦克风已静音" : "语音通话中") : "正在呼叫，等待对方接听…");
   }
+
+  void setCameraOn(boolean value) {
+    cameraOn = value;
+    if (cameraBtn != null) CallUi.state(cameraBtn, value ? "关闭摄像头" : "开启摄像头", !value);
+  }
+
+  boolean isShowing() { return stage != null && stage.isShowing(); }
+
+  void setAvatar(javafx.scene.image.Image image) { if (avatar != null) CallUi.photo(avatar, image); }
 
   void close() {
-    stopTimer();
+    if (timer != null) { timer.stop(); timer = null; }
     if (stage != null) {
       stage.setOnCloseRequest(null);
       stage.close();
       stage = null;
     }
     muted = false;
-    connected = false;
   }
 
-  boolean isShowing() {
-    return stage != null && stage.isShowing();
-  }
-
-  private void build(String target) {
+  private void build() {
     stage = new Stage();
-    if (owner != null) {
-      stage.initOwner(owner);
-    }
-    stage.setTitle("SIP 通话");
-    stage.setResizable(false);
-
-    avatarPane = new StackPane();
-    Circle circle = new Circle(42, Color.web("#2481CC"));
-    avatarLabel = new Label(initial(target));
-    avatarLabel.setStyle("-fx-text-fill: white; -fx-font-size: 28px; -fx-font-weight: bold;");
-    avatarPane.getChildren().addAll(circle, avatarLabel);
-
-    titleLabel = new Label(target == null ? "通话" : target);
-    titleLabel.setStyle("-fx-text-fill: white; -fx-font-size: 20px; -fx-font-weight: bold;");
-
-    statusLabel = new Label("正在连接…");
-    statusLabel.setStyle("-fx-text-fill: #CBD5E1; -fx-font-size: 12px;");
-
-    timerLabel = new Label("00:00");
-    timerLabel.setStyle("-fx-text-fill: #E2E8F0; -fx-font-size: 16px; -fx-font-family: monospace;");
-
-    muteBtn = new Button("静音");
-    muteBtn.setStyle(normalButtonStyle());
-    muteBtn.setOnAction(e -> onMute.accept(!muted));
-
-    cameraBtn = new Button("关闭摄像头");
-    cameraBtn.setStyle(normalButtonStyle());
-    cameraBtn.setOnAction(e -> onCamera.accept(!cameraOn));
-
-    hangupBtn = new Button("挂断");
-    hangupBtn.setStyle(dangerButtonStyle());
-    hangupBtn.setOnAction(e -> onHangup.run());
-
-    HBox controls = new HBox(10, muteBtn, cameraBtn, hangupBtn);
-    controls.setAlignment(Pos.CENTER);
-    controls.setPadding(new Insets(8, 0, 0, 0));
-
-    VBox root = new VBox(14, avatarPane, titleLabel, statusLabel, timerLabel, controls);
+    if (owner != null) stage.initOwner(owner);
+    stage.setTitle("语音通话");
+    stage.setMinWidth(380);
+    stage.setMinHeight(560);
+    initialLabel = new Label();
+    nameLabel = CallUi.label("", "call-name");
+    nameLabel.setMaxWidth(330);
+    statusLabel = CallUi.label("正在呼叫，等待对方接听…", "call-status");
+    timerLabel = CallUi.label("00:00", "call-timer");
+    avatar = CallUi.avatar(initialLabel);
+    VBox identity = new VBox(18, avatar, nameLabel, statusLabel, timerLabel);
+    identity.setAlignment(Pos.CENTER);
+    muteBtn = CallUi.action(CallUi.Icon.MIC, "静音", "neutral", () -> onMute.accept(!muted));
+    cameraBtn = CallUi.action(CallUi.Icon.VIDEO, "关闭摄像头", "neutral", () -> onCamera.accept(!cameraOn));
+    hangupBtn = CallUi.action(CallUi.Icon.HANGUP, "取消呼叫", "end", () -> onHangup.run());
+    HBox actions = new HBox(32, muteBtn, cameraBtn, hangupBtn);
+    actions.setAlignment(Pos.CENTER);
+    Region above = new Region(), below = new Region();
+    VBox.setVgrow(above, Priority.ALWAYS);
+    VBox.setVgrow(below, Priority.ALWAYS);
+    VBox root = new VBox(18, CallUi.label("语音通话", "call-eyebrow"), above, identity, below,
+        actions);
     root.setAlignment(Pos.CENTER);
-    root.setPadding(new Insets(18));
-    root.setStyle("-fx-background-color: #0F172A;");
-    VBox.setVgrow(avatarPane, javafx.scene.layout.Priority.NEVER);
-
-    Scene scene = new Scene(root, 360, 470);
-    stage.setScene(scene);
-    stage.setOnCloseRequest(
-        e -> {
-          e.consume();
-          onHangup.run();
-        });
+    root.setPadding(new Insets(20, 24, 26, 24));
+    root.getStyleClass().add("call-root");
+    stage.setScene(CallUi.scene(root, 420, 620));
+    stage.setOnCloseRequest(e -> { e.consume(); onHangup.run(); });
   }
 
   private void startTimer() {
-    if (timer != null) {
-      return;
-    }
-    startedAt = System.currentTimeMillis();
-    timer =
-        new Timeline(
-            new KeyFrame(
-                Duration.seconds(1),
-                e -> {
-                  long sec = Math.max(0, (System.currentTimeMillis() - startedAt) / 1000);
-                  timerLabel.setText(String.format("%02d:%02d", sec / 60, sec % 60));
-                }));
+    if (timer != null) return;
+    startedAt = System.nanoTime();
+    timer = new Timeline(new KeyFrame(Duration.seconds(1),
+        e -> timerLabel.setText(CallUi.duration(System.nanoTime() - startedAt))));
     timer.setCycleCount(Timeline.INDEFINITE);
     timer.play();
-  }
-
-  private void stopTimer() {
-    if (timer != null) {
-      timer.stop();
-      timer = null;
-    }
-  }
-
-  private static String initial(String value) {
-    if (value == null || value.isBlank()) {
-      return "?";
-    }
-    String s = value.trim();
-    return s.substring(0, 1).toUpperCase();
-  }
-
-  private static String normalButtonStyle() {
-    return "-fx-background-color: #1E293B; -fx-text-fill: #E2E8F0; -fx-font-size: 12px;"
-        + " -fx-padding: 7 14 7 14; -fx-background-radius: 8;";
-  }
-
-  private static String dangerButtonStyle() {
-    return "-fx-background-color: #DC2626; -fx-text-fill: white; -fx-font-size: 12px;"
-        + " -fx-font-weight: bold; -fx-padding: 7 14 7 14; -fx-background-radius: 8;";
   }
 }

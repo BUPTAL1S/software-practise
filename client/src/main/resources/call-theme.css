@@ -1,0 +1,31 @@
+.call-root {
+  -fx-font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+  -fx-background-color: linear-gradient(to bottom right, #213e3c 0%, #142b2d 48%, #101d24 100%);
+}
+.call-eyebrow { -fx-text-fill: #a7c4bc; -fx-font-size: 12px; -fx-padding: 8 0; }
+.call-name { -fx-text-fill: #f3faf7; -fx-font-size: 28px; -fx-font-weight: bold; }
+.call-status { -fx-text-fill: #bed1cb; -fx-font-size: 14px; }
+.call-subtle { -fx-text-fill: #8fa9a4; -fx-font-size: 12px; }
+.call-timer { -fx-text-fill: #d8eee5; -fx-font-size: 17px; -fx-font-family: "Consolas", monospace; }
+.call-avatar-halo { -fx-background-color: rgba(149,215,184,0.07); -fx-background-radius: 100; -fx-border-color: rgba(184,233,210,0.13); -fx-border-radius: 100; -fx-border-width: 1; }
+.call-avatar-disk { -fx-background-color: linear-gradient(to bottom right, #7dbba3, #40776b); -fx-background-radius: 100; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 22, 0, 0, 6); }
+.call-avatar-initial { -fx-text-fill: #f5fff9; -fx-font-size: 42px; -fx-font-weight: bold; }
+.call-control { -fx-text-fill: #d8e5df; -fx-font-size: 12px; -fx-background-color: transparent; -fx-padding: 4; -fx-cursor: hand; -fx-alignment: center; }
+.call-control-disc { -fx-background-color: rgba(225,242,234,0.13); -fx-background-radius: 100; -fx-border-radius: 100; -fx-border-color: transparent; -fx-border-width: 2; }
+.call-control:hover .call-control-disc { -fx-background-color: rgba(225,242,234,0.23); }
+.call-control:pressed { -fx-opacity: 0.7; }
+.call-control:focused .call-control-disc { -fx-border-color: #b8ecd3; }
+.call-control:selected .call-control-disc { -fx-background-color: #e1ede7; }
+.call-icon { -fx-fill: transparent; -fx-stroke: #f5fff9; -fx-stroke-width: 1.8; -fx-stroke-line-cap: round; -fx-stroke-line-join: round; }
+.call-control:selected .call-icon { -fx-stroke: #183b31; }
+.call-control.end .call-control-disc { -fx-background-color: #ed5365; }
+.call-control.end:hover .call-control-disc { -fx-background-color: #ff6979; }
+.call-control.accept .call-control-disc { -fx-background-color: #29b879; }
+.call-control.accept:hover .call-control-disc { -fx-background-color: #37ca8b; }
+.call-audio-answer { -fx-text-fill: #b9d9cd; -fx-background-color: transparent; -fx-font-size: 13px; -fx-padding: 12 20; -fx-cursor: hand; -fx-underline: true; }
+.call-audio-answer:hover, .call-audio-answer:focused { -fx-text-fill: white; -fx-background-color: rgba(225,242,234,0.08); -fx-background-radius: 8; }
+.video-root { -fx-background-color: #101c20; }
+.video-header { -fx-background-color: #15272a; -fx-padding: 18 24; }
+.video-name { -fx-text-fill: #f1faf5; -fx-font-size: 18px; -fx-font-weight: bold; }
+.video-surface { -fx-background-color: linear-gradient(to bottom right, #203a38, #111f26); }
+.video-controls { -fx-background-color: #15272a; -fx-padding: 16 24 20 24; }

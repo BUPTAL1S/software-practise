@@ -46,18 +46,20 @@ public final class WindowLayout {
    * @param w       video area width
    * @param h       video area height
    */
-  public static void attach(
+  public static boolean attach(
       long parent, long remote, long pip, int x, int y, int w, int h) {
     if (parent == 0 || remote == 0 || w <= 0 || h <= 0) {
-      return;
+      return false;
     }
     ensureLoaded();
     if (!loaded) {
-      return;
+      return false;
     }
     try {
       attachNative(parent, remote, pip, x, y, w, h);
+      return true;
     } catch (Throwable ignored) {
+      return false;
     }
   }
 
