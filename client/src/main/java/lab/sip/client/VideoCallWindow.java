@@ -78,6 +78,16 @@ final class VideoCallWindow {
       String target,
       boolean cameraOn,
       boolean connected,
+      Runnable onHangup,
+      Consumer<Boolean> onMute,
+      Consumer<Boolean> onCamera) {
+    show(target, cameraOn, connected, false, onHangup, onMute, onCamera);
+  }
+
+  void show(
+      String target,
+      boolean cameraOn,
+      boolean connected,
       boolean room,
       Runnable onHangup,
       Consumer<Boolean> onMute,
@@ -139,6 +149,14 @@ final class VideoCallWindow {
   void setMediaBusy(boolean busy) {
     if (cameraBtn != null) cameraBtn.setDisable(busy);
     if (muteBtn != null) muteBtn.setDisable(busy);
+  }
+
+  /** Update only the camera affordance; safe to call before the next full sync. */
+  void setCameraState(boolean enabled) {
+    this.cameraOn = enabled;
+    if (cameraBtn != null) {
+      CallUi.state(cameraBtn, enabled ? "关闭摄像头" : "开启摄像头", !enabled);
+    }
   }
 
   void setAvatar(javafx.scene.image.Image image) {
@@ -243,12 +261,16 @@ final class VideoCallWindow {
             });
       }
     } else {
-      nativeWindowOps.execute(
-          () -> {
-            if (!disposed) {
-              action.run();
-            }
-          });
+      try {
+        nativeWindowOps.execute(
+            () -> {
+              if (!disposed) {
+                action.run();
+              }
+            });
+      } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        // Window already closed; a late layout task is harmless.
+      }
     }
   }
 
@@ -302,6 +324,7 @@ final class VideoCallWindow {
   /** Close after the SIP call has ended; PJSIP owns and has destroyed the native children. */
   void closeWithoutDetach() {
     disposed = true;
+    nativeWindowOps.shutdownNow();
     hangupRequested = false;
     placement.invalidate();
     stopTimer();
@@ -316,6 +339,7 @@ final class VideoCallWindow {
 
   void close() {
     disposed = true;
+    nativeWindowOps.shutdownNow();
     boolean nativeAlreadyTornDown = hangupRequested;
     hangupRequested = false;
     placement.invalidate();

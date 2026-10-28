@@ -8,6 +8,7 @@ import com.lab.sipim.repo.RoomMessageRepository;
 import com.lab.sipim.repo.RoomRepository;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
+import com.lab.sipim.service.RoomPresenceRegistry;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ public class RoomController {
     private final UserRepository userRepo;
     private final LoginTokens tokens;
     private final CdrRepository cdrRepo;
+    private final RoomPresenceRegistry presence;
     @Autowired(required = false)
     private com.lab.sipim.esl.EslEventListener eslEventListener;
 
@@ -33,12 +35,14 @@ public class RoomController {
             RoomMessageRepository messageRepo,
             UserRepository userRepo,
             LoginTokens tokens,
-            @Autowired(required = false) CdrRepository cdrRepo) {
+            @Autowired(required = false) CdrRepository cdrRepo,
+            RoomPresenceRegistry presence) {
         this.roomRepo = roomRepo;
         this.messageRepo = messageRepo;
         this.userRepo = userRepo;
         this.tokens = tokens;
         this.cdrRepo = cdrRepo;
+        this.presence = presence;
     }
 
     @GetMapping
@@ -58,6 +62,37 @@ public class RoomController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
         }
         return ResponseEntity.ok(formatRoom(found.get()));
+    }
+
+    /**
+     * Heartbeat used by a client while it is inside a conference. The ESL side
+     * can distinguish a live participant from a killed client's bridged channel.
+     */
+    @PostMapping("/{identifier}/heartbeat")
+    public ResponseEntity<?> heartbeat(
+            @PathVariable("identifier") String identifier,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Optional<Room> found = findRoom(identifier);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
+        }
+        if (authorization == null || authorization.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        String token = MeController.bearerToken(authorization);
+        Optional<Long> uid = tokens.userIdOf(token);
+        if (uid.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        Optional<User> user = userRepo.findById(uid.get());
+        if (user.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        presence.heartbeat(found.get().getSipUri(), user.get().getUsername());
+        return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     @PostMapping("/{identifier}/messages")

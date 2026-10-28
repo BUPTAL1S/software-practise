@@ -69,7 +69,7 @@ import javafx.scene.shape.SVGPath;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
-public final class MainApp extends Application {
+public final class MainApp extends Application implements CallUiCoordinator.Host {
   private final Map<String, ObservableList<ChatMessage>> sessionMap = new ConcurrentHashMap<>();
   private final Map<String, Integer> unreadCounts = new ConcurrentHashMap<>();
   private final Map<String, Long> lastRoomMessageIds = new ConcurrentHashMap<>();
@@ -410,7 +410,7 @@ public final class MainApp extends Application {
       return;
     }
     lastPrivateInboxPollAt = now;
-    new Thread(
+    pollExecutor.execute(
             () -> {
               try {
                 httpFileClient.setBaseUrl(httpServerField.getText().trim());
@@ -468,7 +468,7 @@ public final class MainApp extends Application {
                             }
                           }
                         }
-                        new Thread(
+                        pollExecutor.execute(
                                 () -> {
                                   try {
                                     httpFileClient.updatePrivateMessageStatus(
@@ -478,9 +478,7 @@ public final class MainApp extends Application {
                                       reloginHttp();
                                     }
                                   }
-                                },
-                                "private-ack")
-                            .start();
+                                });
                       }
                     });
               } catch (Exception ex) {
@@ -488,9 +486,7 @@ public final class MainApp extends Application {
                   reloginHttp();
                 }
               }
-            },
-            "private-inbox")
-        .start();
+            });
   }
 
   /** Refresh delivery states for the currently open private conversation. */
@@ -505,7 +501,7 @@ public final class MainApp extends Application {
       return;
     }
     lastPrivateHistoryPollAt = now;
-    new Thread(
+    pollExecutor.execute(
             () -> {
               try {
                 httpFileClient.setBaseUrl(httpServerField.getText().trim());
@@ -517,9 +513,7 @@ public final class MainApp extends Application {
                   reloginHttp();
                 }
               }
-            },
-            "private-status")
-        .start();
+            });
   }
 
   /**
@@ -581,23 +575,7 @@ public final class MainApp extends Application {
   }
 
   public static boolean probeRoomMcuReady(String httpBaseUrl) {
-    if (httpBaseUrl == null || httpBaseUrl.isBlank()) {
-      httpBaseUrl = "http://127.0.0.1:8080";
-    }
-    try {
-      java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-          .connectTimeout(java.time.Duration.ofMillis(800)).build();
-      java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-          .uri(java.net.URI.create(httpBaseUrl.replaceAll("/+$", "") + "/api/health"))
-          .timeout(java.time.Duration.ofMillis(1200))
-          .GET()
-          .build();
-      java.net.http.HttpResponse<String> resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
-      String b = resp.body();
-      return resp.statusCode() == 200 && b != null && b.contains("\"connected\":true");
-    } catch (Exception e) {
-      return false;
-    }
+    return HttpFileClient.probeMcuReady(httpBaseUrl);
   }
 
   private final SipService sip =
@@ -705,14 +683,7 @@ public final class MainApp extends Application {
 
             @Override
             public void videoAvatarChanged(String fromUri, boolean off) {
-              Platform.runLater(
-                  () -> {
-                    remoteAvatarOff = off;
-                    if (!callPreviews.isBusy() && videoCallWindow != null && videoCallWindow.isShowing()) {
-                      videoCallWindow.setRemoteAvatarOff(
-                          off, extractUser(fromUri));
-                    }
-                  });
+              Platform.runLater(() -> calls.setRemoteAvatarOff(off, fromUri));
             }
 
             @Override
@@ -803,6 +774,7 @@ public final class MainApp extends Application {
 
   private Label fileProgressLabel;
   private boolean roomRefreshFailed = false;
+  private Boolean lastInRoomUiState;
 
   // CDR and Stats UI elements
   private final ObservableList<HttpFileClient.CdrRecord> cdrRecords = FXCollections.observableArrayList();
@@ -832,70 +804,26 @@ public final class MainApp extends Application {
   private Button loginBtn;
   private CheckBox cameraToggleBox;
   private MainViewAssembler assembler;
-  private CallWindow callWindow;
-  private VideoCallWindow videoCallWindow;
-  private IncomingCallWindow incomingCallWindow;
-  private boolean incomingAnswered;
-  private boolean remoteAvatarOff;
-  private Timeline pipLayoutTimeline;
-  private boolean callPreviewErrorLogged;
-  private boolean callPreviewStarted;
-  private final CallPreviewLifecycle callPreviews = new CallPreviewLifecycle();
   private final java.util.concurrent.ExecutorService roomCameraUpdates =
       java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "room-camera-updates");
         thread.setDaemon(true);
         return thread;
       });
+  private final java.util.concurrent.ExecutorService pollExecutor =
+      java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "client-poller");
+        thread.setDaemon(true);
+        return thread;
+      });
+  private final java.util.concurrent.atomic.AtomicBoolean pollInFlight =
+      new java.util.concurrent.atomic.AtomicBoolean();
+  private final CallUiCoordinator calls = new CallUiCoordinator(this);
 
   private String campusIp = "";
 
   public CheckBox getCameraToggleBox() {
-    if (cameraToggleBox == null) {
-      boolean cameraOn = sip.isCameraEnabled();
-      cameraToggleBox = new CheckBox(cameraOn ? "摄像头: 已开启" : "摄像头: 已禁用");
-      cameraToggleBox.setSelected(cameraOn);
-      cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
-      cameraToggleBox.setOnAction(e -> {
-        if (callPreviews.isBusy()) {
-          cameraToggleBox.setSelected(sip.isCameraEnabled());
-          return;
-        }
-        boolean enabled = cameraToggleBox.isSelected();
-        callPreviewErrorLogged = false;
-        sip.setCameraEnabled(enabled);
-        cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
-        cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
-        String remote = sip.isCallActive() ? sip.getActiveCallRemoteUri() : "";
-        String mySip = user == null ? "" : user.getText().trim();
-        VideoCallWindow expectedWindow = videoCallWindow;
-        callPreviews.changeCamera(sip, expectedWindow, enabled, () -> {
-          if (callPreviews.isBusy()) return;
-          if (videoCallWindow == expectedWindow && expectedWindow != null) expectedWindow.setMediaBusy(false);
-          if (!enabled) callPreviewStarted = false;
-          if (!remote.isBlank()) {
-            if (isRoomTarget(remote)) {
-              roomCameraUpdates.execute(() -> {
-                boolean applied = httpFileClient.toggleRoomVmute(remote, mySip, !enabled);
-                Platform.runLater(() -> {
-                  if (logs != null) logs.append(applied ? "通话" : "警告", applied
-                      ? (enabled ? "MCU 已恢复实时视频" : "MCU 已切换为个人头像")
-                      : "本地摄像头状态已更新，MCU 同步失败，请检查后台连接");
-                });
-              });
-            } else {
-              sendAvatarControl(!enabled);
-            }
-          }
-          refreshButtons();
-        }, error -> {
-          if (videoCallWindow == expectedWindow && expectedWindow != null) expectedWindow.setMediaBusy(false);
-          logs.append("警告", "摄像头切换失败：" + error.getMessage());
-          if (!callPreviews.isBusy()) refreshButtons();
-        });
-      });
-    }
-    return cameraToggleBox;
+    return calls.cameraToggleBox();
   }
 
   public Button getPreviewBtn() {
@@ -1509,8 +1437,28 @@ public final class MainApp extends Application {
   }
 
   private void pollOnlineStatusesAndRoomMessages() {
-    new Thread(
+    if (!pollInFlight.compareAndSet(false, true)) {
+      return;
+    }
+    // PJSUA call/account objects must only be read on the FX/PJSUA thread.
+    // Snapshot the few flags needed by the HTTP polling worker first.
+    final boolean registered = sip.isRegistered();
+    final boolean inRoom = sip.isInRoomCall();
+    final String activeRoom = inRoom ? extractUser(sip.currentCallTarget()) : "";
+    pollExecutor.execute(
         () -> {
+          try {
+          // Keep the ESL stale-member cleaner informed while this client is in a room.
+          if (inRoom && !activeRoom.isBlank()) {
+            try {
+              httpFileClient.setBaseUrl(httpServerField.getText().trim());
+              httpFileClient.sendRoomHeartbeat(activeRoom);
+            } catch (Exception ex) {
+              if (isHttpUnauthorized(ex)) {
+                reloginHttp();
+              }
+            }
+          }
           // 1. 探活联系人真实在线状态 (1001, 1002, 1003)
           String sipHost = (server != null && server.getText() != null) ? server.getText().trim() : "127.0.0.1";
           int sipPortNum = 5060;
@@ -1524,7 +1472,7 @@ public final class MainApp extends Application {
               continue;
             }
             boolean online;
-            if (!myUser.isEmpty() && target.equalsIgnoreCase(myUser) && sip.isRegistered()) {
+            if (!myUser.isEmpty() && target.equalsIgnoreCase(myUser) && registered) {
               online = true;
             } else {
               online = probeSipUserOnline(sipHost, sipPortNum, target);
@@ -1582,9 +1530,10 @@ public final class MainApp extends Application {
             } catch (Exception ignored) {
             }
           }
-        },
-        "probe-and-room-poll")
-        .start();
+          } finally {
+            pollInFlight.set(false);
+          }
+        });
     pollPrivateInbox();
     refreshActivePrivateStatuses();
   }
@@ -1873,7 +1822,9 @@ public final class MainApp extends Application {
       }
       hangup.setText("挂断");
     }
-    if (roomTableView != null) {
+    if (roomTableView != null
+        && (lastInRoomUiState == null || lastInRoomUiState != inRoom)) {
+      lastInRoomUiState = inRoom;
       roomTableView.refresh();
     }
     if (roomHintLabel != null) {
@@ -1964,297 +1915,36 @@ public final class MainApp extends Application {
   }
 
   private void syncCallWindow() {
-    boolean inCall = sip.isInCall();
-    boolean connected = sip.isCallConnected();
-    boolean incoming = sip.hasIncoming();
-
-    if (!inCall) {
-      closeIncomingWindow();
-      incomingAnswered = false;
-      closeCallWindows();
-      return;
-    }
-
-    if (incoming && !connected && !incomingAnswered) {
-      if (videoCallWindow != null) {
-        videoCallWindow.close();
-        videoCallWindow = null;
-      }
-      if (callWindow != null) {
-        callWindow.close();
-        callWindow = null;
-      }
-      String incomingId = extractUser(sip.currentCallTarget());
-      String incomingTarget = callDisplayName(incomingId);
-      if (incomingTarget.isBlank()) {
-        incomingTarget = "来电";
-      }
-      if (incomingCallWindow == null) {
-        incomingCallWindow = new IncomingCallWindow(primaryStage);
-      }
-      incomingCallWindow.show(
-          incomingTarget,
-          sip.isIncomingVideo(),
-          () -> answerIncoming(true),
-          () -> answerIncoming(false),
-          this::rejectIncoming);
-      incomingCallWindow.setAvatar(callAvatar(incomingId));
-      return;
-    }
-
-    closeIncomingWindow();
-    if (connected) {
-      incomingAnswered = false;
-    }
-    if (!connected && sip.hasIncoming()) {
-      closeCallWindows();
-      return;
-    }
-
-    String targetId = extractUser(sip.currentCallTarget());
-    String target = callDisplayName(targetId);
-    if (target.isBlank()) {
-      target = "通话";
-    }
-    boolean video = sip.isCurrentCallVideoIntent();
-    boolean videoActive = sip.isCurrentCallVideo();
-    boolean inRoom = sip.isInRoomCall();
-    boolean cameraOn = sip.isCameraEnabled();
-
-    if (video) {
-      if (callWindow != null) {
-        callWindow.close();
-        callWindow = null;
-      }
-      if (videoCallWindow == null) {
-        videoCallWindow = new VideoCallWindow(primaryStage);
-      }
-      if (videoCallWindow.isHangingUp()) {
-        // Do not reopen the window or touch native handles while the BYE is
-        // still in flight; callEnded() will close it.
-        return;
-      }
-      if (!videoCallWindow.isShowing()) {
-        videoCallWindow.show(
-            target,
-            cameraOn,
-            connected,
-            inRoom,
-            () -> {
-              // Let PJSUA destroy the native video children first. Hiding is
-              // immediate; closeCallWindows() detaches only after callEnded.
-              if (videoCallWindow != null) {
-                videoCallWindow.hideForHangup();
-              }
-              run(sip::hangup);
-            },
-            muted -> {
-              sip.setAudioMuted(muted);
-              if (videoCallWindow != null) {
-                videoCallWindow.setMuted(sip.isAudioMuted());
-              }
-            },
-            enabled -> setCallCamera(enabled));
-      } else {
-        videoCallWindow.update(target, cameraOn, connected);
-      }
-      videoCallWindow.setMuted(sip.isAudioMuted());
-      videoCallWindow.setAvatar(callAvatar(targetId));
-      boolean showAvatar = connected && (remoteAvatarOff || !videoActive);
-      videoCallWindow.setAvatarHint(remoteAvatarOff ? "对方已关闭摄像头，仍可继续语音交流"
-          : "对方正在使用语音，视频画面暂不可用");
-      videoCallWindow.setRemoteAvatarOff(showAvatar, target);
-
-      long remote = sip.getActiveVideoWindowHandle();
-      if (connected && !showAvatar && remote != 0) {
-        long pip = 0;
-        if (cameraOn && !inRoom) {
-          if (!sip.isPreviewActive() && !callPreviews.isBusy()) {
-            if (!callPreviewErrorLogged) {
-              VideoCallWindow expectedWindow = videoCallWindow;
-              callPreviews.start(sip, expectedWindow, () -> {
-                if (videoCallWindow == expectedWindow) {
-                  expectedWindow.setMediaBusy(false);
-                  callPreviewStarted = true;
-                  if (!callPreviews.isBusy()) refreshButtons();
-                }
-              }, error -> {
-                if (videoCallWindow == expectedWindow) {
-                  expectedWindow.setMediaBusy(false);
-                  callPreviewErrorLogged = true;
-                  logs.append("警告", "本地小窗预览启动失败: " + error.getMessage());
-                  if (!callPreviews.isBusy()) refreshButtons();
-                }
-              });
-              return;
-            }
-          } else {
-            callPreviewStarted = true;
-          }
-          pip = sip.getPreviewWindowHandle();
-        } else {
-          videoCallWindow.detachPip();
-          if (callPreviewStarted && sip.isPreviewActive()) {
-            sip.stopPreview();
-          }
-          callPreviewStarted = false;
-        }
-        videoCallWindow.attachNative(remote, pip);
-        startPipLayout();
-      } else {
-        if (showAvatar) {
-          videoCallWindow.detachPip();
-          if (callPreviewStarted && sip.isPreviewActive()) {
-            sip.stopPreview();
-          }
-          callPreviewStarted = false;
-        }
-        stopPipLayout();
-      }
-    } else {
-      if (videoCallWindow != null) {
-        videoCallWindow.close();
-        videoCallWindow = null;
-      }
-      if (callWindow == null) {
-        callWindow = new CallWindow(primaryStage);
-      }
-      if (!callWindow.isShowing()) {
-        callWindow.show(
-            target,
-            false,
-            cameraOn,
-            connected,
-            () -> run(sip::hangup),
-            muted -> {
-              sip.setAudioMuted(muted);
-              if (callWindow != null) {
-                callWindow.setMuted(muted);
-              }
-            },
-            enabled -> setCallCamera(enabled));
-      } else {
-        callWindow.update(target, false, cameraOn, connected);
-      }
-      callWindow.setMuted(sip.isAudioMuted());
-      callWindow.setAvatar(callAvatar(targetId));
-      if (callPreviewStarted && sip.isPreviewActive()) {
-        sip.stopPreview();
-      }
-      callPreviewStarted = false;
-      stopPipLayout();
-    }
+    calls.sync();
   }
 
-  private String callDisplayName(String targetId) {
-    var contact = assembler == null ? null : assembler.getContactCard(targetId);
-    return contact == null || contact.nameLabel.getText().isBlank()
-        ? targetId : contact.nameLabel.getText();
-  }
 
-  private javafx.scene.image.Image callAvatar(String targetId) {
-    var contact = assembler == null ? null : assembler.getContactCard(targetId);
-    return contact == null ? null : contact.contactImgView.getImage();
-  }
 
   private void answerIncoming(boolean video) {
-    incomingAnswered = true;
-    closeIncomingWindow();
-    run(() -> sip.answer(video));
-    Platform.runLater(this::syncCallWindow);
+    calls.answer(video);
   }
 
   private void rejectIncoming() {
-    incomingAnswered = false;
-    closeIncomingWindow();
-    run(sip::hangup);
-    Platform.runLater(this::syncCallWindow);
+    calls.reject();
   }
 
   private void closeIncomingWindow() {
-    if (incomingCallWindow != null) {
-      incomingCallWindow.close();
-      incomingCallWindow = null;
-    }
+    calls.closeIncomingWindow();
   }
 
   private void closeCallWindows() {
-    remoteAvatarOff = false;
-    if (videoCallWindow != null) {
-      videoCallWindow.closeWithoutDetach();
-      videoCallWindow = null;
-    }
-    if (callWindow != null) {
-      callWindow.close();
-      callWindow = null;
-    }
-    stopPipLayout();
-    if (!callPreviews.isBusy() && callPreviewStarted && sip.isPreviewActive()) {
-      sip.stopPreview();
-    }
-    callPreviewStarted = false;
-    callPreviewErrorLogged = false;
+    calls.closeWindows();
   }
 
   private void sendAvatarControl(boolean off) {
-    String remote = sip.getActiveCallRemoteUri();
-    String peer = extractUser(remote);
-    if (peer.isBlank() || peer.startsWith("room-") || !sip.isCurrentCallVideo()) {
-      return;
-    }
-    String body = off ? SipService.VIDEO_AVATAR_OFF : SipService.VIDEO_AVATAR_ON;
-    run(
-        () -> {
-          try {
-            sip.sendMessage(peer, domain.getText().trim(), body);
-          } catch (Exception ex) {
-            if (logs != null) {
-              logs.append("警告", "发送摄像头头像状态失败: " + ex.getMessage());
-            }
-          }
-        });
+    calls.sendAvatarControl(off);
   }
 
   private void setCallCamera(boolean enabled) {
-    if (cameraToggleBox == null) {
-      sip.setCameraEnabled(enabled);
-      return;
-    }
-    // CheckBox.fire() toggles selection before dispatching its action handler.
-    if (cameraToggleBox.isSelected() != enabled) {
-      cameraToggleBox.fire();
-    }
+    calls.setCallCamera(enabled);
   }
 
-  private void startPipLayout() {
-    if (pipLayoutTimeline != null) {
-      return;
-    }
-    pipLayoutTimeline =
-        new Timeline(
-            new KeyFrame(
-                Duration.millis(500),
-                e -> {
-                  if (callPreviews.isBusy()) return;
-                  if (videoCallWindow == null || !sip.isCallConnected()) {
-                    return;
-                  }
-                  long remote = sip.getActiveVideoWindowHandle();
-                  long pip = sip.isPreviewActive() ? sip.getPreviewWindowHandle() : 0;
-                  if (remote != 0) {
-                    videoCallWindow.attachNative(remote, pip);
-                  }
-                }));
-    pipLayoutTimeline.setCycleCount(Timeline.INDEFINITE);
-    pipLayoutTimeline.play();
-  }
 
-  private void stopPipLayout() {
-    if (pipLayoutTimeline != null) {
-      pipLayoutTimeline.stop();
-      pipLayoutTimeline = null;
-    }
-  }
 
   private void performLogin(boolean silent) {
     String url = httpServerField.getText().trim();
@@ -2918,7 +2608,7 @@ public final class MainApp extends Application {
       super.updateItem(item, empty);
       // Rendering a refreshed room table must not acquire the native media lock
       // while SDL is waiting for JavaFX to pump window messages.
-      if (callPreviews.isBusy()) return;
+      if (calls.isBusy()) return;
       if (empty || getIndex() < 0 || getTableView() == null || getIndex() >= getTableView().getItems().size()) {
         setGraphic(null);
       } else {
@@ -2982,7 +2672,7 @@ public final class MainApp extends Application {
                         logs.append("系统", "刷新通讯录已恢复正常");
                         roomRefreshFailed = false;
                       }
-                      if (roomRecords != null && !callPreviews.isBusy()) {
+                      if (roomRecords != null && !calls.isBusy()) {
                         roomRecords.setAll(finalRooms);
                       }
                       if (roomCountBadge != null) {
@@ -3062,6 +2752,51 @@ public final class MainApp extends Application {
         },
         "contact-avatars-fetcher")
         .start();
+  }
+
+  @Override
+  public Stage owner() {
+    return primaryStage;
+  }
+
+  @Override
+  public SipService sip() {
+    return sip;
+  }
+
+  @Override
+  public LogView logs() {
+    return logs;
+  }
+
+  @Override
+  public MainViewAssembler assembler() {
+    return assembler;
+  }
+
+  @Override
+  public HttpFileClient http() {
+    return httpFileClient;
+  }
+
+  @Override
+  public String domain() {
+    return domain == null ? "" : domain.getText().trim();
+  }
+
+  @Override
+  public String user() {
+    return user == null ? "" : user.getText().trim();
+  }
+
+  @Override
+  public void runAction(CallUiCoordinator.Host.Throwing action) {
+    MainApp.this.run((Throwing) () -> action.run());
+  }
+
+  @Override
+  public void refreshMainUi() {
+    refreshButtons();
   }
 
   private void run(Throwing action) {
@@ -3408,9 +3143,8 @@ public final class MainApp extends Application {
   @Override
   public void stop() throws Exception {
     roomCameraUpdates.shutdownNow();
-    callPreviews.close();
-    closeCallWindows();
-    stopPipLayout();
+    pollExecutor.shutdownNow();
+    calls.close();
     if (httpFileClient != null) {
       Thread logout =
           new Thread(
