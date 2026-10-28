@@ -78,6 +78,16 @@ final class VideoCallWindow {
       String target,
       boolean cameraOn,
       boolean connected,
+      Runnable onHangup,
+      Consumer<Boolean> onMute,
+      Consumer<Boolean> onCamera) {
+    show(target, cameraOn, connected, false, onHangup, onMute, onCamera);
+  }
+
+  void show(
+      String target,
+      boolean cameraOn,
+      boolean connected,
       boolean room,
       Runnable onHangup,
       Consumer<Boolean> onMute,

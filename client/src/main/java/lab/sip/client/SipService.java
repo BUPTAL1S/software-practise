@@ -57,32 +57,10 @@ final class SipService {
     return VIDEO_AVATAR_OFF.equals(body) || VIDEO_AVATAR_ON.equals(body);
   }
 
-  interface Events {
-    void log(String msg);
-
-    void log(String category, String msg);
-
-    void sip(boolean outgoing, String summary, String raw);
-
-    void stateChanged();
-
-    default void instantMessageReceived(String fromUri, String toUri, String body, String contentType) {}
-
-    default void instantMessageStatus(String toUri, String body, int statusCode, String reason) {}
-
-    default void videoAvatarChanged(String fromUri, boolean off) {}
-
-    default void callEnded(
-        String callId, String caller, String calleeOrRoom, java.time.Instant startedAt, long durationSec, boolean wasConnected) {
-      callEnded(caller, calleeOrRoom, startedAt, durationSec, wasConnected);
-    }
-
-    default void callEnded(
-        String caller, String calleeOrRoom, java.time.Instant startedAt, long durationSec, boolean wasConnected) {}
-  }
+  interface Events extends SipEvents {}
 
 
-  private final Events events;
+  private final SipEvents events;
   private final ScheduledExecutorService hangupWatch =
       Executors.newSingleThreadScheduledExecutor(
           r -> {
@@ -91,7 +69,7 @@ final class SipService {
             return t;
           });
   private Endpoint endpoint;
-  private ClientLogWriter logWriter;
+  private SipLogWriter logWriter;
   private ClientAccount account;
   private ClientCall activeCall;
   /** 最近一次创建的通话包装对象；关机时必须显式 delete，否则 finalize 会在库销毁后断言。 */
@@ -111,8 +89,13 @@ final class SipService {
   private ScheduledFuture<?> hangupWatchTask;
   private final Map<String, Buddy> buddies = new HashMap<>();
 
-  SipService(Events events) {
+  SipService(SipEvents events) {
     this.events = events;
+  }
+
+  /** Compatibility constructor for existing callers and tests. */
+  SipService(Events events) {
+    this((SipEvents) events);
   }
 
   synchronized boolean isStarted() {
@@ -123,14 +106,7 @@ final class SipService {
     return started && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
   }
 
-  static final class VideoDetails {
-    final boolean supported;
-    final String codec;
-    final String captureDev;
-    final String renderDev;
-    final int captureDevId;
-    final int renderDevId;
-
+  static final class VideoDetails extends SipVideoDetails {
     VideoDetails(
         boolean supported,
         String codec,
@@ -138,12 +114,7 @@ final class SipService {
         String renderDev,
         int capId,
         int renId) {
-      this.supported = supported;
-      this.codec = codec;
-      this.captureDev = captureDev;
-      this.renderDev = renderDev;
-      this.captureDevId = capId;
-      this.renderDevId = renId;
+      super(supported, codec, captureDev, renderDev, capId, renId);
     }
   }
 
@@ -1190,7 +1161,7 @@ final class SipService {
     endpoint.libCreate();
     EpConfig epConfig = new EpConfig();
     try {
-      logWriter = new ClientLogWriter();
+      logWriter = new SipLogWriter(events, this::onByeResponse);
       epConfig.getLogConfig().setWriter(logWriter);
       // pjsua 只把 level <= consoleLevel 的日志交给自定义 writer；SIP 报文 dump 是 4 级。
       epConfig.getLogConfig().setLevel(4);
@@ -1358,111 +1329,6 @@ final class SipService {
 
   private static String nullToEmpty(String s) {
     return s == null ? "" : s;
-  }
-
-  private final class ClientLogWriter extends LogWriter {
-    private java.io.PrintWriter fileSink;
-    private boolean fileSinkInit;
-
-    private void mirrorToFile(String msg) {
-      if (!fileSinkInit) {
-        fileSinkInit = true;
-        String path = System.getenv("UI_LOG_FILE");
-        if (path != null && !path.isBlank()) {
-          try {
-            fileSink = new java.io.PrintWriter(new java.io.FileWriter(path, true), true);
-          } catch (Throwable ignored) {
-            fileSink = null;
-          }
-        }
-      }
-      if (fileSink != null) {
-        fileSink.println(msg);
-      }
-    }
-
-    @Override
-    public void write(LogEntry entry) {
-      try {
-        String msg = entry.getMsg();
-        if (msg == null || msg.isBlank()) {
-          return;
-        }
-        mirrorToFile(msg);
-        String trimmed = msg.trim();
-        if (forwardSipDump(trimmed)) {
-          return;
-        }
-        int level = entry.getLevel();
-        if (level <= 1) {
-          events.log("错误", trimmed);
-        } else if (level == 2) {
-          events.log("警告", trimmed);
-        }
-      } catch (Throwable ignored) {
-        // never throw into PJSUA2
-      }
-    }
-
-    private boolean forwardSipDump(String msg) {
-      boolean tx = msg.contains("TX ");
-      boolean rx = msg.contains("RX ");
-      boolean dump =
-          msg.contains(" bytes Request msg")
-              || msg.contains(" bytes Response msg")
-              || msg.contains("Request msg ")
-              || msg.contains("Response msg ");
-      if (!dump || (!tx && !rx)) {
-        return false;
-      }
-      String summary = firstSipLine(msg);
-      if (summary.isEmpty()) {
-        summary = compactPjsipHeader(msg);
-      }
-      events.sip(tx, summary, msg);
-      if (rx && msg.contains("Response msg ") && msg.contains("/BYE/") && summary.startsWith("SIP/2.0 ")) {
-        String[] parts = summary.split("\\s+", 3);
-        try {
-          int code = Integer.parseInt(parts[1]);
-          if (code >= 200) {
-            onByeResponse(code, parts.length > 2 ? parts[2] : "");
-          }
-        } catch (NumberFormatException ignored) {
-          // not a status line
-        }
-      }
-      return true;
-    }
-
-    private String firstSipLine(String msg) {
-      String[] lines = msg.split("\\r?\\n");
-      for (String line : lines) {
-        String t = line.trim();
-        if (t.startsWith("SIP/2.0")
-            || t.startsWith("INVITE ")
-            || t.startsWith("ACK ")
-            || t.startsWith("BYE ")
-            || t.startsWith("CANCEL ")
-            || t.startsWith("REGISTER ")
-            || t.startsWith("OPTIONS ")
-            || t.startsWith("UPDATE ")
-            || t.startsWith("PRACK ")
-            || t.startsWith("INFO ")
-            || t.startsWith("MESSAGE ")
-            || t.startsWith("NOTIFY ")
-            || t.startsWith("SUBSCRIBE ")
-            || t.startsWith("REFER ")) {
-          return t;
-        }
-      }
-      return "";
-    }
-
-    private String compactPjsipHeader(String msg) {
-      int nl = msg.indexOf('\n');
-      String head = nl < 0 ? msg : msg.substring(0, nl);
-      return head.replaceAll("\\s+", " ").trim();
-    }
   }
 
   private final class ClientAccount extends Account {
@@ -2016,31 +1882,7 @@ final class SipService {
   }
 
   static String extractUser(String uri) {
-    if (uri == null || uri.isBlank()) {
-      return "";
-    }
-    String s = uri.trim();
-    int sipIdx = s.indexOf("sip:");
-    if (sipIdx != -1) {
-      s = s.substring(sipIdx + 4);
-    }
-    int atIdx = s.indexOf('@');
-    if (atIdx != -1) {
-      s = s.substring(0, atIdx);
-    }
-    int semiIdx = s.indexOf(';');
-    if (semiIdx != -1) {
-      s = s.substring(0, semiIdx);
-    }
-    int colonIdx = s.indexOf(':');
-    if (colonIdx != -1) {
-      s = s.substring(0, colonIdx);
-    }
-    int gtIdx = s.indexOf('>');
-    if (gtIdx != -1) {
-      s = s.substring(0, gtIdx);
-    }
-    return s.trim();
+    return SipUri.user(uri);
   }
 }
 
