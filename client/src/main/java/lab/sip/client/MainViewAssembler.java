@@ -542,7 +542,7 @@ final class MainViewAssembler {
     for (HttpFileClient.UserSummary user : users) {
       if (user == null) continue;
       signature.append(user.username()).append('/').append(user.sipId()).append('/')
-          .append(user.avatarUrl()).append(';');
+          .append(user.avatarUrl()).append('/').append(user.nickname()).append(';');
     }
     signature.append('|');
     for (HttpFileClient.RoomInfo room : safeRooms) {
@@ -577,7 +577,7 @@ final class MainViewAssembler {
         }
         Button btn = new Button();
         installContactCard(
-            btn, target, target, "联系人", badgeFor(target), colorFor(target), false);
+            btn, target, firstNonBlank(user.nickname(), target), target, badgeFor(target), colorFor(target), false);
         btn.setMaxWidth(Double.MAX_VALUE);
         quickList.getChildren().add(btn);
         hasUser = true;

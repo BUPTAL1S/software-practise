@@ -1,0 +1,22 @@
+.login-root, .account-root { -fx-font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; -fx-background-color: #f7faf8; }
+.login-brand { -fx-background-color: linear-gradient(to bottom right, #124b40, #10352f); }
+.login-brand-title { -fx-font-size: 32px; -fx-font-weight: bold; -fx-text-fill: #f0fff6; }
+.login-brand-copy { -fx-font-size: 19px; -fx-text-fill: #bee5d1; -fx-line-spacing: 10; }
+.login-title { -fx-font-size: 30px; -fx-font-weight: bold; -fx-text-fill: #153c32; -fx-padding: 0 0 3 0; }
+.login-muted { -fx-font-size: 13px; -fx-text-fill: #74897e; -fx-padding: 0 0 12 0; }
+.login-label { -fx-font-size: 13px; -fx-text-fill: #33574a; -fx-font-weight: bold; }
+.login-root .text-field, .account-root .text-field { -fx-background-color: white; -fx-border-color: #d8e4dd; -fx-border-radius: 9; -fx-background-radius: 9; -fx-padding: 12 14; -fx-font-size: 14px; -fx-text-fill: #193e31; }
+.login-root .text-field:focused, .account-root .text-field:focused { -fx-border-color: #1fa76c; -fx-effect: dropshadow(gaussian, rgba(30,167,108,0.12), 5, 0, 0, 0); }
+.login-primary { -fx-background-color: #21a76c; -fx-text-fill: white; -fx-font-size: 14px; -fx-font-weight: bold; -fx-padding: 13 24; -fx-background-radius: 9; -fx-cursor: hand; }
+.login-primary:hover { -fx-background-color: #188754; }
+.login-primary:focused { -fx-border-color: #125c3a; -fx-border-radius: 9; }
+.login-feedback { -fx-text-fill: #b24747; -fx-font-size: 12px; }
+.login-root .titled-pane > .title { -fx-background-color: transparent; -fx-padding: 10 0; }
+.login-root .titled-pane > .title > .text { -fx-fill: #638171; }
+.login-root .titled-pane > .content { -fx-background-color: transparent; -fx-border-color: transparent; }
+.login-root .check-box { -fx-text-fill: #637e6f; -fx-font-size: 12px; }
+.account-root { -fx-padding: 24; -fx-spacing: 12; }
+.account-root .tab-pane .tab-header-background { -fx-background-color: #edf4ef; }
+.account-root .tab { -fx-background-color: #e2ede6; -fx-padding: 8 16; }
+.account-root .tab:selected { -fx-background-color: #cae9d7; }
+.account-root .tab-content-area { -fx-padding: 20 0 0 0; }

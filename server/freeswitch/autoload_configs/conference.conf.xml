@@ -25,12 +25,12 @@
       <param name="max-members" value="8"/>
       <param name="max-members-sound" value="conference/conf-locked.wav"/>
 
-      <!-- 视频 3x3 混流画布，720p30 -->
+      <!-- 低负载九宫格；宽度低于部分 PJSIP OpenH264 构建的 1200 接收上限。 -->
       <param name="video-mode" value="mux"/>
       <param name="video-layout-name" value="3x3"/>
-      <param name="video-canvas-size" value="1280x720"/>
-      <param name="video-fps" value="30"/>
-      <param name="video-codec-bandwidth" value="2mb"/>
+      <param name="video-canvas-size" value="960x540"/>
+      <param name="video-fps" value="15"/>
+      <param name="video-codec-bandwidth" value="1mb"/>
       <param name="video-no-video-avatar" value="/tmp/freeswitch-custom/avatars/default.png"/>
 
       <!-- 进出房音效与静音控制 -->

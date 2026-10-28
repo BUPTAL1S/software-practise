@@ -74,8 +74,13 @@ public final class HttpFileClient {
       Long id,
       String username,
       String sipId,
-      String avatarUrl
-  ) {}
+      String avatarUrl,
+      String nickname
+  ) {
+    public UserSummary(Long id, String username, String sipId, String avatarUrl) {
+      this(id, username, sipId, avatarUrl, username);
+    }
+  }
 
   private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
   private static final Pattern URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
@@ -104,6 +109,45 @@ public final class HttpFileClient {
   private volatile String baseUrl;
   private volatile String authToken;
   private volatile String userAvatarUrl;
+  private volatile String nickname = "";
+  private volatile String role = "USER";
+
+  public String getNickname() { return nickname; }
+  public String getRole() { return role; }
+
+  public void refreshProfile() throws IOException, InterruptedException {
+    String body = accountRequest("GET", "/api/me", null);
+    nickname = nullToEmpty(jsonString(body, "nickname"));
+    role = nullToEmpty(jsonString(body, "role"));
+  }
+
+  public void updateNickname(String value) throws IOException, InterruptedException {
+    String body = accountRequest("PATCH", "/api/me/profile", "{\"nickname\":\"" + escapeJson(value) + "\"}");
+    nickname = nullToEmpty(jsonString(body, "nickname"));
+  }
+
+  public void changePassword(String current, String next) throws IOException, InterruptedException {
+    String body = accountRequest("POST", "/api/me/password", "{\"currentPassword\":\"" + escapeJson(current)
+        + "\",\"newPassword\":\"" + escapeJson(next) + "\"}");
+    String rotated = jsonString(body, "token");
+    if (rotated == null || rotated.isBlank()) throw new IOException("修改密码响应缺少登录凭据，请重新登录");
+    authToken = rotated;
+  }
+
+  private String accountRequest(String method, String path, String body) throws IOException, InterruptedException {
+    if (authToken == null || authToken.isBlank()) throw new IOException("请先登录账号");
+    HttpRequest request = HttpRequest.newBuilder(URI.create(getEffectiveBaseUrl() + path))
+        .timeout(Duration.ofSeconds(5)).header("Authorization", "Bearer " + authToken)
+        .header("Content-Type", "application/json")
+        .method(method, body == null ? HttpRequest.BodyPublishers.noBody()
+            : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
+    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    if (response.statusCode() != 200) {
+      String error = jsonString(response.body(), "error");
+      throw new IOException(error == null ? "账号操作失败 (HTTP " + response.statusCode() + ")" : error);
+    }
+    return response.body();
+  }
 
   public HttpFileClient(String baseUrl) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
@@ -251,9 +295,7 @@ public final class HttpFileClient {
   private static List<UserSummary> parseUsers(String json) {
     List<UserSummary> list = new ArrayList<>();
     if (json == null || json.isBlank()) return list;
-    Matcher objMatcher = Pattern.compile("\\{([^}]+)\\}").matcher(json);
-    while (objMatcher.find()) {
-      String objStr = objMatcher.group(1);
+    for (String objStr : splitJsonObjects(json)) {
       Long id = null;
       Matcher idM = ID_PATTERN.matcher(objStr);
       if (idM.find()) id = Long.parseLong(idM.group(1));
@@ -271,7 +313,8 @@ public final class HttpFileClient {
       if (avM.find()) av = avM.group(1);
 
       if (!uName.isEmpty() || !sip.isEmpty()) {
-        list.add(new UserSummary(id, uName, sip, av));
+        String displayName = jsonString(objStr, "nickname");
+        list.add(new UserSummary(id, uName, sip, av, displayName == null ? uName : displayName));
       }
     }
     return list;
@@ -309,6 +352,8 @@ public final class HttpFileClient {
       if (m.find()) {
         String token = m.group(1);
         this.authToken = token;
+        nickname = nullToEmpty(jsonString(resp.body(), "nickname"));
+        role = nullToEmpty(jsonString(resp.body(), "role"));
         Matcher am = AVATAR_URL_PATTERN.matcher(resp.body());
         if (am.find()) {
           this.userAvatarUrl = am.group(1);
@@ -1207,7 +1252,27 @@ public final class HttpFileClient {
 
   private static String unescapeJson(String s) {
     if (s == null) return "";
-    return s.replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
+    StringBuilder result = new StringBuilder();
+    for (int i = 0; i < s.length(); i++) {
+      char value = s.charAt(i);
+      if (value != '\\' || i + 1 == s.length()) { result.append(value); continue; }
+      char escaped = s.charAt(++i);
+      switch (escaped) {
+        case 'n' -> result.append('\n');
+        case 'r' -> result.append('\r');
+        case 't' -> result.append('\t');
+        case 'b' -> result.append('\b');
+        case 'f' -> result.append('\f');
+        case 'u' -> {
+          if (i + 4 < s.length()) {
+            try { result.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16)); i += 4; }
+            catch (NumberFormatException invalid) { result.append('u'); }
+          } else result.append('u');
+        }
+        default -> result.append(escaped);
+      }
+    }
+    return result.toString();
   }
 }
 

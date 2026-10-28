@@ -514,6 +514,9 @@ final class SipService {
       try {
         win = vp.getVideoWindow();
         if (win != null) {
+          // SDL's synchronous Show/stop can wait for the JavaFX parent message pump.
+          // Unparent before calling either while the renderer is still valid.
+          WindowLayout.detach(0, nativeVideoWindowHandle(win));
           win.Show(false);
         }
       } catch (Throwable ignored) {
@@ -845,6 +848,7 @@ final class SipService {
     cfg.getNatConfig().setViaRewriteUse(0);
     cfg.getNatConfig().setContactUseSrcPort(0);
     if (hasVideoSupport()) {
+      VideoMediaPolicy.configureAccount(cfg);
       cfg.getVideoConfig().setAutoShowIncoming(false);
       cfg.getVideoConfig().setAutoTransmitOutgoing(true);
       int capDev = findDefaultCaptureDev();
@@ -1107,8 +1111,10 @@ final class SipService {
       } catch (Exception ignored) {
       }
     }
+    // libDestroy joins SIP workers. Their final BYE/log callbacks can acquire this
+    // monitor, so holding it here deadlocks shutdown against those workers.
+    closeEndpointQuiet();
     synchronized (this) {
-      closeEndpointQuiet();
       started = false;
       lastRegCode = 0;
       incomingRinging = false;
@@ -1220,6 +1226,11 @@ final class SipService {
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP, port, publicIp);
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_TCP, port, publicIp);
     endpoint.libStart();
+    try {
+      VideoMediaPolicy.configureCodecs(endpoint, message -> events.log("视频", message));
+    } catch (Exception e) {
+      events.log("警告", "视频编码参数设置失败，保留原生默认值：" + e.getMessage());
+    }
   }
 
   private void createTransport(int type, int port, String publicIp) throws Exception {
@@ -1692,18 +1703,9 @@ final class SipService {
       if (win == null) {
         return;
       }
-      boolean disconnected = callDisconnected;
-      if (!disconnected) {
-        try {
-          disconnected = getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED;
-        } catch (Throwable t) {
-          disconnected = true;
-        }
-      }
-      // 在通话结束、切流或释放窗口时，PJSIP 底层正处于或即将进入媒体流回收阶段。
-      // 调用 win.Show(false) 会穿透到 pjsua_vid_win_set_show 解引用空指针 vp 触发 vid_port.c:728 断言 abort。
-      // delete() 又可能以失效的 wid 触发断言 abort。
-      // 严禁对关闭中的视频窗口调用 Show(false)，直接丢弃 Java 侧包装并清零 SWIG 原生指针。
+      // The UI detaches cached HWNDs before closing. PJSIP owns the renderer and
+      // may already be releasing it: even getInfo()/Show(false) can assert here.
+      // Keep preview detachment in stopPreview(), where its window is still valid.
       abandonVideoWindow(win);
     }
 
@@ -1729,18 +1731,22 @@ final class SipService {
       try {
         ensureThreadRegistered();
         CallVidSetStreamParam vParam = new CallVidSetStreamParam();
-        vParam.setMedIdx(videoMediaIndex >= 0 ? videoMediaIndex : -1);
-        int op = transmit
-            ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT
-            : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_STOP_TRANSMIT;
-        if (transmit) {
-          int devId = findDefaultCaptureDev();
-          if (devId >= 0) {
-            vParam.setCapDev(devId);
+        try {
+          vParam.setMedIdx(videoMediaIndex >= 0 ? videoMediaIndex : -1);
+          int op = transmit
+              ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT
+              : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_STOP_TRANSMIT;
+          if (transmit) {
+            int devId = findDefaultCaptureDev();
+            if (devId >= 0) {
+              vParam.setCapDev(devId);
+            }
           }
+          vidSetStream(op, vParam);
+          events.log("通话", "本地视频推流已" + (transmit ? "恢复传输" : "暂停传输"));
+        } finally {
+          vParam.delete();
         }
-        vidSetStream(op, vParam);
-        events.log("通话", "本地视频推流已" + (transmit ? "恢复传输" : "暂停传输"));
       } catch (Throwable t) {
         events.log("警告", "设置视频推流状态失败: " + t.getMessage());
       }
@@ -1757,6 +1763,8 @@ final class SipService {
             connectTime = java.time.Instant.now();
             events.log("通话", "通话已接通确认 (开始计时)");
           }
+          // The outgoing side has no answer-button action to refresh its window.
+          events.stateChanged();
         } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
           callDisconnected = true;
           boolean local = localHangup;
@@ -1854,6 +1862,17 @@ final class SipService {
 
           } else if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
             if (media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
+              synchronized (this) {
+                this.videoStreamActive = true;
+                this.videoMediaIndex = i;
+              }
+              boolean room = (dialedDst != null && dialedDst.contains("room-"))
+                  || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
+              // Sending must not depend on the remote renderer already having a window.
+              // Otherwise members can wait on each other's first frame indefinitely.
+              if (room && hasCaptureDevice() && isCameraEnabled()) {
+                setTransmitVideo(true);
+              }
               int winId = media.getVideoIncomingWindowId();
               if (winId >= 0) {
                 try {
@@ -1897,8 +1916,8 @@ final class SipService {
                   if (!nativeWindow) {
                     MediaSize sz = new MediaSize();
                     if (isRoom) {
-                      sz.setW(1280);
-                      sz.setH(720);
+                      sz.setW(960);
+                      sz.setH(540);
                     } else {
                       sz.setW(640);
                       sz.setH(360);
@@ -1922,40 +1941,20 @@ final class SipService {
                   if (isRoom) {
                     boolean hasCap = hasCaptureDevice();
                     boolean camOn = isCameraEnabled();
-                    // 会议室里必须显式启动本地视频推流。不能只看 getVideoCapDev()：
-                    // 有些 PJSIP 版本会填默认采集设备号，但实际并没有开始发送，
-                    // FreeSWITCH 就会一直用头像代替这个成员。
-                    if (hasCap && camOn) {
-                      try {
-                        int devId = findDefaultCaptureDev();
-                        if (devId >= 0) {
-                          CallVidSetStreamParam vParam = new CallVidSetStreamParam();
-                          try {
-                            vParam.setMedIdx(i);
-                            vParam.setCapDev(devId);
-                            vidSetStream(
-                                pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT, vParam);
-                          } finally {
-                            vParam.delete();
-                          }
-                        }
-                      } catch (Throwable ignored) {
-                      }
-                    }
                     String capNote;
                     if (!hasCap) {
                       capNote = "本地无可用摄像头，仅接收混流画面";
                     } else if (camOn) {
-                      capNote = "本地摄像头推流已启动";
+                      capNote = "已请求本地摄像头推流，发送结果见推流状态日志";
                     } else {
                       capNote = "本地摄像头已禁用，MCU 画布正以个人头像展示";
                     }
                     if (sizeSet) {
                       events.log(
                           "通话",
-                          "MCU 会议室 720p 视频流已接通，正在渲染 3×3 九宫格混流画布 (窗口 ID="
+                          "MCU 会议室视频流已接通，正在渲染 3×3 九宫格混流画布 (窗口 ID="
                               + winId
-                              + ", 分辨率=1280×720，"
+                              + ", 分辨率=960×540，"
                               + capNote
                               + "。若会议室其他成员未开启视频推流，其余宫格显示为黑底)");
                     } else {
@@ -1982,6 +1981,9 @@ final class SipService {
         }
       } catch (Exception e) {
         events.log("错误", "媒体连接处理失败：" + e.getMessage());
+      } finally {
+        // Video may become ready after CONFIRMED; refresh the renderer/PiP then as well.
+        events.stateChanged();
       }
     }
 

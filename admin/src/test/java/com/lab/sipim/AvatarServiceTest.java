@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.TestPropertySource;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -29,6 +30,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = {
+        "SIPIM_DB=./target/test-avatar.db",
+        "freeswitch.esl.enabled=${sip.liveMcuTest:false}",
+        "sipim.avatar.fs-dir=${sipim.test.avatar.fs-dir:./target/test-avatars}",
+        "sipim.avatar.upload-dir=./target/test-avatar-uploads"
+})
 public class AvatarServiceTest {
 
     @Autowired
@@ -178,15 +185,16 @@ public class AvatarServiceTest {
     @Test
     @DisplayName("Room vmute endpoint accepts command and FreeSWITCH MCU canvas mixes multi-participant avatars")
     void testRoomVmuteEndpointAndFreeSwitchCanvas() throws Exception {
-        mockMvc.perform(post("/api/rooms/room-101/vmute")
+        String testRoom = "room-avatar-test-" + System.nanoTime();
+        mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
                         .param("sipId", "1001")
                         .param("mute", "true"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.room").value("room-101"))
+                .andExpect(jsonPath("$.room").value(testRoom))
                 .andExpect(jsonPath("$.sipId").value("1001"))
                 .andExpect(jsonPath("$.muted").value(true));
 
-        mockMvc.perform(post("/api/rooms/room-101/vmute")
+        mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
                         .param("sipId", "1001")
                         .param("mute", "false"))
                 .andExpect(status().isOk())
@@ -213,23 +221,20 @@ public class AvatarServiceTest {
                     .andExpect(status().isOk());
         }
 
-        // 1. Reset any stale channels to guarantee clean 5-participant conference
-        eslEventListener.executeApi("hupall");
-        Thread.sleep(800);
-
-        // 2. Originate 5 distinct participants into conference room-101 (1001, 1002, 1003, 1004, 1005)
+        try {
+        // Create only test-owned channels; never hang up unrelated calls.
         for (String id : List.of("1001", "1002", "1003", "1004", "1005")) {
-            eslEventListener.executeApi("originate {origination_caller_id_number=" + id + "}loopback/room-101 &echo");
+            eslEventListener.executeApi("originate {origination_caller_id_number=" + id + "}loopback/" + testRoom + " &echo");
             Thread.sleep(100);
         }
         Thread.sleep(1200);
 
         // 3. Verify member lookup resolves for all five distinct participants (five-party conference)
-        Integer memberId1001 = eslEventListener.lookupMemberId("room-101", "1001");
-        Integer memberId1002 = eslEventListener.lookupMemberId("room-101", "1002");
-        Integer memberId1003 = eslEventListener.lookupMemberId("room-101", "1003");
-        Integer memberId1004 = eslEventListener.lookupMemberId("room-101", "1004");
-        Integer memberId1005 = eslEventListener.lookupMemberId("room-101", "1005");
+        Integer memberId1001 = eslEventListener.lookupMemberId(testRoom, "1001");
+        Integer memberId1002 = eslEventListener.lookupMemberId(testRoom, "1002");
+        Integer memberId1003 = eslEventListener.lookupMemberId(testRoom, "1003");
+        Integer memberId1004 = eslEventListener.lookupMemberId(testRoom, "1004");
+        Integer memberId1005 = eslEventListener.lookupMemberId(testRoom, "1005");
         assertThat(memberId1001).isNotNull();
         assertThat(memberId1002).isNotNull();
         assertThat(memberId1003).isNotNull();
@@ -237,26 +242,26 @@ public class AvatarServiceTest {
         assertThat(memberId1005).isNotNull();
 
         // 4. Perform vmute through API for 1001 (camera muted, replaced by custom avatar)
-        mockMvc.perform(post("/api/rooms/room-101/vmute")
+        mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
                         .param("sipId", "1001")
                         .param("mute", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.muted").value(true));
 
         // 5. Start live rectangular camera broadcast test video stream on conference channel
-        eslEventListener.executeApi("conference room-101 play /tmp/freeswitch-custom/test_video.mp4");
+        eslEventListener.executeApi("conference " + testRoom + " play /tmp/freeswitch-custom/test_video.mp4");
         Thread.sleep(1500);
 
         // 6. Capture actual FreeSWITCH video canvas
-        boolean captured = eslEventListener.captureConferenceCanvas("room-101", "/tmp/freeswitch-custom/test_mcu_canvas_avatar.png");
+        boolean captured = eslEventListener.captureConferenceCanvas(testRoom, "/tmp/freeswitch-custom/test_mcu_canvas_avatar.png");
         assertThat(captured).isTrue();
 
         Path canvasPath = avatarService.getFsAvatarDir().getParent().resolve("test_mcu_canvas_avatar.png");
         assertThat(Files.exists(canvasPath)).isTrue();
         BufferedImage canvasImg = ImageIO.read(canvasPath.toFile());
         assertThat(canvasImg).isNotNull();
-        assertThat(canvasImg.getWidth()).isEqualTo(1280);
-        assertThat(canvasImg.getHeight()).isEqualTo(720);
+        assertThat(canvasImg.getWidth()).isEqualTo(960);
+        assertThat(canvasImg.getHeight()).isEqualTo(540);
 
         // Save updated snapshot with 5 participants, live video stream and custom avatar
         Path repoSnapshot = Paths.get("../docs/snapshots/snapshot_mcu_canvas_avatar_muted.png");
@@ -269,6 +274,8 @@ public class AvatarServiceTest {
         }
 
         Files.deleteIfExists(canvasPath);
-        eslEventListener.executeApi("hupall");
+        } finally {
+            eslEventListener.executeApi("conference " + testRoom + " kick all");
+        }
     }
 }

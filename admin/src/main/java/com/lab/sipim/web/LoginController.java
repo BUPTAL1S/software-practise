@@ -51,6 +51,8 @@ public class LoginController {
         resp.put("token", token);
         resp.put("username", user.getUsername());
         resp.put("sipId", user.getSipId());
+        resp.put("nickname", user.getNickname());
+        resp.put("role", user.getRole() == null ? "USER" : user.getRole());
         if (user.getAvatarUrl() != null) {
             resp.put("avatarUrl", user.getAvatarUrl());
         }
