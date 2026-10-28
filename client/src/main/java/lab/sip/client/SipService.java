@@ -992,7 +992,9 @@ final class SipService {
       events.stateChanged();
       return;
     }
-    closeActiveVideoWindow();
+    // Let the BYE tear down video. Closing the native renderer before the
+    // signalling teardown can leave the dialog stuck and the peer showing a
+    // call that never receives a final BYE.
     events.log("通话", "正在发送 BYE" + (proxy.isEmpty() ? "" : " 经 " + proxy));
     armHangupWatch(call);
     hangupQuiet(false);
@@ -1253,7 +1255,6 @@ final class SipService {
     if (call == null) {
       return null;
     }
-    call.closeVideoWindow();
     try {
       call.hangup(new CallOpParam());
     } catch (Exception ignored) {
