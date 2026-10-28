@@ -122,7 +122,8 @@ final class CallUiCoordinator implements AutoCloseable {
                     sendAvatarControl(!enabled);
                   }
                 }
-                host.refreshMainUi();
+                // Do not call back into MainApp.refreshButtons here: the native
+                // preview worker may still hold the SipService monitor.
               },
               error -> {
                 if (videoCallWindow == expectedWindow && expectedWindow != null) {
@@ -131,9 +132,6 @@ final class CallUiCoordinator implements AutoCloseable {
                 LogView logView = host.logs();
                 if (logView != null) {
                   logView.append("警告", "摄像头切换失败：" + error.getMessage());
-                }
-                if (!callPreviews.isBusy()) {
-                  host.refreshMainUi();
                 }
               });
         });

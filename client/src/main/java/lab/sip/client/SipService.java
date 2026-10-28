@@ -385,12 +385,12 @@ final class SipService {
     events.stateChanged();
   }
 
-  synchronized void startPreview() throws Exception {
+  void startPreview() throws Exception {
     startPreviewInternal(false);
   }
 
   /** Start the camera preview during an active video call (local PiP). */
-  synchronized void startCallPreview() throws Exception {
+  void startCallPreview() throws Exception {
     startPreviewInternal(true);
   }
 
