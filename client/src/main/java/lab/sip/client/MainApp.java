@@ -708,9 +708,9 @@ public final class MainApp extends Application {
               Platform.runLater(
                   () -> {
                     remoteAvatarOff = off;
-                    if (videoCallWindow != null && videoCallWindow.isShowing()) {
+                    if (!callPreviews.isBusy() && videoCallWindow != null && videoCallWindow.isShowing()) {
                       videoCallWindow.setRemoteAvatarOff(
-                          off, extractUser(sip.currentCallTarget()));
+                          off, extractUser(fromUri));
                     }
                   });
             }
@@ -840,6 +840,13 @@ public final class MainApp extends Application {
   private Timeline pipLayoutTimeline;
   private boolean callPreviewErrorLogged;
   private boolean callPreviewStarted;
+  private final CallPreviewLifecycle callPreviews = new CallPreviewLifecycle();
+  private final java.util.concurrent.ExecutorService roomCameraUpdates =
+      java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "room-camera-updates");
+        thread.setDaemon(true);
+        return thread;
+      });
 
   private String campusIp = "";
 
@@ -850,35 +857,42 @@ public final class MainApp extends Application {
       cameraToggleBox.setSelected(cameraOn);
       cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
       cameraToggleBox.setOnAction(e -> {
+        if (callPreviews.isBusy()) {
+          cameraToggleBox.setSelected(sip.isCameraEnabled());
+          return;
+        }
         boolean enabled = cameraToggleBox.isSelected();
+        callPreviewErrorLogged = false;
         sip.setCameraEnabled(enabled);
         cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
         cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
-        if (!enabled && sip.isPreviewActive()) {
-          // Clear the UI's cached child handle before PJSIP destroys the renderer.
-          if (videoCallWindow != null) videoCallWindow.detachPip();
-          sip.stopPreview();
-          callPreviewStarted = false;
-        }
-        if (sip.isCallActive()) {
-          sip.setCallVideoTransmit(enabled);
-          String remote = sip.getActiveCallRemoteUri();
-          if (remote != null && (remote.contains("room-") || remote.contains("room"))) {
-            String mySip = user.getText().trim();
-            httpFileClient.toggleRoomVmute(remote, mySip, !enabled);
-            if (logs != null) {
-              logs.append("通话", enabled
-                  ? "本地摄像头已开启，MCU 会议室画面已恢复实时视频"
-                  : "本地摄像头已关闭，MCU 会议室画面已切换为您的个人头像");
+        String remote = sip.isCallActive() ? sip.getActiveCallRemoteUri() : "";
+        String mySip = user == null ? "" : user.getText().trim();
+        VideoCallWindow expectedWindow = videoCallWindow;
+        callPreviews.changeCamera(sip, expectedWindow, enabled, () -> {
+          if (callPreviews.isBusy()) return;
+          if (videoCallWindow == expectedWindow && expectedWindow != null) expectedWindow.setMediaBusy(false);
+          if (!enabled) callPreviewStarted = false;
+          if (!remote.isBlank()) {
+            if (isRoomTarget(remote)) {
+              roomCameraUpdates.execute(() -> {
+                boolean applied = httpFileClient.toggleRoomVmute(remote, mySip, !enabled);
+                Platform.runLater(() -> {
+                  if (logs != null) logs.append(applied ? "通话" : "警告", applied
+                      ? (enabled ? "MCU 已恢复实时视频" : "MCU 已切换为个人头像")
+                      : "本地摄像头状态已更新，MCU 同步失败，请检查后台连接");
+                });
+              });
+            } else {
+              sendAvatarControl(!enabled);
             }
-          } else {
-            sendAvatarControl(!enabled);
           }
-        }
-        refreshButtons();
-        if (logs != null && !sip.isCallActive()) {
-          logs.append("系统", "本地摄像头已" + (enabled ? "开启" : "禁用") + " (呼叫与入会将自动" + (enabled ? "支持视频" : "以纯语音模式进行") + ")");
-        }
+          refreshButtons();
+        }, error -> {
+          if (videoCallWindow == expectedWindow && expectedWindow != null) expectedWindow.setMediaBusy(false);
+          logs.append("警告", "摄像头切换失败：" + error.getMessage());
+          if (!callPreviews.isBusy()) refreshButtons();
+        });
       });
     }
     return cameraToggleBox;
@@ -1289,6 +1303,12 @@ public final class MainApp extends Application {
 
     stage.setOnCloseRequest(
         e -> {
+          if (callPreviews.isBusy()) {
+            e.consume();
+            closeCallWindows();
+            callPreviews.execute(sip::shutdown, Platform::exit, error -> Platform.exit());
+            return;
+          }
           probeAndPollTimeline.stop();
           roomPollingTimeline.stop();
           if (logs != null) {
@@ -1302,6 +1322,7 @@ public final class MainApp extends Application {
               }
             }).start();
           }
+          closeCallWindows();
           sip.shutdown();
         });
     boolean loginRequired = getParameters() != null && !named.containsKey("snapshot")
@@ -2018,16 +2039,24 @@ public final class MainApp extends Application {
       if (connected && !showAvatar && remote != 0) {
         long pip = 0;
         if (cameraOn) {
-          if (!sip.isPreviewActive()) {
-            try {
-              sip.startCallPreview();
-              callPreviewStarted = true;
-              callPreviewErrorLogged = false;
-            } catch (Exception ex) {
-              if (!callPreviewErrorLogged) {
-                callPreviewErrorLogged = true;
-                logs.append("警告", "本地小窗预览启动失败: " + ex.getMessage());
-              }
+          if (!sip.isPreviewActive() && !callPreviews.isBusy()) {
+            if (!callPreviewErrorLogged) {
+              VideoCallWindow expectedWindow = videoCallWindow;
+              callPreviews.start(sip, expectedWindow, () -> {
+                if (videoCallWindow == expectedWindow) {
+                  expectedWindow.setMediaBusy(false);
+                  callPreviewStarted = true;
+                  if (!callPreviews.isBusy()) refreshButtons();
+                }
+              }, error -> {
+                if (videoCallWindow == expectedWindow) {
+                  expectedWindow.setMediaBusy(false);
+                  callPreviewErrorLogged = true;
+                  logs.append("警告", "本地小窗预览启动失败: " + error.getMessage());
+                  if (!callPreviews.isBusy()) refreshButtons();
+                }
+              });
+              return;
             }
           } else {
             callPreviewStarted = true;
@@ -2130,7 +2159,7 @@ public final class MainApp extends Application {
       callWindow = null;
     }
     stopPipLayout();
-    if (callPreviewStarted && sip.isPreviewActive()) {
+    if (!callPreviews.isBusy() && callPreviewStarted && sip.isPreviewActive()) {
       sip.stopPreview();
     }
     callPreviewStarted = false;
@@ -2176,6 +2205,7 @@ public final class MainApp extends Application {
             new KeyFrame(
                 Duration.millis(500),
                 e -> {
+                  if (callPreviews.isBusy()) return;
                   if (videoCallWindow == null || !sip.isCallConnected()) {
                     return;
                   }
@@ -2856,6 +2886,9 @@ public final class MainApp extends Application {
     @Override
     public void updateItem(Void item, boolean empty) {
       super.updateItem(item, empty);
+      // Rendering a refreshed room table must not acquire the native media lock
+      // while SDL is waiting for JavaFX to pump window messages.
+      if (callPreviews.isBusy()) return;
       if (empty || getIndex() < 0 || getTableView() == null || getIndex() >= getTableView().getItems().size()) {
         setGraphic(null);
       } else {
@@ -2919,7 +2952,7 @@ public final class MainApp extends Application {
                         logs.append("系统", "刷新通讯录已恢复正常");
                         roomRefreshFailed = false;
                       }
-                      if (roomRecords != null) {
+                      if (roomRecords != null && !callPreviews.isBusy()) {
                         roomRecords.setAll(finalRooms);
                       }
                       if (roomCountBadge != null) {
@@ -3344,6 +3377,15 @@ public final class MainApp extends Application {
 
   @Override
   public void stop() throws Exception {
+    roomCameraUpdates.shutdownNow();
+    if (callPreviews.isBusy()) {
+      closeCallWindows();
+      callPreviews.execute(sip::shutdown, () -> {}, error -> {});
+      callPreviews.close();
+      super.stop();
+      return;
+    }
+    callPreviews.close();
     if (videoCallWindow != null) {
       videoCallWindow.close();
       videoCallWindow = null;

@@ -124,6 +124,11 @@ final class VideoCallWindow {
     if (muteBtn != null) CallUi.state(muteBtn, muted ? "取消静音" : "静音", muted);
   }
 
+  void setMediaBusy(boolean busy) {
+    if (cameraBtn != null) cameraBtn.setDisable(busy);
+    if (muteBtn != null) muteBtn.setDisable(busy);
+  }
+
   void setAvatar(javafx.scene.image.Image image) {
     if (waitingAvatar != null) CallUi.photo(waitingAvatar, image);
     if (peerAvatar != null) CallUi.photo(peerAvatar, image);
@@ -190,6 +195,14 @@ final class VideoCallWindow {
     }
   }
 
+  /** Release SDL/JavaFX parenting before creating or restarting a native renderer. */
+  void detachNative() {
+    placement.invalidate();
+    if (remoteHandle != 0 || pipHandle != 0) WindowLayout.detach(remoteHandle, pipHandle);
+    remoteHandle = 0;
+    pipHandle = 0;
+  }
+
   /** Hide the remote native video and show the peer avatar instead. */
   void setRemoteAvatarOff(boolean off, String peerName, javafx.scene.image.Image avatarImage) {
     setAvatar(avatarImage);
@@ -220,16 +233,45 @@ final class VideoCallWindow {
   void close() {
     placement.invalidate();
     stopTimer();
-    if (remoteHandle != 0 || pipHandle != 0) {
-      WindowLayout.detach(remoteHandle, pipHandle);
-      remoteHandle = 0;
-      pipHandle = 0;
+    final Stage closing = stage;
+    stage = null;
+    final long remote = remoteHandle;
+    final long pip = pipHandle;
+    remoteHandle = 0;
+    pipHandle = 0;
+    if (closing != null) {
+      closing.setOnCloseRequest(null);
+      closing.hide();
     }
-    if (stage != null) {
-      stage.setOnCloseRequest(null);
-      stage.close();
-      stage = null;
+    if (remote == 0 && pip == 0) {
+      if (closing != null) {
+        closing.close();
+      }
+      return;
     }
+    String os = System.getProperty("os.name", "").toLowerCase();
+    if (os.contains("mac")) {
+      // Cocoa window operations must stay on the JavaFX/AppKit thread.
+      WindowLayout.detach(remote, pip);
+      if (closing != null) {
+        closing.close();
+      }
+      return;
+    }
+    // SetParent on a live SDL child can block while Windows is pumping messages.
+    // Hide the JavaFX window first, detach off the FX thread, then close it.
+    new Thread(
+            () -> {
+              WindowLayout.detach(remote, pip);
+              Platform.runLater(
+                  () -> {
+                    if (closing != null) {
+                      closing.close();
+                    }
+                  });
+            },
+            "video-window-detach")
+        .start();
   }
 
   boolean isShowing() {
