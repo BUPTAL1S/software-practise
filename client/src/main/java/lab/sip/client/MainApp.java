@@ -1498,20 +1498,22 @@ public final class MainApp extends Application {
     if (!pollInFlight.compareAndSet(false, true)) {
       return;
     }
+    // PJSUA call/account objects must only be read on the FX/PJSUA thread.
+    // Snapshot the few flags needed by the HTTP polling worker first.
+    final boolean registered = sip.isRegistered();
+    final boolean inRoom = sip.isInRoomCall();
+    final String activeRoom = inRoom ? extractUser(sip.currentCallTarget()) : "";
     pollExecutor.execute(
         () -> {
           try {
           // Keep the ESL stale-member cleaner informed while this client is in a room.
-          if (sip.isInRoomCall()) {
-            String roomUri = extractUser(sip.currentCallTarget());
-            if (!roomUri.isBlank()) {
-              try {
-                httpFileClient.setBaseUrl(httpServerField.getText().trim());
-                httpFileClient.sendRoomHeartbeat(roomUri);
-              } catch (Exception ex) {
-                if (isHttpUnauthorized(ex)) {
-                  reloginHttp();
-                }
+          if (inRoom && !activeRoom.isBlank()) {
+            try {
+              httpFileClient.setBaseUrl(httpServerField.getText().trim());
+              httpFileClient.sendRoomHeartbeat(activeRoom);
+            } catch (Exception ex) {
+              if (isHttpUnauthorized(ex)) {
+                reloginHttp();
               }
             }
           }
@@ -1528,7 +1530,7 @@ public final class MainApp extends Application {
               continue;
             }
             boolean online;
-            if (!myUser.isEmpty() && target.equalsIgnoreCase(myUser) && sip.isRegistered()) {
+            if (!myUser.isEmpty() && target.equalsIgnoreCase(myUser) && registered) {
               online = true;
             } else {
               online = probeSipUserOnline(sipHost, sipPortNum, target);
