@@ -446,6 +446,28 @@ public final class HttpFileClient {
     }
   }
 
+  /** Probe whether the backend and its FreeSWITCH ESL bridge are ready. */
+  public static boolean probeMcuReady(String candidateBaseUrl) {
+    if (candidateBaseUrl == null || candidateBaseUrl.isBlank()) {
+      candidateBaseUrl = "http://127.0.0.1:8080";
+    }
+    try {
+      String url = normalizeBaseUrl(candidateBaseUrl);
+      HttpRequest req =
+          HttpRequest.newBuilder()
+              .uri(URI.create(url + "/api/health"))
+              .timeout(Duration.ofMillis(1200))
+              .GET()
+              .build();
+      HttpResponse<String> resp =
+          PROBE_CLIENT.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      String body = resp.body();
+      return resp.statusCode() == 200 && body != null && body.contains("\"connected\":true");
+    } catch (Exception ignored) {
+      return false;
+    }
+  }
+
   /**
    * Discovers an active backend URL. Checks currentUrl first, then falls back to known local ports
    * (8080, 8088, 8081, 8082, 8083). Returns the reachable URL or null if none found.
@@ -1024,6 +1046,28 @@ public final class HttpFileClient {
       throw new IOException("发送房间消息失败 (HTTP " + resp.statusCode() + "): " + resp.body());
     }
     return parseRoomMessage(resp.body());
+  }
+
+  /**
+   * Tells the admin that this client is still present in a conference room.
+   * The server uses this to distinguish a live member from a killed client's
+   * bridged FreeSWITCH channel.
+   */
+  public boolean sendRoomHeartbeat(String roomUri) throws IOException, InterruptedException {
+    if (roomUri == null || roomUri.isBlank()) {
+      return false;
+    }
+    HttpRequest.Builder reqBuilder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(getEffectiveBaseUrl() + "/api/rooms/" + roomUri + "/heartbeat"))
+            .timeout(Duration.ofSeconds(5))
+            .POST(HttpRequest.BodyPublishers.noBody());
+    if (authToken != null && !authToken.isBlank()) {
+      reqBuilder.header("Authorization", "Bearer " + authToken);
+    }
+    HttpResponse<String> resp =
+        httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    return resp.statusCode() == 200;
   }
 
   /**

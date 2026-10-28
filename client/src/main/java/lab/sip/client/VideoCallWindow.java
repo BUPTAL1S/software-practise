@@ -243,12 +243,16 @@ final class VideoCallWindow {
             });
       }
     } else {
-      nativeWindowOps.execute(
-          () -> {
-            if (!disposed) {
-              action.run();
-            }
-          });
+      try {
+        nativeWindowOps.execute(
+            () -> {
+              if (!disposed) {
+                action.run();
+              }
+            });
+      } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        // Window already closed; a late layout task is harmless.
+      }
     }
   }
 
@@ -302,6 +306,7 @@ final class VideoCallWindow {
   /** Close after the SIP call has ended; PJSIP owns and has destroyed the native children. */
   void closeWithoutDetach() {
     disposed = true;
+    nativeWindowOps.shutdownNow();
     hangupRequested = false;
     placement.invalidate();
     stopTimer();
@@ -316,6 +321,7 @@ final class VideoCallWindow {
 
   void close() {
     disposed = true;
+    nativeWindowOps.shutdownNow();
     boolean nativeAlreadyTornDown = hangupRequested;
     hangupRequested = false;
     placement.invalidate();

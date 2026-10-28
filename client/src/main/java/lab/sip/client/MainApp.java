@@ -410,7 +410,7 @@ public final class MainApp extends Application {
       return;
     }
     lastPrivateInboxPollAt = now;
-    new Thread(
+    pollExecutor.execute(
             () -> {
               try {
                 httpFileClient.setBaseUrl(httpServerField.getText().trim());
@@ -468,7 +468,7 @@ public final class MainApp extends Application {
                             }
                           }
                         }
-                        new Thread(
+                        pollExecutor.execute(
                                 () -> {
                                   try {
                                     httpFileClient.updatePrivateMessageStatus(
@@ -478,9 +478,7 @@ public final class MainApp extends Application {
                                       reloginHttp();
                                     }
                                   }
-                                },
-                                "private-ack")
-                            .start();
+                                });
                       }
                     });
               } catch (Exception ex) {
@@ -488,9 +486,7 @@ public final class MainApp extends Application {
                   reloginHttp();
                 }
               }
-            },
-            "private-inbox")
-        .start();
+            });
   }
 
   /** Refresh delivery states for the currently open private conversation. */
@@ -505,7 +501,7 @@ public final class MainApp extends Application {
       return;
     }
     lastPrivateHistoryPollAt = now;
-    new Thread(
+    pollExecutor.execute(
             () -> {
               try {
                 httpFileClient.setBaseUrl(httpServerField.getText().trim());
@@ -517,9 +513,7 @@ public final class MainApp extends Application {
                   reloginHttp();
                 }
               }
-            },
-            "private-status")
-        .start();
+            });
   }
 
   /**
@@ -581,23 +575,7 @@ public final class MainApp extends Application {
   }
 
   public static boolean probeRoomMcuReady(String httpBaseUrl) {
-    if (httpBaseUrl == null || httpBaseUrl.isBlank()) {
-      httpBaseUrl = "http://127.0.0.1:8080";
-    }
-    try {
-      java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-          .connectTimeout(java.time.Duration.ofMillis(800)).build();
-      java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-          .uri(java.net.URI.create(httpBaseUrl.replaceAll("/+$", "") + "/api/health"))
-          .timeout(java.time.Duration.ofMillis(1200))
-          .GET()
-          .build();
-      java.net.http.HttpResponse<String> resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
-      String b = resp.body();
-      return resp.statusCode() == 200 && b != null && b.contains("\"connected\":true");
-    } catch (Exception e) {
-      return false;
-    }
+    return HttpFileClient.probeMcuReady(httpBaseUrl);
   }
 
   private final SipService sip =
@@ -847,6 +825,14 @@ public final class MainApp extends Application {
         thread.setDaemon(true);
         return thread;
       });
+  private final java.util.concurrent.ExecutorService pollExecutor =
+      java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "client-poller");
+        thread.setDaemon(true);
+        return thread;
+      });
+  private final java.util.concurrent.atomic.AtomicBoolean pollInFlight =
+      new java.util.concurrent.atomic.AtomicBoolean();
 
   private String campusIp = "";
 
@@ -1509,8 +1495,26 @@ public final class MainApp extends Application {
   }
 
   private void pollOnlineStatusesAndRoomMessages() {
-    new Thread(
+    if (!pollInFlight.compareAndSet(false, true)) {
+      return;
+    }
+    pollExecutor.execute(
         () -> {
+          try {
+          // Keep the ESL stale-member cleaner informed while this client is in a room.
+          if (sip.isInRoomCall()) {
+            String roomUri = extractUser(sip.currentCallTarget());
+            if (!roomUri.isBlank()) {
+              try {
+                httpFileClient.setBaseUrl(httpServerField.getText().trim());
+                httpFileClient.sendRoomHeartbeat(roomUri);
+              } catch (Exception ex) {
+                if (isHttpUnauthorized(ex)) {
+                  reloginHttp();
+                }
+              }
+            }
+          }
           // 1. 探活联系人真实在线状态 (1001, 1002, 1003)
           String sipHost = (server != null && server.getText() != null) ? server.getText().trim() : "127.0.0.1";
           int sipPortNum = 5060;
@@ -1582,9 +1586,10 @@ public final class MainApp extends Application {
             } catch (Exception ignored) {
             }
           }
-        },
-        "probe-and-room-poll")
-        .start();
+          } finally {
+            pollInFlight.set(false);
+          }
+        });
     pollPrivateInbox();
     refreshActivePrivateStatuses();
   }
@@ -3408,6 +3413,7 @@ public final class MainApp extends Application {
   @Override
   public void stop() throws Exception {
     roomCameraUpdates.shutdownNow();
+    pollExecutor.shutdownNow();
     callPreviews.close();
     closeCallWindows();
     stopPipLayout();

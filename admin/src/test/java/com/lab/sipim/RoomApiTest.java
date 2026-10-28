@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lab.sipim.repo.RoomRepository;
+import com.lab.sipim.service.RoomPresenceRegistry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,10 +50,29 @@ class RoomApiTest {
     private com.lab.sipim.security.LoginTokens tokens;
 
     @Autowired
+    private RoomPresenceRegistry presence;
+
+    @Autowired
     private RoomRepository roomRepo;
 
     @Autowired
     private ObjectMapper mapper;
+
+    @Test
+    void heartbeatRequiresAuthAndRecordsPresence() throws Exception {
+        com.lab.sipim.domain.User user = userRepo.findByUsername("1001").orElseThrow();
+        String token = tokens.issue(user.getId());
+
+        mvc.perform(post("/api/rooms/room-101/heartbeat"))
+                .andExpect(status().isUnauthorized());
+
+        mvc.perform(post("/api/rooms/room-101/heartbeat")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"));
+
+        assertThat(presence.isFresh("room-101", "1001", 15_000)).isTrue();
+    }
 
     @Test
     void listRoomsReturnsSeededRooms() throws Exception {

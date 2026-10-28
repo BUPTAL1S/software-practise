@@ -48,6 +48,17 @@ public class EslEventListener implements AutoCloseable {
     private Socket activeSocket;
     private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceMemberMap = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, java.util.Map<String, Integer>> conferenceJoinTimes = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object memberLock = new Object();
+    private final java.util.concurrent.ExecutorService commandExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+                Thread thread = new Thread(task, "esl-command");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.lab.sipim.service.RoomPresenceRegistry presence;
 
     public EslEventListener(RoomRepository roomRepo) {
         this.roomRepo = roomRepo;
@@ -78,6 +89,7 @@ public class EslEventListener implements AutoCloseable {
         running = false;
         connected = false;
         if (reconciliationWorker != null) reconciliationWorker.shutdownNow();
+        commandExecutor.shutdownNow();
         if (activeSocket != null) {
             try {
                 activeSocket.close();
@@ -266,30 +278,47 @@ public class EslEventListener implements AutoCloseable {
                 try {
                     int mId = Integer.parseInt(memberIdStr.trim());
                     String cleanCaller = callerNumber.trim();
-                    java.util.Map<String, Integer> map =
-                            conferenceMemberMap.computeIfAbsent(
-                                    roomKey, k -> new java.util.concurrent.ConcurrentHashMap<>());
-                    if ("add-member".equalsIgnoreCase(action)) {
-                        Integer oldId = map.put(cleanCaller, mId);
-                        if (oldId != null && oldId != mId) {
-                            // FreeSWITCH does not enforce one member per caller number. If a
-                            // client was killed, its old channel stays in the conference and the
-                            // same user would appear twice after reconnecting.
-                            String result = executeApi("conference " + roomKey + " kick " + oldId);
+                    Integer oldId = null;
+                    synchronized (memberLock) {
+                        java.util.Map<String, Integer> map =
+                                conferenceMemberMap.computeIfAbsent(
+                                        roomKey, k -> new java.util.concurrent.ConcurrentHashMap<>());
+                        java.util.Map<String, Integer> joins =
+                                conferenceJoinTimes.computeIfAbsent(
+                                        roomKey, k -> new java.util.concurrent.ConcurrentHashMap<>());
+                        if ("add-member".equalsIgnoreCase(action)) {
+                            oldId = map.put(cleanCaller, mId);
+                            joins.put(cleanCaller, 0);
+                        } else if ("del-member".equalsIgnoreCase(action)) {
+                            // Only remove the entry for the member that actually left. A late
+                            // del-member event for the kicked old channel must not erase the new one.
+                            map.remove(cleanCaller, mId);
+                            joins.remove(cleanCaller);
+                        }
+                    }
+                    if (oldId != null && oldId != mId) {
+                        // FreeSWITCH does not enforce one member per caller number. If a
+                        // client was killed, its old channel stays in the conference and the
+                        // same user would appear twice after reconnecting.
+                        final int previous = oldId;
+                        commandExecutor.execute(() -> {
+                            String result = executeApi("conference " + roomKey + " kick " + previous);
                             log.info(
                                     "[ESL] Duplicate member {} in {}: kicked old id {} for new id {} -> {}",
-                                    cleanCaller, roomKey, oldId, mId, result);
-                        }
-                    } else if ("del-member".equalsIgnoreCase(action)) {
-                        // Only remove the entry for the member that actually left. A late
-                        // del-member event for the kicked old channel must not erase the new one.
-                        map.remove(cleanCaller, mId);
+                                    cleanCaller, roomKey, previous, mId, result);
+                        });
                     }
                 } catch (NumberFormatException ignored) {
                 }
             }
             if ("conference-destroy".equalsIgnoreCase(action)) {
-                conferenceMemberMap.remove(roomKey);
+                synchronized (memberLock) {
+                    conferenceMemberMap.remove(roomKey);
+                    conferenceJoinTimes.remove(roomKey);
+                }
+                if (presence != null) {
+                    presence.forgetRoom(roomKey);
+                }
             }
 
             handleConferenceEvent(roomKey, action, size);
@@ -353,7 +382,52 @@ public class EslEventListener implements AutoCloseable {
     }
 
     private synchronized void refreshConferenceState() {
-        reconcileConferenceSnapshot(executeApi("conference xml_list"));
+        if (reconcileConferenceSnapshot(executeApi("conference xml_list"))) {
+            cleanupStaleMembers();
+        }
+    }
+
+    private void cleanupStaleMembers() {
+        if (presence == null || presence.startupAgeMillis() < 20_000) {
+            return;
+        }
+        final long heartbeatTtlMs = 15_000;
+        final int minimumJoinSeconds = 30;
+        java.util.List<String[]> stale = new ArrayList<>();
+        synchronized (memberLock) {
+            for (var roomEntry : conferenceMemberMap.entrySet()) {
+                String roomKey = roomEntry.getKey();
+                java.util.Map<String, Integer> joins = conferenceJoinTimes.get(roomKey);
+                for (var member : roomEntry.getValue().entrySet()) {
+                    String caller = member.getKey();
+                    Integer joinTime = joins == null ? null : joins.get(caller);
+                    if (joinTime == null || joinTime < minimumJoinSeconds) {
+                        continue;
+                    }
+                    if (!presence.isFresh(roomKey, caller, heartbeatTtlMs)) {
+                        stale.add(new String[] {roomKey, caller, String.valueOf(member.getValue())});
+                    }
+                }
+            }
+            for (String[] item : stale) {
+                java.util.Map<String, Integer> members = conferenceMemberMap.get(item[0]);
+                if (members != null) {
+                    members.remove(item[1], Integer.valueOf(item[2]));
+                }
+                java.util.Map<String, Integer> joins = conferenceJoinTimes.get(item[0]);
+                if (joins != null) {
+                    joins.remove(item[1]);
+                }
+            }
+        }
+        for (String[] item : stale) {
+            presence.forget(item[0], item[1]);
+            commandExecutor.execute(() -> {
+                String result = executeApi("conference " + item[0] + " kick " + item[2]);
+                log.info("[ESL] Removed stale member {} from {} (id {}) -> {}",
+                        item[1], item[0], item[2], result);
+            });
+        }
     }
 
     /** Apply only a complete, valid snapshot. API failures must never zero live room counts. */
@@ -368,6 +442,7 @@ public class EslEventListener implements AutoCloseable {
             if (!"conferences".equals(document.getDocumentElement().getTagName())) return false;
             Map<String, Integer> counts = new HashMap<>();
             Map<String, Map<String, Integer>> memberMaps = new HashMap<>();
+            Map<String, Map<String, Integer>> joinTimeMaps = new HashMap<>();
             var conferences = document.getDocumentElement().getElementsByTagName("conference");
             for (int i = 0; i < conferences.getLength(); i++) {
                 var conference = (org.w3c.dom.Element) conferences.item(i);
@@ -376,17 +451,30 @@ public class EslEventListener implements AutoCloseable {
                 if (name.isBlank() || count < 0) return false;
                 counts.put(name, count);
                 Map<String, Integer> members = new java.util.concurrent.ConcurrentHashMap<>();
+                Map<String, Integer> joins = new java.util.concurrent.ConcurrentHashMap<>();
                 var nodes = conference.getElementsByTagName("member");
                 for (int j = 0; j < nodes.getLength(); j++) {
                     var member = (org.w3c.dom.Element) nodes.item(j);
                     var ids = member.getElementsByTagName("id");
                     var users = member.getElementsByTagName("caller_id_number");
+                    var joinTimes = member.getElementsByTagName("join_time");
                     if (ids.getLength() > 0 && users.getLength() > 0) {
-                        try { members.put(users.item(0).getTextContent().trim(), Integer.parseInt(ids.item(0).getTextContent())); }
-                        catch (NumberFormatException ignored) { }
+                        try {
+                            String user = users.item(0).getTextContent().trim();
+                            members.put(user, Integer.parseInt(ids.item(0).getTextContent()));
+                            int join = 0;
+                            if (joinTimes.getLength() > 0) {
+                                try {
+                                    join = Integer.parseInt(joinTimes.item(0).getTextContent().trim());
+                                } catch (NumberFormatException ignored) {
+                                }
+                            }
+                            joins.put(user, join);
+                        } catch (NumberFormatException ignored) { }
                     }
                 }
                 memberMaps.put(name, members);
+                joinTimeMaps.put(name, joins);
             }
             for (Room room : roomRepo.findAll()) {
                 int count = counts.getOrDefault(normalizeConferenceName(room.getSipUri()), 0);
@@ -395,8 +483,12 @@ public class EslEventListener implements AutoCloseable {
                     roomRepo.save(room);
                 }
             }
-            conferenceMemberMap.clear();
-            conferenceMemberMap.putAll(memberMaps);
+            synchronized (memberLock) {
+                conferenceMemberMap.clear();
+                conferenceMemberMap.putAll(memberMaps);
+                conferenceJoinTimes.clear();
+                conferenceJoinTimes.putAll(joinTimeMaps);
+            }
             return true;
         } catch (Exception error) {
             log.warn("Unable to reconcile conference snapshot: {}", error.getMessage());
@@ -457,9 +549,12 @@ public class EslEventListener implements AutoCloseable {
             return null;
         }
         String cleanSip = sipId.trim();
-        java.util.Map<String, Integer> members = conferenceMemberMap.get(confName);
-        if (members != null && members.containsKey(cleanSip)) {
-            return members.get(cleanSip);
+        java.util.Map<String, Integer> members;
+        synchronized (memberLock) {
+            members = conferenceMemberMap.get(confName);
+            if (members != null && members.containsKey(cleanSip)) {
+                return members.get(cleanSip);
+            }
         }
 
         String listOut = executeApi("conference " + confName + " list");
@@ -470,8 +565,10 @@ public class EslEventListener implements AutoCloseable {
                     try {
                         int mId = Integer.parseInt(parts[0].trim());
                         String callerNumber = parts[4].trim();
-                        conferenceMemberMap.computeIfAbsent(confName, k -> new java.util.concurrent.ConcurrentHashMap<>())
-                                .put(callerNumber, mId);
+                        synchronized (memberLock) {
+                            conferenceMemberMap.computeIfAbsent(confName, k -> new java.util.concurrent.ConcurrentHashMap<>())
+                                    .put(callerNumber, mId);
+                        }
                         if (cleanSip.equalsIgnoreCase(callerNumber)) {
                             return mId;
                         }
