@@ -23,6 +23,19 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "SIPIM_DB=./target/test-dash.db")
 class DashboardApiTest {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.web.context.WebApplicationContext testContext;
+
+    @org.junit.jupiter.api.BeforeEach
+    void authenticateManagementRequests() {
+        var tokenStore = testContext.getBean(com.lab.sipim.security.LoginTokens.class);
+        var userStore = testContext.getBean(com.lab.sipim.repo.UserRepository.class);
+        String adminToken = tokenStore.issue(userStore.findByUsername("1001").orElseThrow().getId());
+        // Explicit headers on individual requests override this default (invalid-token tests stay meaningful).
+        mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(testContext)
+                .defaultRequest(get("/").header("Authorization", "Bearer " + adminToken)).build();
+    }
+
 
     static {
         try {
@@ -50,8 +63,7 @@ class DashboardApiTest {
 
         mvc.perform(get("/index.html"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Java SIP & Admin")))
-                .andExpect(content().string(containsString("statTotalCalls")));
+                .andExpect(content().string(containsString("url=admin.html")));
 
         mvc.perform(get("/admin.html"))
                 .andExpect(status().isOk())
@@ -103,7 +115,7 @@ class DashboardApiTest {
 
         mvc.perform(get("/index.html"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("statOnlineUsers")));
+                .andExpect(content().string(containsString("url=admin.html")));
     }
 
     @Test
@@ -177,10 +189,14 @@ class DashboardApiTest {
         // 模拟会话超时过期
         tokens.expireAllForTesting();
 
+        // Checking the management-only list requires a new administrator session.
+        String freshAdmin = tokens.issue(testContext.getBean(com.lab.sipim.repo.UserRepository.class)
+                .findByUsername("1001").orElseThrow().getId());
+
         // 触发刷新，验证已超时用户被自动驱逐出在线列表
-        mvc.perform(get("/api/users/online"))
+        mvc.perform(get("/api/users/online").header("Authorization", "Bearer " + freshAdmin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.count").value(0))
+                .andExpect(jsonPath("$.count").value(1))
                 .andExpect(jsonPath("$.users", org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("1098"))));
     }
 }

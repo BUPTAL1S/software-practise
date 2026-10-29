@@ -59,6 +59,9 @@ public class CdrController {
             }
             if (caller == null || caller.isBlank()) {
                 caller = u.get().getUsername();
+            } else if (!com.lab.sipim.security.ApiAccessPolicy.isAdmin(u.get())
+                    && !com.lab.sipim.security.ApiAccessPolicy.isIdentity(u.get(), caller)) {
+                return ResponseEntity.status(403).body(Map.of("error", "不能冒用其他用户上报通话记录"));
             }
         }
 
