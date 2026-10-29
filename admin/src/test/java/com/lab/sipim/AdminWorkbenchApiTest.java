@@ -115,15 +115,17 @@ class AdminWorkbenchApiTest {
                 .andExpect(status().isCreated());
     }
 
-    @Test void privateFileDownloadIsAuthenticatedAndLimitedToParticipants() throws Exception {
+    @Test void clientImageUrlsRemainCompatibleAndManagementDownloadsRequireAdmin() throws Exception {
         var result = mvc.perform(multipart("/api/files").file(new MockMultipartFile("file", "test.txt", "text/plain", new byte[]{1}))
                 .param("from", "1002").param("to", "1003").header("Authorization", "Bearer " + token("1002")))
                 .andExpect(status().isOk()).andReturn();
         long id = json.readTree(result.getResponse().getContentAsString()).get("id").asLong();
-        mvc.perform(get("/api/files/" + id)).andExpect(status().isUnauthorized());
-        mvc.perform(get("/api/files/" + id).header("Authorization", "Bearer " + token("1004"))).andExpect(status().isForbidden());
-        mvc.perform(head("/api/files/" + id).header("Authorization", "Bearer " + token("1004"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/files/" + id)).andExpect(status().isOk());
+        mvc.perform(head("/api/files/" + id)).andExpect(status().isOk());
         mvc.perform(get("/api/files/" + id).header("Authorization", "Bearer " + token("1003"))).andExpect(status().isOk());
+        mvc.perform(get("/api/admin/workbench/files/" + id)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/admin/workbench/files/" + id).header("Authorization", "Bearer " + token("1003")))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/api/admin/workbench/files/" + id).header("Authorization", "Bearer " + token("1001")))
                 .andExpect(status().isOk());
     }
@@ -143,6 +145,32 @@ class AdminWorkbenchApiTest {
         user.setSipId("7303"); users.saveAndFlush(user);
         try {
             String regular = token("1003");
+            for (var attempt : new Map[]{Map.of("username", "7303", "password", "secret", "sipId", "new-extension"),
+                    Map.of("username", "new-identity", "password", "secret", "sipId", "1003")}) {
+                mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(attempt)))
+                        .andExpect(status().isConflict());
+            }
+            var fake = new com.lab.sipim.domain.User(); fake.setUsername("sip:7303@lab"); fake.setSipId("another-extension");
+            assertThat(com.lab.sipim.security.ApiAccessPolicy.isIdentity(fake, "sip:7303@lab")).isFalse();
+            var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            var gate = new java.util.concurrent.CountDownLatch(1);
+            try {
+                var left = pool.submit(() -> {
+                    gate.await();
+                    return mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"username\":\"alias-left\",\"sipId\":\"alias-right\",\"password\":\"secret\"}"))
+                            .andReturn().getResponse().getStatus();
+                });
+                var right = pool.submit(() -> {
+                    gate.await();
+                    return mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"username\":\"alias-right\",\"sipId\":\"alias-left\",\"password\":\"secret\"}"))
+                            .andReturn().getResponse().getStatus();
+                });
+                gate.countDown();
+                assertThat(java.util.List.of(left.get(5, java.util.concurrent.TimeUnit.SECONDS),
+                        right.get(5, java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(201, 409);
+            } finally { pool.shutdownNow(); }
             mvc.perform(get("/api/cdr?caller=7303").header("Authorization", "Bearer " + regular))
                     .andExpect(status().isOk());
             for (String recipient : new String[]{"sip:7303@lab", "7303", "sip:room-101@lab"}) {
@@ -152,8 +180,6 @@ class AdminWorkbenchApiTest {
                         .header("Authorization", "Bearer " + token("1002"))).andExpect(status().isOk()).andReturn();
                 long id = json.readTree(result.getResponse().getContentAsString()).get("id").asLong();
                 mvc.perform(get("/api/files/" + id).header("Authorization", "Bearer " + regular)).andExpect(status().isOk());
-                if (!recipient.contains("room-")) mvc.perform(get("/api/files/" + id)
-                        .header("Authorization", "Bearer " + token("1004"))).andExpect(status().isForbidden());
             }
         } finally { user.setSipId(originalSip); users.saveAndFlush(user); }
     }

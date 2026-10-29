@@ -145,6 +145,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
     await browser.open(origin + '/admin.html');
     await t.test('login gate fetches no management data; ordinary user is rejected', async () => {
       assert.equal(state.requests.length, 0);
+      assert.equal(await browser.evaluate('document.getElementById("loginForm").method'), 'post');
       await browser.evaluate(`document.getElementById('adminUser').value='1002'; document.getElementById('adminPassword').value='1002'; document.getElementById('loginForm').requestSubmit()`);
       await browser.wait('document.getElementById("loginError").textContent.includes("1001")');
       assert.equal(await browser.evaluate('document.getElementById("workbench").hidden'), true);

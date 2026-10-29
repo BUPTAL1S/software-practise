@@ -259,7 +259,7 @@
   <section id="loginPanel" class="card auth-card" aria-labelledby="loginTitle">
     <h1 id="loginTitle">管理工作台</h1>
     <p class="section-note">请使用管理员账号 1001 登录。</p>
-    <form id="loginForm">
+    <form id="loginForm" method="post" action="/api/admin/login">
       <label for="adminUser">管理员账号</label>
       <input id="adminUser" name="username" autocomplete="username" value="1001" required>
       <label for="adminPassword">密码</label>

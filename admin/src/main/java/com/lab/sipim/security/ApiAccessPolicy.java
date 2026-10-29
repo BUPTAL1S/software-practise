@@ -2,7 +2,6 @@ package com.lab.sipim.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lab.sipim.domain.User;
-import com.lab.sipim.repo.FileIndexRepository;
 import com.lab.sipim.repo.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -17,11 +16,10 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
     private final LoginTokens tokens;
     private final UserRepository users;
-    private final FileIndexRepository files;
     private final ObjectMapper json;
 
-    public ApiAccessPolicy(LoginTokens tokens, UserRepository users, FileIndexRepository files, ObjectMapper json) {
-        this.tokens = tokens; this.users = users; this.files = files; this.json = json;
+    public ApiAccessPolicy(LoginTokens tokens, UserRepository users, ObjectMapper json) {
+        this.tokens = tokens; this.users = users; this.json = json;
     }
 
     @Override public void addInterceptors(InterceptorRegistry registry) {
@@ -42,9 +40,12 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
 
     public static boolean isIdentity(User user, String value) {
         if (value == null) return false;
+        String raw = value.trim();
         String key = recipientKey(value);
-        return user.getUsername().equals(value.trim()) || user.getSipId().equals(value.trim())
-                || user.getUsername().equals(key) || user.getSipId().equals(key);
+        // A full SIP address identifies an extension, not an arbitrary username
+        // that happens to contain the same URI text.
+        if (raw.regionMatches(true, 0, "sip:", 0, 4) || raw.contains("@")) return user.getSipId().equals(key);
+        return user.getUsername().equals(raw) || user.getSipId().equals(raw);
     }
 
     @Override public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -61,7 +62,10 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
                 || path.equals("/api/register") || path.equals("/api/admin/login"))
                 || read && (path.equals("/api/health") || path.equals("/api/users")
                 || path.matches("/api/users/[^/]+") || path.equals("/api/rooms")
-                || path.matches("/api/rooms/[^/]+"));
+                || path.matches("/api/rooms/[^/]+")
+                // JavaFX avatars and chat-image previews use this existing client URL without headers.
+                // Management file lists/downloads use the separate protected workbench routes.
+                || path.matches("/api/files/[0-9]+"));
         if (publicRoute && !adminOnly) return true;
 
         String header = request.getHeader("Authorization");
@@ -81,17 +85,6 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
             String target = request.getParameter("sipId");
             if (!isIdentity(user, target))
                 return deny(response, 403, "只能切换自己的会议视频状态");
-        }
-        if (path.matches("/api/files/[0-9]+") && read) {
-            var file = files.findById(Long.parseLong(path.substring(path.lastIndexOf('/') + 1)));
-            if (file.isPresent()) {
-                var item = file.get();
-                String target = recipientKey(item.getToUserOrRoom());
-                // Rooms are public directories in this project; their files are shared with authenticated users.
-                boolean own = isIdentity(user, item.getFromUser()) || isIdentity(user, item.getToUserOrRoom())
-                        || "broadcast".equals(target) || target.startsWith("room-");
-                if (!own) return deny(response, 403, "无权下载其他用户的私聊文件");
-            }
         }
         return true;
     }
