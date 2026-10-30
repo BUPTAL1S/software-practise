@@ -45,7 +45,7 @@ public class EslEventListener implements AutoCloseable {
     private volatile boolean running = true;
     private volatile boolean connected = false;
     private Thread workerThread;
-    private Socket activeSocket;
+    private volatile Socket activeSocket;
     private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceMemberMap = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceJoinTimes = new java.util.concurrent.ConcurrentHashMap<>();
@@ -90,9 +90,10 @@ public class EslEventListener implements AutoCloseable {
         connected = false;
         if (reconciliationWorker != null) reconciliationWorker.shutdownNow();
         commandExecutor.shutdownNow();
-        if (activeSocket != null) {
+        Socket socket = activeSocket;
+        if (socket != null) {
             try {
-                activeSocket.close();
+                socket.close();
             } catch (IOException ignored) {
             }
         }
@@ -126,6 +127,7 @@ public class EslEventListener implements AutoCloseable {
                 writer.write("event plain CUSTOM conference::maintenance\n\n");
                 writer.flush();
                 requireOk(reader.read(), "event subscription");
+                if (!running) break;
                 connected = true;
                 log.info("FreeSWITCH ESL subscribed at {}:{}", host, port);
                 reconciliationWorker.execute(this::refreshConferenceState);
