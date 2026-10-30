@@ -189,7 +189,7 @@ class TableVisualFixTest {
               }
             }
 
-            File out = new File("/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_table_header_fixed.png");
+            File out = new File("target/test-snapshots/snapshot_table_header_fixed.png");
             if (out.getParentFile() != null) {
               out.getParentFile().mkdirs();
             }

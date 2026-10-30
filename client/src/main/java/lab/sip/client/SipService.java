@@ -68,6 +68,11 @@ final class SipService {
             t.setDaemon(true);
             return t;
           });
+  private final ScheduledExecutorService mediaStatistics = Executors.newSingleThreadScheduledExecutor(task -> {
+    Thread thread = new Thread(task, "sip-media-statistics");
+    thread.setDaemon(true);
+    return thread;
+  });
   private Endpoint endpoint;
   private SipLogWriter logWriter;
   private ClientAccount account;
@@ -78,7 +83,12 @@ final class SipService {
   private AudioMedia callAudioMedia;
   private AudioMedia captureAudioMedia;
   private volatile boolean audioMuted;
-  private boolean started;
+  private volatile boolean started;
+  private volatile boolean shuttingDown;
+  private MediaTuning mediaTuning = MediaTuning.defaults();
+  private final CapabilitySnapshotCache<VideoDetails> videoCapabilities =
+      new CapabilitySnapshotCache<>(TimeUnit.SECONDS.toNanos(5));
+  private static final VideoDetails NO_VIDEO = new VideoDetails(false, "引擎未启动", "无", "无", -1, -1);
   private boolean incomingRinging;
   private int boundPort;
   private String advertisedIp = "";
@@ -136,24 +146,39 @@ final class SipService {
   }
 
   VideoDetails queryVideoDetails() {
+    if (!started || shuttingDown) return NO_VIDEO;
+    VideoDetails cached = videoCapabilities.peek();
+    if (cached != null) return cached;
     synchronized (this) {
-      if (!started || endpoint == null) {
-        return new VideoDetails(false, "引擎未启动", "无", "无", -1, -1);
+      if (!started || shuttingDown) return NO_VIDEO;
+      // Always take the engine lock before the cache loader lock, including during startup.
+      return videoCapabilities.get(this::readVideoDetails);
+    }
+  }
+
+  private VideoDetails readVideoDetails() {
+    synchronized (this) {
+      if (!started || shuttingDown || endpoint == null) {
+        return NO_VIDEO;
       }
       ensureThreadRegistered();
       try {
         String foundCodec = "";
         CodecInfoVector2 codecs = endpoint.videoCodecEnum2();
-        for (int i = 0; i < (int) codecs.size(); i++) {
-          CodecInfo ci = codecs.get(i);
-          if (ci.getPriority() > 0) {
-            String cid = ci.getCodecId();
-            if (foundCodec.isEmpty()) {
-              foundCodec = cid;
-            } else {
-              foundCodec += ", " + cid;
+        try {
+          for (int i = 0; i < (int) codecs.size(); i++) {
+            CodecInfo ci = codecs.get(i);
+            if (ci.getPriority() > 0) {
+              String cid = ci.getCodecId();
+              if (foundCodec.isEmpty()) {
+                foundCodec = cid;
+              } else {
+                foundCodec += ", " + cid;
+              }
             }
           }
+        } finally {
+          codecs.delete();
         }
         if (foundCodec.isEmpty()) {
           return new VideoDetails(false, "无活跃编解码器", "无", "无", -1, -1);
@@ -171,21 +196,25 @@ final class SipService {
 
         for (int i = 0; i < devCount; i++) {
           VideoDevInfo info = mgr.getDevInfo(i);
-          int dir = info.getDir();
-          if (dir == 1 || dir == 3) {
-            String name = info.getName();
-            if (!name.toLowerCase().contains("colorbar") && capId < 0) {
-              capId = i;
-              capName = name;
+          try {
+            int dir = info.getDir();
+            if (dir == 1 || dir == 3) {
+              String name = info.getName();
+              if (!name.toLowerCase().contains("colorbar") && capId < 0) {
+                capId = i;
+                capName = name;
+              }
+              if (fallbackCap < 0) {
+                fallbackCap = i;
+                fallbackCapName = name;
+              }
             }
-            if (fallbackCap < 0) {
-              fallbackCap = i;
-              fallbackCapName = name;
+            if ((dir == 2 || dir == 3) && renId < 0) {
+              renId = i;
+              renName = info.getName();
             }
-          }
-          if ((dir == 2 || dir == 3) && renId < 0) {
-            renId = i;
-            renName = info.getName();
+          } finally {
+            info.delete();
           }
         }
 
@@ -408,6 +437,7 @@ final class SipService {
     if (videoPreview != null) {
       return;
     }
+    videoCapabilities.invalidate();
     VideoDetails vd = queryVideoDetails();
     if (!vd.supported || vd.captureDevId < 0) {
       throw new IllegalStateException("未检测到可用的视频输入设备");
@@ -1044,6 +1074,9 @@ final class SipService {
   }
 
   void shutdown() {
+    shuttingDown = true;
+    videoCapabilities.invalidate();
+    mediaStatistics.shutdownNow();
     ensureThreadRegistered();
     stopPreview();
     cancelHangupWatch();
@@ -1159,6 +1192,14 @@ final class SipService {
   }
 
   private void openEndpoint(int port, String publicIp) throws Exception {
+    shuttingDown = false;
+    videoCapabilities.invalidate();
+    try {
+      mediaTuning = MediaTuning.read(System.getProperties());
+    } catch (IllegalArgumentException invalid) {
+      mediaTuning = MediaTuning.defaults();
+      events.log("警告", "媒体参数无效，使用 balanced：" + invalid.getMessage());
+    }
     endpoint = new Endpoint();
     endpoint.libCreate();
     EpConfig epConfig = new EpConfig();
@@ -1177,6 +1218,7 @@ final class SipService {
       epConfig.getLogConfig().setDecor(decor);
       // 显式禁用底层 Native Preview，强制使用标准渲染流水线 (Metal/DirectShow)，根治 vid_port.c:728 空指针断言 (exit 134)
       epConfig.getMedConfig().setVidPreviewEnableNative(false);
+      VideoMediaPolicy.configureAudio(epConfig.getMedConfig(), mediaTuning);
       endpoint.libInit(epConfig);
     } finally {
       epConfig.delete();
@@ -1200,7 +1242,9 @@ final class SipService {
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_TCP, port, publicIp);
     endpoint.libStart();
     try {
-      VideoMediaPolicy.configureCodecs(endpoint, message -> events.log("视频", message));
+      VideoMediaPolicy.configureCodecs(endpoint, mediaTuning, message -> events.log("视频", message));
+      events.log("媒体", "配置=" + mediaTuning.profile() + "，音频 20ms 分帧，音频缓冲调优="
+          + mediaTuning.tuneAudio() + "，回声消除保留原生设置；统计间隔=" + mediaTuning.statisticsSeconds() + "秒");
     } catch (Exception e) {
       events.log("警告", "视频编码参数设置失败，保留原生默认值：" + e.getMessage());
     }
@@ -1220,6 +1264,8 @@ final class SipService {
   }
 
   private void closeEndpointQuiet() {
+    shuttingDown = true;
+    videoCapabilities.invalidate();
     if (endpoint != null) {
       ensureThreadRegistered();
       try {
@@ -1264,6 +1310,7 @@ final class SipService {
   }
 
   private static void deleteCallQuietly(Call call) {
+    if (call instanceof ClientCall tracked) tracked.stopMediaStatistics();
     if (call == null) {
       return;
     }
@@ -1450,6 +1497,11 @@ final class SipService {
   }
 
   private final class ClientCall extends Call {
+    private volatile ScheduledFuture<?> statisticsTask;
+    private final MediaStreamMetrics metrics = new MediaStreamMetrics();
+    private boolean statisticsFailureLogged;
+    private final java.util.concurrent.atomic.AtomicBoolean statisticsStarted = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.locks.ReentrantReadWriteLock nativeLifetime = new java.util.concurrent.locks.ReentrantReadWriteLock();
     private final java.time.Instant initiateTime = java.time.Instant.now();
     private volatile java.time.Instant connectTime;
     private final boolean isOutgoing;
@@ -1464,6 +1516,75 @@ final class SipService {
     private volatile int videoMediaIndex = -1;
     /** Whether the call was originally offered as video, even if answered voice-only. */
     private volatile boolean videoIntent;
+
+    private void startMediaStatistics() {
+      int seconds = mediaTuning.statisticsSeconds();
+      if (seconds == 0 || callDisconnected || shuttingDown || !statisticsStarted.compareAndSet(false, true)) return;
+      try {
+        statisticsTask = mediaStatistics.scheduleWithFixedDelay(this::sampleMediaStatistics, 1, seconds, TimeUnit.SECONDS);
+        if (callDisconnected || shuttingDown) stopMediaStatistics();
+      } catch (java.util.concurrent.RejectedExecutionException shutdown) {
+        // Shutdown won the race with the final CONFIRMED callback.
+      }
+    }
+
+    private void stopMediaStatistics() {
+      ScheduledFuture<?> task = statisticsTask;
+      if (task != null) task.cancel(false);
+    }
+
+    private void sampleMediaStatistics() {
+      if (callDisconnected || shuttingDown || !nativeLifetime.readLock().tryLock()) return;
+      try {
+        if (callDisconnected || shuttingDown) return;
+        ensureThreadRegistered();
+        CallInfo info = getInfo();
+        try {
+          var streams = info.getMedia();
+          for (int index = 0; index < streams.size(); index++) {
+            CallMediaInfo media = streams.get(index);
+            int type = media.getType();
+            if (media.getStatus() != pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE
+                || type != pjmedia_type.PJMEDIA_TYPE_AUDIO && type != pjmedia_type.PJMEDIA_TYPE_VIDEO) continue;
+            org.pjsip.pjsua2.StreamInfo stream = getStreamInfo(index);
+            try {
+              org.pjsip.pjsua2.StreamStat statistics = getStreamStat(index);
+              try {
+                var rtcp = statistics.getRtcp();
+                var tx = rtcp.getTxStat();
+                var rx = rtcp.getRxStat();
+                var buffer = statistics.getJbuf();
+                String negotiated = stream.getCodecClockRate() + "Hz";
+                if (type == pjmedia_type.PJMEDIA_TYPE_VIDEO && stream.getVidCodecParam() != null) {
+                  var video = stream.getVidCodecParam().getEncFmt();
+                  negotiated = video.getWidth() + "x" + video.getHeight() + "@"
+                      + video.getFpsNum() + "/" + video.getFpsDenum() + "fps(target)";
+                }
+                var sample = new MediaStreamMetrics.Sample(System.nanoTime(), tx.getBytes(), rx.getBytes(),
+                    rx.getPkt(), rx.getLoss(), rx.getJitterUsec().getMean() / 1000.0,
+                    rtcp.getRttUsec().getMean() / 1000.0, buffer == null ? 0 : buffer.getAvgDelayMsec(),
+                    buffer == null ? 0 : buffer.getDiscard());
+                events.log("媒体统计", metrics.record(index,
+                    type == pjmedia_type.PJMEDIA_TYPE_AUDIO ? "audio" : "video",
+                    stream.getCodecName(), negotiated, sample));
+              } finally { statistics.delete(); }
+            } finally { stream.delete(); }
+          }
+        } finally { info.delete(); }
+      } catch (Exception unavailable) {
+        if (!callDisconnected && !shuttingDown && !statisticsFailureLogged) {
+          statisticsFailureLogged = true;
+          events.log("媒体统计", "暂无法读取原生统计，后续继续采样：" + unavailable.getMessage());
+        }
+      } finally { nativeLifetime.readLock().unlock(); }
+    }
+
+    @Override public void delete() {
+      stopMediaStatistics();
+      nativeLifetime.writeLock().lock();
+      try { super.delete(); }
+      finally { nativeLifetime.writeLock().unlock(); }
+    }
 
     ClientCall(Account acc, String dialedDst, boolean videoConfigured) {
       super(acc);
@@ -1630,10 +1751,12 @@ final class SipService {
             connectTime = java.time.Instant.now();
             events.log("通话", "通话已接通确认 (开始计时)");
           }
+          startMediaStatistics();
           // The outgoing side has no answer-button action to refresh its window.
           events.stateChanged();
         } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
           callDisconnected = true;
+          stopMediaStatistics();
           boolean local = localHangup;
           synchronized (SipService.this) {
             if (activeCall == this) {

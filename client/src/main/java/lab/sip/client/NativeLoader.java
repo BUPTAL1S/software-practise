@@ -31,6 +31,7 @@ public final class NativeLoader {
               "libgcc_s_seh-1.dll",
               "libssp-0.dll",
               "libstdc++-6.dll",
+              "libopenh264-7.dll",
               "openh264.dll",
               "libopenh264.dll",
               "SDL2.dll"

@@ -119,7 +119,7 @@ class AvatarFeatureTest {
         "/api/rooms/room-101/vmute",
         exchange -> {
           String q = exchange.getRequestURI().getQuery();
-          String json = "{\"status\":\"ok\",\"query\":\"" + (q != null ? q : "") + "\"}";
+          String json = "{\"success\":true,\"query\":\"" + (q != null ? q : "") + "\"}";
           byte[] resp = json.getBytes(StandardCharsets.UTF_8);
           exchange.getResponseHeaders().set("Content-Type", "application/json");
           exchange.sendResponseHeaders(200, resp.length);
@@ -341,13 +341,8 @@ class AvatarFeatureTest {
     Platform.runLater(() -> {
       try {
         MainViewAssembler assembler = new MainViewAssembler();
-        String liveUrl = HttpFileClient.discoverBackendUrl("http://127.0.0.1:8088");
-        HttpFileClient client = new HttpFileClient(liveUrl != null ? liveUrl : serverBaseUrl);
-        if (liveUrl != null) {
-          try {
-            client.login("1001", "1001");
-          } catch (Exception ignored) {}
-        }
+        HttpFileClient client = new HttpFileClient(serverBaseUrl);
+        client.login("1001", "1001");
         LogView logs = new LogView();
 
         Stage dummyStage = new Stage();
@@ -367,14 +362,7 @@ class AvatarFeatureTest {
                   bi.setRGB(x, y, pr.getArgb(x, y));
                 }
               }
-              File out1 = new File("/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_avatar_settings_modal.png");
-              if (out1.getParentFile() != null) out1.getParentFile().mkdirs();
-              ImageIO.write(bi, "png", out1);
-
-              File repoOut = new File("../docs/snapshots/snapshot_avatar_settings_modal.png");
-              if (!repoOut.getParentFile().exists()) {
-                repoOut = new File("docs/snapshots/snapshot_avatar_settings_modal.png");
-              }
+              File repoOut = new File("target/test-snapshots/snapshot_avatar_settings_modal.png");
               if (repoOut.getParentFile() != null) repoOut.getParentFile().mkdirs();
               ImageIO.write(bi, "png", repoOut);
               System.out.println("AVATAR_MODAL_SNAPSHOT_SAVED: " + repoOut.getAbsolutePath());
@@ -432,14 +420,7 @@ class AvatarFeatureTest {
               bi.setRGB(x, y, pr.getArgb(x, y));
             }
           }
-          File out1 = new File("/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_avatar_cropper_dialog.png");
-          if (out1.getParentFile() != null) out1.getParentFile().mkdirs();
-          ImageIO.write(bi, "png", out1);
-
-          File repoOut = new File("../docs/snapshots/snapshot_avatar_cropper_dialog.png");
-          if (!repoOut.getParentFile().exists()) {
-            repoOut = new File("docs/snapshots/snapshot_avatar_cropper_dialog.png");
-          }
+          File repoOut = new File("target/test-snapshots/snapshot_avatar_cropper_dialog.png");
           if (repoOut.getParentFile() != null) repoOut.getParentFile().mkdirs();
           ImageIO.write(bi, "png", repoOut);
           System.out.println("AVATAR_CROPPER_SNAPSHOT_SAVED: " + repoOut.getAbsolutePath());
@@ -459,14 +440,8 @@ class AvatarFeatureTest {
   }
 
   @Test
-  void testLiveBackendAvatarWorkflow(@TempDir Path tempDir) throws Exception {
-    String liveUrl = HttpFileClient.discoverBackendUrl("http://127.0.0.1:8088");
-    if (liveUrl == null) {
-      liveUrl = HttpFileClient.discoverBackendUrl("http://127.0.0.1:8080");
-    }
-    String targetUrl = (liveUrl != null) ? liveUrl : serverBaseUrl;
-
-    HttpFileClient liveClient = new HttpFileClient(targetUrl);
+  void testIsolatedBackendAvatarWorkflow(@TempDir Path tempDir) throws Exception {
+    HttpFileClient liveClient = new HttpFileClient(serverBaseUrl);
     String token = liveClient.login("1001", "1001");
     assertNotNull(token, "Login as 1001 must return non-null token");
     assertFalse(token.isBlank(), "Login token must not be blank");
@@ -509,6 +484,6 @@ class AvatarFeatureTest {
         .findFirst()
         .orElseThrow();
     assertNull(u1001Reset.avatarUrl());
-    System.out.println("LIVE_BACKEND_AVATAR_TEST_SUCCESSFUL: " + liveUrl);
+    System.out.println("ISOLATED_BACKEND_AVATAR_TEST_SUCCESSFUL: " + serverBaseUrl);
   }
 }
