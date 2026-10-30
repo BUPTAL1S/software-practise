@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "base": "ca65897c34aa074c34fb9630e28dbf67ef929ca1",
+  "mediaCore": "00487de",
+  "backend": {
+    "total": 93,
+    "passed": 92,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "client": {
+    "total": 91,
+    "passed": 82,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 9
+  },
+  "browser": {
+    "total": 10,
+    "passed": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "includesParent": true
+  },
+  "nativePolicy": {
+    "total": 1,
+    "passed": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "evidence": {
+    "backend-optimization-final.log": {
+      "path": "D:\\work\\.codex-execution\\backend-optimization-final.log",
+      "sha256": "dd51f5d79e1f8755c1400f724b8205784cb81ac67f89b39c602da5d6ce09610f"
+    },
+    "client-optimization-final.log": {
+      "path": "D:\\work\\.codex-execution\\client-optimization-final.log",
+      "sha256": "2d7013d6081c4aa421e8c43d64ebd91515692be5a60e60a456575dd6e1828cd1"
+    },
+    "admin-browser-optimization.log": {
+      "path": "D:\\work\\.codex-execution\\admin-browser-optimization.log",
+      "sha256": "ebedb52705032211158f28a3cf64487fc78c2cf1c10cefa5d31e2df1d2ee9a8f"
+    },
+    "native-media-policy-final.log": {
+      "path": "D:\\work\\.codex-execution\\native-media-policy-final.log",
+      "sha256": "051befcacf8623a95f41af1dc99931c341d8565bcf6fe0d68574a86b2c3be0c1"
+    },
+    "windows-portable-verification.log": {
+      "path": "D:\\work\\.codex-execution\\windows-portable-verification.log",
+      "sha256": "a4d3991b74956e27bc8b8c250acfaa2a64c8c964f750f4d6b7152f6bf85d93cf"
+    }
+  },
+  "benchmark": [
+    {
+      "profile": "legacy",
+      "width": "640",
+      "height": "360",
+      "target_fps": "15",
+      "threads": "1",
+      "encoded": "165",
+      "skipped": "15",
+      "mean_encode_ms": "1.965",
+      "p95_encode_ms": "3.544",
+      "output_kbps": "481.589"
+    },
+    {
+      "profile": "balanced",
+      "width": "848",
+      "height": "480",
+      "target_fps": "25",
+      "threads": "1",
+      "encoded": "157",
+      "skipped": "23",
+      "mean_encode_ms": "3.311",
+      "p95_encode_ms": "6.446",
+      "output_kbps": "1162.618"
+    },
+    {
+      "profile": "motion",
+      "width": "640",
+      "height": "360",
+      "target_fps": "30",
+      "threads": "1",
+      "encoded": "165",
+      "skipped": "15",
+      "mean_encode_ms": "2.015",
+      "p95_encode_ms": "3.565",
+      "output_kbps": "877.181"
+    }
+  ],
+  "boundaries": [
+    "No dual-machine call or conference-entry acceptance",
+    "No real MCU or teammate Docker changes",
+    "No measured camera/display FPS or end-to-end audio latency",
+    "No macOS runtime or clean native DLL build validation"
+  ],
+  "mediaIndexFix": "ddb00f0"
+}

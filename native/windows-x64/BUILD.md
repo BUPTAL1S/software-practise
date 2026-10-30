@@ -49,11 +49,21 @@ native/windows-x64/pjsua2.dll
 - `libgcc_s_seh-1.dll`
 - `libssp-0.dll`
 - `libstdc++-6.dll`
-- `libopenh264-*.dll`（或重命名为 `openh264.dll`）
+- `libopenh264-7.dll`（本机当前构建的 PE 导入名；其他构建须保留它实际导入的 DLL 原名，不能只重命名成 openh264.dll）
 - `SDL2.dll`
 拷到 `native/windows-x64/` 同一目录。`NativeLoader` 会在加载 `pjsua2.dll` 前自动预加载这些同级依赖。
 
 SWIG 生成的 Java 若与仓库 `client/src/main/java/org/pjsip/pjsua2/` 不一致，用 2.17 重新生成后覆盖那一份（Win/Mac 共用，不要各改各的）。
+
+### 已有视频释放补丁与本轮证据
+
+本机此前使用的释放补丁现归档在 [patches/video-hangup-2.17.patch](patches/video-hangup-2.17.patch)。
+SHA256 为 `49e0fef86d1da9c9840160381253014e5fb84b23df27e78d0326e68e6401a7f6`；覆盖 DirectShow、SDL、视频端口/设备和 pjsua 视频窗口释放。
+本轮对本机 pjproject 基线 `5a457451fa2712ba18e12b01738e8ff3af2b26fd` 的现有修改执行 `git apply --reverse --check` 成功，没有修改源码或重新编译 DLL。
+该检查确认补丁与工作树相符，不等于完成干净环境构建复现。构建前应在自己的 2.17 检出执行 `git apply --check <补丁路径>`，再正常 apply、make 和重建 SWIG JNI。
+
+当前测试 DLL 的 SHA256 为 `e19935eb972d3bbe55dd29fe30820184ff66c0ddfd7c4b8f6a54857ae9c2610a`，原生参数测试已确认 H264/97、42e01e 和三种发送档位读回；没有真实媒体验收。
+新 Windows 便携包入口及不依赖开发 PATH 的验证方式见 [Windows 交付](../../docs/windows-delivery.md)。
 
 ### 编译本地镜像组件 winmirror.dll
 

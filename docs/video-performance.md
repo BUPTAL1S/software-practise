@@ -1,11 +1,45 @@
 # 视频流畅度调整与验收
 
-本次仅执行离线编译、窗口布局单元测试和配置解析，未启动客户端、后台或容器。
-没有双机 RTP 统计或实测帧率，以下参数是保守默认值，不是带宽自适应或已完成的视频验收。
+2026-10-30 更新：本轮完成离线代码优化、完整回归、原生媒体参数读回、纯编码基准及 Windows 包内 JRE 启动验证。
+按用户要求，不进行双机反复通话与入会验收；没有真实网络 RTP、实际摄像头帧率或端到端音频延迟数据。目标参数、合成基准和实际媒体体验分别报告。
 
-## 改动
+## 当前媒体档位
 
-- 客户端活动视频编码器发送目标设为 640×360、15fps、500kbps，峰值 800kbps，最大 payload 1200 字节。
+| JVM 属性 `sip.media.profile` | 发送尺寸 | 目标帧率 | 平均 / 最高编码码率 | 音频缓冲调整 |
+| --- | --- | ---: | --- | --- |
+| balanced（默认） | 848×480 | 25fps | 1.2 / 1.8Mbps | 开 |
+| motion | 640×360 | 30fps | 0.9 / 1.4Mbps | 开 |
+| legacy | 640×360 | 15fps | 0.5 / 0.8Mbps | 保留旧原生默认 |
+
+这是固定档位，不是自适应码率。当前 H.264 接收 fmtp 为 `42e01e`（Level 3.0），保持不变。
+848×480 为 53×30=1590 个宏块，每秒 39750 个宏块，均在当前 SDK 的 1620 / 40500 限制内。
+直接设为 1280×720/30fps 会超出该协商等级。实际编码器可能继续按对端能力降低参数。
+
+通过 JVM 属性覆盖参数，无需改界面：`sip.video.width`、`height`、`fps`、`averageBps`、`maximumBps`、`mtu`（每项均带 `sip.video.` 前缀）。
+必须是偶数宽高，并通过宏块和码率边界检查。MTU 默认 1200 字节，可设 600–1400；非法配置会整组回退 balanced 并记录警告。
+例如：`java -Dsip.media.profile=legacy -jar client.jar`。Windows 新包可先 `set SIP_MEDIA_PROFILE=legacy` 再启动。
+
+音频保留原生时钟、编解码器和回声消除，配置独立 RTP 接收队列及一个接收工作线程。
+balanced/motion 使用 20ms 分帧、采集/播放各 60ms、抖动缓冲初始 60ms、最小 20ms、最大预取 120ms、上限 240ms。
+这些是缓冲目标，不能相加后当成实测端到端延迟。可用 `sip.audio.captureMs`、`playbackMs`、`jitterInitialMs`、`jitterMinMs`、`jitterMaxPreMs`、`jitterMaxMs` 覆盖；属性完整前缀均为 `sip.audio.`。
+
+## 性能与诊断实现
+
+- 视频设备/编码器能力采用 5 秒不可变快照，启动、关闭及显式预览前失效；相同快照内 10000 次查询只加载一次。失效刷新统一先取引擎锁，避免缓存锁与引擎锁顺序相反。
+- 枚举获得的原生编码器向量和设备信息在 finally 中释放。
+- 可选 `UI_LOG_FILE` 写入由独立后台线程执行，队列最多 256 条、单条最多 32768 字符；过载丢弃诊断日志并记丢弃数，不阻塞原生回调。
+- BYE 最终响应先通知挂断观察器，再转发界面日志。
+- 接通后每 5 秒读取各活动流 RTCP/JitterBuffer 统计，首样本只标 warmup；挂断和销毁前停止采样。原生 Call 释放与统计采样使用独立生命周期锁。
+
+日志示意：`audio codec=PCMU negotiated=8000Hz interval=5.00s tx=64.0kbps rx=64.0kbps rxLoss=0.00% jitterMean=2.50ms rttMean=12.00ms jbuf=40ms discarded=0`。
+tx/rx 为采样间隔内的 RTP 字节差换算，丢包率分母为收到包增量加丢包增量；jitterMean/rttMean 是原生统计累计均值。
+视频中的 `fps(target)` 是协商发送目标，RTP 包数和码率均不是解码/显示帧率。`-Dsip.media.statisticsSeconds=0` 关闭统计，可设置 2–60 秒。
+
+纯编码基准和当前测试数见 [本轮报告](reports/media-backend-optimization-20261030.md)，运行入口为 `scripts/benchmark-media.ps1`。
+
+## 保留的早期优化
+
+- 早期的 640×360、15fps、500kbps、峰值 800kbps 现作为 legacy 回退档，默认参数以上表为准，最大 payload 默认 1200 字节。
   不禁用其他编码器，不覆盖 H.264 fmtp；原生后端或协商可能调整这些目标。
 - H.264 优先以匹配现有 MCU。设置失败逐编码器记录日志，其他编码器继续处理。
 - 使用独立发送线程进行 RTP 节奏控制，避免发送限速阻塞摄像头采集线程。
@@ -14,7 +48,7 @@
 - 会议室混流改为 960×540、15fps、1mb，保持 3×3 和 8 人上限。
   单格约 320×180；这是用清晰度和帧率换取较低的编码/解码负载。
   部分 PJSIP OpenH264 构建默认最大接收宽度为 1200，原先 1280 宽画布存在兼容风险；
-  尚未确认仓库 DLL 的具体编译上限。
+  本机 2.17 源码的 OpenH264 最大接收尺寸为 1200×800；本轮原生参数测试保持既有解码参数，未验证真实混流解码。
 - 会议室本地推流启动提前到远端窗口检查之前，避免没有远端窗口时跳过发送启动。
 - 相同窗口句柄、区域和 DPI 下跳过重复 JNI 嵌入；窗口缩放、DPI、视频流或 PiP 变化仍重新布局。
   detach/关闭清除缓存；Java 层调用失败会重试。原生接口返回 void，无法确认 OS 是否实际完成嵌入。
@@ -37,7 +71,7 @@ mvn -o -f client/pom.xml -Dtest=NativeVideoPlacementTest test
 4 个测试覆盖：连续 120 次相同布局只嵌入一次；尺寸/DPI/句柄/PiP 变化触发布局；
 detach 后相同句柄仍会重新嵌入；调用失败不缓存成功状态。
 
-## 后续双机验收
+## 后续双机验收（本轮明确不执行）
 
 1. 两台 Windows 更新客户端，确认日志出现实际应用的编码参数。先测 1:1 双向视频 5 分钟，
    再测 3 人和 8 人会议。分别记录通话双方与服务端的 CPU、收发码率、帧率、丢包和抖动。
@@ -53,6 +87,7 @@ detach 后相同句柄仍会重新嵌入；调用失败不缓存成功状态。
 ## 依据
 
 - [PJSIP 视频编码参数、发送限速与默认接收上限](https://docs.pjsip.org/en/latest/specific-guides/video/codec_params.html)
+- [PJSUA2 媒体配置与原生统计](https://docs.pjsip.org/en/latest/api/generated/pjsip/group/group__PJSUA2__MED.html)
 - [FreeSWITCH 会议画布、帧率及编码带宽](https://developer.signalwire.com/freeswitch/applications/conferencing/)
 
 ## 摄像头切换未响应修复（2026-10-28 后续验证）

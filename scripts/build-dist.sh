@@ -5,10 +5,20 @@
 # ==============================================================================
 set -euo pipefail
 
+# jlink emits the build host's native runtime. Never label a Windows JRE as macOS.
+if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+  echo "[ERROR] This combined builder requires macOS arm64. On Windows use scripts/build-windows.ps1." >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$REPO/dist"
 GROUP_NAME="${GROUP_ID:-第01组}"
+if [[ ! -f "$REPO/scripts/cache/win-jre.zip" ]]; then
+  echo "[ERROR] scripts/cache/win-jre.zip is required for the Windows portable artifact." >&2
+  exit 1
+fi
 
 echo "===================================================================="
 echo "  正在构建 Java SIP 阶段 6 绿色便携包 (形态B / 免配置开箱即用)"
@@ -65,7 +75,7 @@ if [[ -x "$JDEPS_BIN" ]]; then
 fi
 
 # 补充 GUI、网络通信、JFR性能剖析、桌面特性及轻量数据库模块
-FINAL_MODULES="java.base,java.desktop,java.logging,java.net.http,java.prefs,java.sql,jdk.jfr,jdk.unsupported,jdk.unsupported.desktop"
+FINAL_MODULES="java.se,jdk.crypto.ec,jdk.charsets,jdk.localedata,jdk.zipfs,jdk.jfr,jdk.unsupported,jdk.unsupported.desktop"
 if [[ -n "$DETECTED_MODULES" ]]; then
   IFS=',' read -ra MOD_ARR <<< "$DETECTED_MODULES"
   for m in "${MOD_ARR[@]}"; do

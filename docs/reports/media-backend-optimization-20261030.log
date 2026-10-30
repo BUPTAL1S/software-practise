@@ -1,0 +1,15 @@
+Evidence: backend-optimization-final.log; SHA256: dd51f5d79e1f8755c1400f724b8205784cb81ac67f89b39c602da5d6ce09610f
+Tests run: 93, Failures: 0, Errors: 0, Skipped: 1
+
+Evidence: client-optimization-final.log; SHA256: 2d7013d6081c4aa421e8c43d64ebd91515692be5a60e60a456575dd6e1828cd1
+Tests run: 91, Failures: 0, Errors: 0, Skipped: 9
+
+Evidence: admin-browser-optimization.log; SHA256: ebedb52705032211158f28a3cf64487fc78c2cf1c10cefa5d31e2df1d2ee9a8f
+node --test: 10 tests, 10 pass, 0 fail, 0 skipped (1 parent + 9 children)
+
+Evidence: native-media-policy-final.log; SHA256: 051befcacf8623a95f41af1dc99931c341d8565bcf6fe0d68574a86b2c3be0c1
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+
+Evidence: windows-portable-verification.log; SHA256: a4d3991b74956e27bc8b8c250acfaa2a64c8c964f750f4d6b7152f6bf85d93cf
+[NativeLoader] Success: PJSUA2 native library loaded successfully (D:\work\.codex-execution\software-practise-phase6-20261030\dist\windows-20261030-validation\JavaSIP-Client-Windows-x64\native\pjsua2.dll)
+PORTABLE_PACKAGE_PASS: D:\work\.codex-execution\software-practise-phase6-20261030\dist\windows-20261030-validation\validation-f70aa10778f5445b92741774b94a8d07

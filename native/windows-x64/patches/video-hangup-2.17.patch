@@ -1,0 +1,825 @@
+diff --git a/pjmedia/src/pjmedia-videodev/dshow_dev.c b/pjmedia/src/pjmedia-videodev/dshow_dev.c
+index 30b1caa..7362b8c 100644
+--- a/pjmedia/src/pjmedia-videodev/dshow_dev.c
++++ b/pjmedia/src/pjmedia-videodev/dshow_dev.c
+@@ -1072,7 +1072,8 @@ static pj_status_t dshow_stream_get_cap(pjmedia_vid_dev_stream *s,
+ 
+     PJ_UNUSED_ARG(strm);
+ 
+-    PJ_ASSERT_RETURN(s && pval, PJ_EINVAL);
++    if (!s || !pval)
++        return PJ_EINVAL;
+ 
+     if (cap==PJMEDIA_VID_DEV_CAP_OUTPUT_WINDOW)
+     {
+@@ -1092,7 +1093,8 @@ static pj_status_t dshow_stream_set_cap(pjmedia_vid_dev_stream *s,
+ 
+     PJ_UNUSED_ARG(strm);
+ 
+-    PJ_ASSERT_RETURN(s && pval, PJ_EINVAL);
++    if (!s || !pval)
++        return PJ_EINVAL;
+ 
+     if (cap==PJMEDIA_VID_DEV_CAP_OUTPUT_WINDOW)
+     {
+@@ -1133,6 +1135,8 @@ static pj_status_t dshow_stream_stop(pjmedia_vid_dev_stream *strm)
+     struct dshow_stream *stream = (struct dshow_stream*)strm;
+     unsigned i;
+ 
++    if (!stream)
++        return PJ_EINVAL;
+     stream->quit_flag = PJ_TRUE;
+     if (stream->cap_thread_initialized) {
+         for (i=0; !stream->cap_thread_exited && i<100; ++i)
+@@ -1156,7 +1160,8 @@ static pj_status_t dshow_stream_destroy(pjmedia_vid_dev_stream *strm)
+ {
+     struct dshow_stream *stream = (struct dshow_stream*)strm;
+ 
+-    PJ_ASSERT_RETURN(stream != NULL, PJ_EINVAL);
++    if (!stream)
++        return PJ_EINVAL;
+ 
+     dshow_stream_stop(strm);
+     destroy_filter_graph(stream);
+diff --git a/pjmedia/src/pjmedia-videodev/sdl_dev.c b/pjmedia/src/pjmedia-videodev/sdl_dev.c
+index fc5654d..e03a82b 100644
+--- a/pjmedia/src/pjmedia-videodev/sdl_dev.c
++++ b/pjmedia/src/pjmedia-videodev/sdl_dev.c
+@@ -932,6 +932,9 @@ static pj_status_t sdl_stream_put_frame(pjmedia_vid_dev_stream *strm,
+     struct sdl_stream *stream = (struct sdl_stream*)strm;
+     pj_status_t status;
+ 
++    if (!stream)
++        return PJ_EINVAL;
++
+     stream->last_ts.u64 = frame->timestamp.u64;
+ 
+     /* Video conference just trying to send heart beat for updating timestamp
+@@ -1158,11 +1161,26 @@ static pj_status_t sdl_stream_get_cap(pjmedia_vid_dev_stream *s,
+ static pj_status_t set_cap(void *data)
+ {
+     struct strm_cap *scap = (struct strm_cap *)data;
+-    struct sdl_stream *strm = scap->strm;
+-    pjmedia_vid_dev_cap cap = scap->cap;
+-    const void *pval = scap->pval.cpval;
+-
+-    PJ_ASSERT_RETURN(data && strm, PJ_EINVAL);
++    struct sdl_stream *strm;
++    pjmedia_vid_dev_cap cap;
++    const void *pval;
++
++    if (!data)
++        return PJ_EINVAL;
++    strm = scap->strm;
++    if (!strm)
++        return PJ_EINVAL;
++    cap = scap->cap;
++    pval = scap->pval.cpval;
++    if (!strm->window &&
++        (cap == PJMEDIA_VID_DEV_CAP_OUTPUT_POSITION ||
++         cap == PJMEDIA_VID_DEV_CAP_OUTPUT_HIDE ||
++         cap == PJMEDIA_VID_DEV_CAP_OUTPUT_RESIZE ||
++         cap == PJMEDIA_VID_DEV_CAP_OUTPUT_FULLSCREEN ||
++         cap == PJMEDIA_VID_DEV_CAP_OUTPUT_WINDOW))
++    {
++        return PJ_EINVAL;
++    }
+ 
+     if (cap == PJMEDIA_VID_DEV_CAP_OUTPUT_POSITION) {
+         /**
+@@ -1282,7 +1300,8 @@ static pj_status_t sdl_stream_set_cap(pjmedia_vid_dev_stream *s,
+     struct strm_cap scap;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(s && pval, PJ_EINVAL);
++    if (!s || !pval)
++        return PJ_EINVAL;
+ 
+     scap.strm = strm;
+     scap.cap = cap;
+@@ -1311,6 +1330,9 @@ static pj_status_t sdl_stream_stop(pjmedia_vid_dev_stream *strm)
+ {
+     struct sdl_stream *stream = (struct sdl_stream*)strm;
+ 
++    if (!stream)
++        return PJ_EINVAL;
++
+     PJ_LOG(4, (THIS_FILE, "Stopping sdl video stream"));
+ 
+     stream->is_running = PJ_FALSE;
+@@ -1325,7 +1347,8 @@ static pj_status_t sdl_stream_destroy(pjmedia_vid_dev_stream *strm)
+     struct sdl_stream *stream = (struct sdl_stream*)strm;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(stream != NULL, PJ_EINVAL);
++    if (!stream)
++        return PJ_EINVAL;
+ 
+     sdl_stream_stop(strm);
+ 
+diff --git a/pjmedia/src/pjmedia/vid_port.c b/pjmedia/src/pjmedia/vid_port.c
+index 52fe49a..12a30be 100644
+--- a/pjmedia/src/pjmedia/vid_port.c
++++ b/pjmedia/src/pjmedia/vid_port.c
+@@ -725,7 +725,10 @@ PJ_DEF(void) pjmedia_vid_port_set_cb(pjmedia_vid_port *vid_port,
+ PJ_DEF(pjmedia_vid_dev_stream*)
+ pjmedia_vid_port_get_stream(pjmedia_vid_port *vp)
+ {
+-    PJ_ASSERT_RETURN(vp, NULL);
++    /* A missing port is a failed video window, not a process-fatal bug.
++     * PJ_ASSERT_RETURN() aborts in this debug build before it can return. */
++    if (!vp)
++        return NULL;
+     return vp->strm;
+ }
+ 
+@@ -764,7 +767,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_port_subscribe_event(
+                                                 pjmedia_vid_port *vp,
+                                                 pjmedia_port *port)
+ {
+-    PJ_ASSERT_RETURN(vp && port, PJ_EINVAL);
++    if (!vp || !port)
++        return PJ_EINVAL;
+ 
+     /* Subscribe to port's events */
+     return pjmedia_event_subscribe(NULL, &client_port_event_cb, vp, port);
+@@ -775,7 +779,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_port_unsubscribe_event(
+                                                 pjmedia_vid_port *vp,
+                                                 pjmedia_port *port)
+ {
+-    PJ_ASSERT_RETURN(vp && port, PJ_EINVAL);
++    if (!vp || !port)
++        return PJ_EINVAL;
+ 
+     /* Unsubscribe to port's events */
+     return pjmedia_event_unsubscribe(NULL, &client_port_event_cb, vp, port);
+@@ -821,7 +826,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_port_start(pjmedia_vid_port *vp)
+ {
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(vp, PJ_EINVAL);
++    if (!vp)
++        return PJ_EINVAL;
+ 
+     /* Initialize buffer with black color */
+     status = pjmedia_video_format_fill_black(&vp->conv.conv_param.src,
+@@ -851,6 +857,8 @@ on_error:
+ 
+ PJ_DEF(pj_bool_t) pjmedia_vid_port_is_running(pjmedia_vid_port *vp)
+ {
++    if (!vp || !vp->strm)
++        return PJ_FALSE;
+     return pjmedia_vid_dev_stream_is_running(vp->strm);
+ }
+ 
+@@ -858,7 +866,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_port_stop(pjmedia_vid_port *vp)
+ {
+     pj_status_t status0=PJ_SUCCESS, status;
+ 
+-    PJ_ASSERT_RETURN(vp, PJ_EINVAL);
++    if (!vp)
++        return PJ_EINVAL;
+ 
+     if (vp->clock) {
+         status0 = pjmedia_clock_stop(vp->clock);
+@@ -871,7 +880,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_port_stop(pjmedia_vid_port *vp)
+ 
+ static void vid_port_destroy(pjmedia_vid_port *vp)
+ {
+-    PJ_ASSERT_ON_FAIL(vp, return);
++    if (!vp)
++        return;
+ 
+     PJ_LOG(4,(THIS_FILE, "Destroying %s..", vp->dev_name.ptr));
+ 
+@@ -912,7 +922,8 @@ static void vid_port_destroy(pjmedia_vid_port *vp)
+ 
+ PJ_DEF(void) pjmedia_vid_port_destroy(pjmedia_vid_port *vp)
+ {
+-    PJ_ASSERT_ON_FAIL(vp, return);
++    if (!vp)
++        return;
+ 
+     PJ_LOG(4,(THIS_FILE, "Destroy request on %s..", vp->dev_name.ptr));
+ 
+diff --git a/pjmedia/src/pjmedia/videodev.c b/pjmedia/src/pjmedia/videodev.c
+index 9e074b6..d6c8c89 100644
+--- a/pjmedia/src/pjmedia/videodev.c
++++ b/pjmedia/src/pjmedia/videodev.c
+@@ -613,6 +613,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_get_cap(
+                                             pjmedia_vid_dev_cap cap,
+                                             void *value)
+ {
++    if (!strm || !strm->op || !strm->op->get_cap)
++        return PJ_EINVAL;
+     return strm->op->get_cap(strm, cap, value);
+ }
+ 
+@@ -622,6 +624,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_set_cap(
+                                             pjmedia_vid_dev_cap cap,
+                                             const void *value)
+ {
++    if (!strm || !strm->op || !strm->op->set_cap)
++        return PJ_EINVAL;
+     /* For fast switching, device global index needs to be converted to
+      * local index before forwarding the request to the device stream.
+      */
+@@ -651,6 +655,9 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_start(pjmedia_vid_dev_stream *strm)
+ {
+     pj_status_t status;
+ 
++    if (!strm || !strm->op || !strm->op->start)
++        return PJ_EINVAL;
++
+     if (pjmedia_vid_dev_stream_is_running(strm))
+         return PJ_SUCCESS;
+ 
+@@ -664,6 +671,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_start(pjmedia_vid_dev_stream *strm)
+ PJ_DEF(pj_bool_t)
+ pjmedia_vid_dev_stream_is_running(pjmedia_vid_dev_stream *strm)
+ {
++    if (!strm)
++        return PJ_FALSE;
+     return strm->sys.is_running;
+ }
+ 
+@@ -671,7 +680,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_get_frame(
+                                             pjmedia_vid_dev_stream *strm,
+                                             pjmedia_frame *frame)
+ {
+-    pj_assert(strm->op->get_frame);
++    if (!strm || !strm->op || !strm->op->get_frame)
++        return PJ_EINVAL;
+     return strm->op->get_frame(strm, frame);
+ }
+ 
+@@ -679,13 +689,16 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_put_frame(
+                                             pjmedia_vid_dev_stream *strm,
+                                             const pjmedia_frame *frame)
+ {
+-    pj_assert(strm->op->put_frame);
++    if (!strm || !strm->op || !strm->op->put_frame)
++        return PJ_EINVAL;
+     return strm->op->put_frame(strm, frame);
+ }
+ 
+ /* API: Stop the stream. */
+ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_stop(pjmedia_vid_dev_stream *strm)
+ {
++    if (!strm || !strm->op || !strm->op->stop)
++        return PJ_EINVAL;
+     strm->sys.is_running = PJ_FALSE;
+     return strm->op->stop(strm);
+ }
+@@ -694,6 +707,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_stop(pjmedia_vid_dev_stream *strm)
+ PJ_DEF(pj_status_t) pjmedia_vid_dev_stream_destroy(
+                                                 pjmedia_vid_dev_stream *strm)
+ {
++    if (!strm || !strm->op || !strm->op->destroy)
++        return PJ_EINVAL;
+     strm->sys.is_running = PJ_FALSE;
+     return strm->op->destroy(strm);
+ }
+diff --git a/pjsip/src/pjsua-lib/pjsua_vid.c b/pjsip/src/pjsua-lib/pjsua_vid.c
+index 703abcb..ffaa465 100644
+--- a/pjsip/src/pjsua-lib/pjsua_vid.c
++++ b/pjsip/src/pjsua-lib/pjsua_vid.c
+@@ -342,6 +342,10 @@ PJ_DEF(pj_status_t) pjsua_vid_dev_set_setting( pjmedia_vid_dev_index id,
+ 
+         w = &pjsua_var.win[wid];
+         cap_dev = pjmedia_vid_port_get_stream(w->vp_cap);
++        if (!cap_dev) {
++            PJSUA_UNLOCK();
++            return PJ_EINVAL;
++        }
+ 
+         status = pjmedia_vid_dev_stream_set_cap(cap_dev, cap, pval);
+         if (status != PJ_SUCCESS) {
+@@ -390,6 +394,10 @@ PJ_DEF(pj_status_t) pjsua_vid_dev_get_setting( pjmedia_vid_dev_index id,
+ 
+         w = &pjsua_var.win[wid];
+         cap_dev = pjmedia_vid_port_get_stream(w->vp_cap);
++        if (!cap_dev) {
++            PJSUA_UNLOCK();
++            return PJ_EINVAL;
++        }
+ 
+         status = pjmedia_vid_dev_stream_get_cap(cap_dev, cap, pval);
+         
+@@ -707,7 +715,13 @@ static pj_status_t create_vid_win(pjsua_vid_win_type type,
+             } else {
+                 strm = pjmedia_vid_port_get_stream(w->vp_rend);
+             }
+-            pj_assert(strm);
++            if (!strm) {
++                PJ_LOG(4,(THIS_FILE,
++                          "Existing video window has no stream, skip show/hide"));
++                *id = wid;
++                pj_log_pop_indent();
++                return PJ_SUCCESS;
++            }
+ 
+             /* Try to apply show/hide, window flags, and output window */
+ 
+@@ -936,28 +950,45 @@ on_error:
+ 
+ static void free_vid_win(pjsua_vid_win_id wid)
+ {
+-    pjsua_vid_win *w = &pjsua_var.win[wid];
++    pjsua_vid_win *w;
++    pjmedia_vid_port *vp_cap, *vp_rend;
++    pjsua_conf_port_id cap_slot, rend_slot;
+     unsigned num_locks = 0;
+-    
++
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return;
++    w = &pjsua_var.win[wid];
++    if (w->type == PJSUA_WND_TYPE_NONE && !w->vp_cap && !w->vp_rend)
++        return;
++
++    /* Detach while the lock is still held. Hangup runs Show/setSize on the
++     * UI thread at the same time; if the ports stay visible across the
++     * unlocked destroy below, those calls use a freed stream and abort. */
++    vp_cap = w->vp_cap;
++    vp_rend = w->vp_rend;
++    cap_slot = w->cap_slot;
++    rend_slot = w->rend_slot;
++    w->vp_cap = NULL;
++    w->vp_rend = NULL;
++    w->ref_cnt = 0;
++
+     PJ_LOG(4,(THIS_FILE, "Window %d: destroying..", wid));
+     pj_log_push_indent();
+ 
+     /* Release locks before unsubscribing/destroying, to avoid deadlock. */
+     num_locks = PJSUA_RELEASE_LOCK();
+ 
+-    if (w->vp_cap) {
+-        pjsua_vid_conf_remove_port(w->cap_slot);
+-        pjmedia_event_unsubscribe(NULL, &call_media_on_event, NULL,
+-                                  w->vp_cap);
+-        pjmedia_vid_port_stop(w->vp_cap);
+-        pjmedia_vid_port_destroy(w->vp_cap);
++    if (vp_cap) {
++        pjsua_vid_conf_remove_port(cap_slot);
++        pjmedia_event_unsubscribe(NULL, &call_media_on_event, NULL, vp_cap);
++        pjmedia_vid_port_stop(vp_cap);
++        pjmedia_vid_port_destroy(vp_cap);
+     }
+-    if (w->vp_rend) {
+-        pjsua_vid_conf_remove_port(w->rend_slot);
+-        pjmedia_event_unsubscribe(NULL, &call_media_on_event, NULL,
+-                                  w->vp_rend);
+-        pjmedia_vid_port_stop(w->vp_rend);
+-        pjmedia_vid_port_destroy(w->vp_rend);
++    if (vp_rend) {
++        pjsua_vid_conf_remove_port(rend_slot);
++        pjmedia_event_unsubscribe(NULL, &call_media_on_event, NULL, vp_rend);
++        pjmedia_vid_port_stop(vp_rend);
++        pjmedia_vid_port_destroy(vp_rend);
+     }
+     /* Re-acquire the locks. */
+     PJSUA_RELOCK(num_locks);
+@@ -971,22 +1002,26 @@ static void free_vid_win(pjsua_vid_win_id wid)
+ static void inc_vid_win(pjsua_vid_win_id wid)
+ {
+     pjsua_vid_win *w;
+-    
+-    pj_assert(wid >= 0 && wid < PJSUA_MAX_VID_WINS);
+ 
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return;
+     w = &pjsua_var.win[wid];
+-    pj_assert(w->type != PJSUA_WND_TYPE_NONE);
++    if (w->type == PJSUA_WND_TYPE_NONE)
++        return;
+     ++w->ref_cnt;
+ }
+ 
+ static void dec_vid_win(pjsua_vid_win_id wid)
+ {
+     pjsua_vid_win *w;
+-    
+-    pj_assert(wid >= 0 && wid < PJSUA_MAX_VID_WINS);
+ 
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return;
+     w = &pjsua_var.win[wid];
+-    pj_assert(w->type != PJSUA_WND_TYPE_NONE);
++    /* A second hangup can arrive while free_vid_win() has dropped the lock.
++     * Asserting here aborts the process instead of ignoring the extra drop. */
++    if (w->type == PJSUA_WND_TYPE_NONE || w->ref_cnt == 0)
++        return;
+     if (--w->ref_cnt == 0)
+         free_vid_win(wid);
+ }
+@@ -1076,6 +1111,10 @@ static pj_status_t setup_vid_capture(pjsua_call_media *call_med)
+ 
+     /* Start capturer */
+     if (just_created) {
++        if (!w->vp_cap) {
++            status = PJ_EINVAL;
++            goto on_error;
++        }
+         status = pjmedia_vid_port_start(w->vp_cap);
+         if (status != PJ_SUCCESS)
+             goto on_error;
+@@ -1325,6 +1364,12 @@ pj_status_t pjsua_vid_channel_update(pjsua_call_media *call_med,
+ #endif
+             
+             /* Register renderer to stream events */
++            if (!w->vp_rend) {
++                PJSUA_UNLOCK();
++                pj_log_pop_indent();
++                status = PJ_EINVAL;
++                goto on_error;
++            }
+             pjmedia_vid_port_subscribe_event(w->vp_rend, media_port);
+ 
+             /* Register stream decoding to conf, using tmp_pool should be fine
+@@ -1423,37 +1468,56 @@ void pjsua_vid_stop_stream(pjsua_call_media *call_med)
+ 
+     pjmedia_vid_stream_send_rtcp_bye(strm);
+ 
+-    /* Release locks before unsubscribing, to avoid deadlock. */
+-    num_locks = PJSUA_RELEASE_LOCK();
++    /* Take the ports out of the window before dropping the lock, so a
++     * concurrent free/Show cannot destroy or use them while we unsubscribe. */
++    pjmedia_vid_port *cap_port = NULL;
++    pjmedia_vid_port *rend_port = NULL;
++    {
++        pj_bool_t extra_lock = !PJSUA_LOCK_IS_LOCKED();
+ 
+-    /* Unsubscribe events first, otherwise the event callbacks
+-     * can be called and access already destroyed objects.
+-     */
+-    if (call_med->strm.v.cap_win_id != PJSUA_INVALID_ID) {
+-        pjsua_vid_win *w = &pjsua_var.win[call_med->strm.v.cap_win_id];
++        if (extra_lock)
++            PJSUA_LOCK();
++        if (call_med->strm.v.cap_win_id >= 0 &&
++            call_med->strm.v.cap_win_id < PJSUA_MAX_VID_WINS)
++        {
++            pjsua_vid_win *cw = &pjsua_var.win[call_med->strm.v.cap_win_id];
++            cap_port = cw->vp_cap;
++            cw->vp_cap = NULL;
++        }
++        if (call_med->strm.v.rdr_win_id >= 0 &&
++            call_med->strm.v.rdr_win_id < PJSUA_MAX_VID_WINS)
++        {
++            pjsua_vid_win *rw = &pjsua_var.win[call_med->strm.v.rdr_win_id];
++            rend_port = rw->vp_rend;
++            rw->vp_rend = NULL;
++        }
++        if (extra_lock)
++            PJSUA_UNLOCK();
+ 
+-        /* Unsubscribe event */
+-        pjmedia_event_unsubscribe(NULL, &call_media_on_event, call_med,
+-                                  w->vp_cap);
+-    }
+-    if (call_med->strm.v.rdr_win_id != PJSUA_INVALID_ID) {
+-        pj_status_t status;
+-        pjmedia_port *media_port;
+-        pjsua_vid_win *w = &pjsua_var.win[call_med->strm.v.rdr_win_id];
++        num_locks = PJSUA_RELEASE_LOCK();
+ 
+-        /* Unsubscribe event, but stop the render first */
+-        pjmedia_vid_port_stop(w->vp_rend);
+-        pjmedia_event_unsubscribe(NULL, &call_media_on_event, call_med,
+-                                  w->vp_rend);
++        /* Unsubscribe events first, otherwise the event callbacks
++         * can be called and access already destroyed objects.
++         */
++        if (cap_port) {
++            pjmedia_event_unsubscribe(NULL, &call_media_on_event, call_med,
++                                      cap_port);
++        }
++        if (rend_port) {
++            pj_status_t status;
++            pjmedia_port *media_port;
+ 
+-        /* Retrieve stream decoding port */
+-        status = pjmedia_vid_stream_get_port(strm, PJMEDIA_DIR_DECODING,
+-                                             &media_port);
+-        if (status == PJ_SUCCESS) {
+-            pjmedia_event_unsubscribe(NULL, &call_media_on_event,
+-                                    call_med, media_port);
++            pjmedia_vid_port_stop(rend_port);
++            pjmedia_event_unsubscribe(NULL, &call_media_on_event, call_med,
++                                      rend_port);
+ 
+-            pjmedia_vid_port_unsubscribe_event(w->vp_rend, media_port);
++            status = pjmedia_vid_stream_get_port(strm, PJMEDIA_DIR_DECODING,
++                                                 &media_port);
++            if (status == PJ_SUCCESS) {
++                pjmedia_event_unsubscribe(NULL, &call_media_on_event,
++                                        call_med, media_port);
++                pjmedia_vid_port_unsubscribe_event(rend_port, media_port);
++            }
+         }
+     }
+     /* Unsubscribe from video stream events */
+@@ -1464,6 +1528,39 @@ void pjsua_vid_stop_stream(pjsua_call_media *call_med)
+ 
+     PJSUA_LOCK();
+ 
++    /* Hand the ports back. free_vid_win() is what destroys them. If the
++     * window was reset while we were unlocked, destroy the ports here. */
++    if (cap_port) {
++        if (call_med->strm.v.cap_win_id >= 0 &&
++            call_med->strm.v.cap_win_id < PJSUA_MAX_VID_WINS &&
++            pjsua_var.win[call_med->strm.v.cap_win_id].type != PJSUA_WND_TYPE_NONE &&
++            pjsua_var.win[call_med->strm.v.cap_win_id].vp_cap == NULL)
++        {
++            pjsua_var.win[call_med->strm.v.cap_win_id].vp_cap = cap_port;
++        } else {
++            unsigned n = PJSUA_RELEASE_LOCK();
++            pjmedia_vid_port_stop(cap_port);
++            pjmedia_vid_port_destroy(cap_port);
++            PJSUA_RELOCK(n);
++        }
++        cap_port = NULL;
++    }
++    if (rend_port) {
++        if (call_med->strm.v.rdr_win_id >= 0 &&
++            call_med->strm.v.rdr_win_id < PJSUA_MAX_VID_WINS &&
++            pjsua_var.win[call_med->strm.v.rdr_win_id].type != PJSUA_WND_TYPE_NONE &&
++            pjsua_var.win[call_med->strm.v.rdr_win_id].vp_rend == NULL)
++        {
++            pjsua_var.win[call_med->strm.v.rdr_win_id].vp_rend = rend_port;
++        } else {
++            unsigned n = PJSUA_RELEASE_LOCK();
++            pjmedia_vid_port_stop(rend_port);
++            pjmedia_vid_port_destroy(rend_port);
++            PJSUA_RELOCK(n);
++        }
++        rend_port = NULL;
++    }
++
+     /* Now that we have unsubscribed from all events, we no longer
+      * receive future events. But we may have scheduled some timers
+      * to call media event callbacks, so we need to wait until those
+@@ -1517,9 +1614,10 @@ void pjsua_vid_stop_stream(pjsua_call_media *call_med)
+     }
+ 
+     if (call_med->strm.v.cap_win_id != PJSUA_INVALID_ID) {
+-        /* Decrement ref count of preview video window */
+-        dec_vid_win(call_med->strm.v.cap_win_id);
++        pjsua_vid_win_id cap_wid = call_med->strm.v.cap_win_id;
++        /* Clear before dec: dec may drop the lock while destroying. */
+         call_med->strm.v.cap_win_id = PJSUA_INVALID_ID;
++        dec_vid_win(cap_wid);
+         
+         PJ_LOG(4,(THIS_FILE, "Call %d media %d: Preview video window "
+                              "released", call_med->call->index,
+@@ -1527,9 +1625,9 @@ void pjsua_vid_stop_stream(pjsua_call_media *call_med)
+     }
+ 
+     if (call_med->strm.v.rdr_win_id != PJSUA_INVALID_ID) {
+-        /* Decrement ref count of stream video window */
+-        dec_vid_win(call_med->strm.v.rdr_win_id);
++        pjsua_vid_win_id rdr_wid = call_med->strm.v.rdr_win_id;
+         call_med->strm.v.rdr_win_id = PJSUA_INVALID_ID;
++        dec_vid_win(rdr_wid);
+ 
+         PJ_LOG(4,(THIS_FILE, "Call %d media %d: Stream video window "
+                              "released", call_med->call->index,
+@@ -1632,14 +1730,18 @@ PJ_DEF(pj_status_t) pjsua_vid_preview_start(pjmedia_vid_dev_index id,
+     }
+ 
+     /* Start renderer, unless it's native preview */
+-    if (w->is_native && !pjmedia_vid_port_is_running(w->vp_cap)) {
++    if (w->is_native && w->vp_cap && !pjmedia_vid_port_is_running(w->vp_cap)) {
+         pjmedia_vid_dev_stream *cap_dev;
+         pj_bool_t enabled = PJ_TRUE;
+ 
+         cap_dev = pjmedia_vid_port_get_stream(w->vp_cap);
+-        status = pjmedia_vid_dev_stream_set_cap(
+-                        cap_dev, PJMEDIA_VID_DEV_CAP_INPUT_PREVIEW,
+-                        &enabled);
++        if (!cap_dev) {
++            status = PJ_EINVAL;
++        } else {
++            status = pjmedia_vid_dev_stream_set_cap(
++                            cap_dev, PJMEDIA_VID_DEV_CAP_INPUT_PREVIEW,
++                            &enabled);
++        }
+         if (status != PJ_SUCCESS) {
+             pjsua_perror(THIS_FILE,
+                          "Error activating native preview, falling back "
+@@ -1649,16 +1751,28 @@ PJ_DEF(pj_status_t) pjsua_vid_preview_start(pjmedia_vid_dev_index id,
+         }
+     }
+ 
+-    if (!w->is_native && !pjmedia_vid_port_is_running(w->vp_rend)) {
+-        status = pjmedia_vid_port_start(w->vp_rend);
+-        if (status != PJ_SUCCESS) {
++    if (!w->is_native) {
++        if (!w->vp_rend) {
+             PJSUA_UNLOCK();
+             pj_log_pop_indent();
+-            return status;
++            return PJ_EINVAL;
++        }
++        if (!pjmedia_vid_port_is_running(w->vp_rend)) {
++            status = pjmedia_vid_port_start(w->vp_rend);
++            if (status != PJ_SUCCESS) {
++                PJSUA_UNLOCK();
++                pj_log_pop_indent();
++                return status;
++            }
+         }
+     }
+ 
+     /* Start capturer */
++    if (!w->vp_cap) {
++        PJSUA_UNLOCK();
++        pj_log_pop_indent();
++        return PJ_EINVAL;
++    }
+     if (!pjmedia_vid_port_is_running(w->vp_cap)) {
+         status = pjmedia_vid_port_start(w->vp_cap);
+         if (status != PJ_SUCCESS) {
+@@ -1702,9 +1816,13 @@ PJ_DEF(pj_status_t) pjsua_vid_preview_stop(pjmedia_vid_dev_index id)
+             pj_bool_t enabled = PJ_FALSE;
+ 
+             cap_dev = pjmedia_vid_port_get_stream(w->vp_cap);
+-            status = pjmedia_vid_dev_stream_set_cap(
+-                            cap_dev, PJMEDIA_VID_DEV_CAP_INPUT_PREVIEW,
+-                            &enabled);
++            if (!cap_dev) {
++                status = PJ_EINVAL;
++            } else {
++                status = pjmedia_vid_dev_stream_set_cap(
++                                cap_dev, PJMEDIA_VID_DEV_CAP_INPUT_PREVIEW,
++                                &enabled);
++            }
+         } else {
+             status = pjsua_vid_conf_disconnect(w->cap_slot, w->rend_slot);
+             if (status != PJ_SUCCESS) {
+@@ -1712,7 +1830,7 @@ PJ_DEF(pj_status_t) pjsua_vid_preview_stop(pjmedia_vid_dev_index id)
+                               "Ignored error on disconnecting video ports "
+                               "on stopping preview wid=%d", wid));
+             }
+-            status = pjmedia_vid_port_stop(w->vp_rend);
++            status = w->vp_rend ? pjmedia_vid_port_stop(w->vp_rend) : PJ_EINVAL;
+         }
+ 
+         if (status != PJ_SUCCESS) {
+@@ -1772,7 +1890,8 @@ PJ_DEF(pj_status_t) pjsua_vid_win_get_info( pjsua_vid_win_id wid,
+     pjmedia_vid_dev_param vparam;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS && wi, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS || !wi)
++        return PJ_EINVAL;
+ 
+     pj_bzero(wi, sizeof(*wi));
+ 
+@@ -1840,12 +1959,17 @@ PJ_DEF(pj_status_t) pjsua_vid_win_set_show( pjsua_vid_win_id wid,
+     pj_bool_t hide;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return PJ_EINVAL;
+ 
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -1879,12 +2003,17 @@ PJ_DEF(pj_status_t) pjsua_vid_win_set_pos( pjsua_vid_win_id wid,
+     pjmedia_vid_dev_stream *s;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS && pos, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS || !pos)
++        return PJ_EINVAL;
+ 
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -1908,12 +2037,17 @@ PJ_DEF(pj_status_t) pjsua_vid_win_set_size( pjsua_vid_win_id wid,
+     pjmedia_vid_dev_stream *s;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS && size, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS || !size)
++        return PJ_EINVAL;
+ 
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -1937,12 +2071,17 @@ PJ_DEF(pj_status_t) pjsua_vid_win_set_win( pjsua_vid_win_id wid,
+     pjmedia_vid_dev_stream *s;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS && win, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS || !win)
++        return PJ_EINVAL;
+ 
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -1967,8 +2106,10 @@ PJ_DEF(pj_status_t) pjsua_vid_win_rotate( pjsua_vid_win_id wid,
+     pjmedia_orient orient;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS, PJ_EINVAL);
+-    PJ_ASSERT_RETURN((angle % 90) == 0, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return PJ_EINVAL;
++    if ((angle % 90) != 0)
++        return PJ_EINVAL;
+ 
+     /* Normalize angle, so it must be 0, 90, 180, or 270. */
+     angle %= 360;
+@@ -1997,7 +2138,11 @@ PJ_DEF(pj_status_t) pjsua_vid_win_rotate( pjsua_vid_win_id wid,
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -2023,12 +2168,17 @@ PJ_DEF(pj_status_t) pjsua_vid_win_set_fullscreen(
+     pjmedia_vid_dev_stream *s;
+     pj_status_t status;
+ 
+-    PJ_ASSERT_RETURN(wid >= 0 && wid < PJSUA_MAX_VID_WINS, PJ_EINVAL);
++    if (wid < 0 || wid >= PJSUA_MAX_VID_WINS)
++        return PJ_EINVAL;
+ 
+     PJSUA_LOCK();
+ 
+     w = &pjsua_var.win[wid];
+-    s = pjmedia_vid_port_get_stream(w->vp_rend? w->vp_rend: w->vp_cap);
++    if (w->type == PJSUA_WND_TYPE_NONE) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
++    s = pjmedia_vid_port_get_stream(w->vp_rend ? w->vp_rend : w->vp_cap);
+     if (s == NULL) {
+         PJSUA_UNLOCK();
+         return PJ_EINVAL;
+@@ -2462,10 +2612,17 @@ static pj_status_t call_change_cap_dev(pjsua_call *call,
+ 
+     wid = call_med->strm.v.cap_win_id;
+     w = &pjsua_var.win[wid];
+-    pj_assert(w->type == PJSUA_WND_TYPE_PREVIEW && w->vp_cap);
++    if (w->type != PJSUA_WND_TYPE_PREVIEW || !w->vp_cap) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
+ 
+     /* If the old device supports fast switching, then that's excellent! */
+     old_dev = pjmedia_vid_port_get_stream(w->vp_cap);
++    if (!old_dev) {
++        PJSUA_UNLOCK();
++        return PJ_EINVAL;
++    }
+     pjmedia_vid_dev_switch_param_default(&switch_prm);
+     switch_prm.target_id = cap_dev;
+     status = pjmedia_vid_dev_stream_set_cap(old_dev,
