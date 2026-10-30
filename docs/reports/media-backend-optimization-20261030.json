@@ -64,6 +64,14 @@
     "native-latency-final-link.log": {
       "path": "D:\\work\\.codex-execution\\native-latency-final-link.log",
       "sha256": "8d5173e464a09a0234abc4d8d73305e423d27a6751382e984e023b035fbdbb83"
+    },
+    "windows-latency-final-build.log": {
+      "path": "D:\\work\\.codex-execution\\windows-latency-final-build.log",
+      "sha256": "c7daeca52a70111a2caa4f45e49a47e4d7343a15cf5fe5a2bf2028167974de45"
+    },
+    "windows-latency-final-verification.log": {
+      "path": "D:\\work\\.codex-execution\\windows-latency-final-verification.log",
+      "sha256": "8f93e2443829820fa23b3eea00c3980f97c781619cbdca217efdf08c8dc413f2"
     }
   },
   "benchmark": [
@@ -420,5 +428,39 @@
         "duplicate_outputs": "0"
       }
     ]
+  },
+  "delivery": {
+    "sourceCommit": "5d726c990a83b4fd6c06a806a9cf39010e541c7e",
+    "dirty": false,
+    "directory": "D:\\work\\.codex-execution\\software-practise-phase6-20261030\\dist\\windows-20261030-5d726c9",
+    "artifacts": [
+      {
+        "name": "JavaSIP-Backend-Windows-x64.zip",
+        "bytes": 97243412,
+        "sha256": "b6947fc2225c82795cf7d5a697871e7b5f70401db0596c1e129122b0bc3a0c57"
+      },
+      {
+        "name": "JavaSIP-Client-Windows-x64.zip",
+        "bytes": 63087095,
+        "sha256": "b90f587f18712c81594e179daf064498108581b33ca3153f0f1c4cb9386d0062"
+      }
+    ],
+    "zipRoundTripResultPath": "D:\\work\\.codex-execution\\portable-zip-roundtrip-5d726c9\\validation-aef3c9874d864e76bbf98eb1e58489ee\\result.json",
+    "verification": {
+      "status": "PASS",
+      "nativeLoader": "PASS",
+      "backendHealth": "PASS",
+      "login": "PASS",
+      "users": 8,
+      "rooms": 2,
+      "totalCalls": 0,
+      "eslEnabled": false,
+      "port": 56531,
+      "pid": 14228,
+      "started": "2026-10-30T19:45:38.9184545+08:00",
+      "externalServiceUsed": false,
+      "cameraOrMicrophoneOpened": false
+    },
+    "testProcessStopped": true
   }
 }

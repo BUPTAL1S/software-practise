@@ -22,3 +22,9 @@ Evidence: native-latency-final-link.log; SHA256: 8d5173e464a09a0234abc4d8d73305e
 Final native DLL: 060e37ee39066a02de62185f81e1779ea9332abac0f9a1291f25abb084b9ea7d
 Unchanged JNI exports: 3065
 No temporary native decode trace code
+
+Final portable build: commit=5d726c990a83b4fd6c06a806a9cf39010e541c7e; dirty=false
+ZIP extraction + clean-PATH JNI/backend/login/API: PASS
+Isolated backend process stopped: true
+JavaSIP-Backend-Windows-x64.zip; bytes=97243412; SHA256=b6947fc2225c82795cf7d5a697871e7b5f70401db0596c1e129122b0bc3a0c57
+JavaSIP-Client-Windows-x64.zip; bytes=63087095; SHA256=b90f587f18712c81594e179daf064498108581b33ca3153f0f1c4cb9386d0062
