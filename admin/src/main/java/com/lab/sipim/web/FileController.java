@@ -28,12 +28,14 @@ public class FileController {
     private final FileIndexRepository fileRepo;
     private final UserRepository userRepo;
     private final LoginTokens tokens;
-    private final Path uploadDir = Paths.get("uploads");
+    private final Path uploadDir;
 
-    public FileController(FileIndexRepository fileRepo, UserRepository userRepo, LoginTokens tokens) {
+    public FileController(FileIndexRepository fileRepo, UserRepository userRepo, LoginTokens tokens,
+            @org.springframework.beans.factory.annotation.Value("${sipim.files.upload-dir:uploads}") String uploadDir) {
         this.fileRepo = fileRepo;
         this.userRepo = userRepo;
         this.tokens = tokens;
+        this.uploadDir = Paths.get(uploadDir);
     }
 
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -63,6 +65,9 @@ public class FileController {
             }
             if (finalFrom == null || finalFrom.isBlank()) {
                 finalFrom = u.get().getUsername();
+            } else if (!com.lab.sipim.security.ApiAccessPolicy.isAdmin(u.get())
+                    && !com.lab.sipim.security.ApiAccessPolicy.isIdentity(u.get(), finalFrom)) {
+                return ResponseEntity.status(403).body(Map.of("error", "不能冒用其他用户上传文件"));
             }
         }
         if (finalFrom == null || finalFrom.isBlank()) {

@@ -25,6 +25,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 public class CdrApiTest {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.web.context.WebApplicationContext testContext;
+
+    @org.junit.jupiter.api.BeforeEach
+    void authenticateManagementRequests() {
+        var tokenStore = testContext.getBean(com.lab.sipim.security.LoginTokens.class);
+        var userStore = testContext.getBean(com.lab.sipim.repo.UserRepository.class);
+        String adminToken = tokenStore.issue(userStore.findByUsername("1001").orElseThrow().getId());
+        // Explicit headers on individual requests override this default (invalid-token tests stay meaningful).
+        mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(testContext)
+                .defaultRequest(get("/").header("Authorization", "Bearer " + adminToken)).build();
+    }
+
 
     @Autowired
     private MockMvc mvc;
@@ -97,7 +110,8 @@ public class CdrApiTest {
 
     @Test
     void reportCdrWithValidToken() throws Exception {
-        String token = tokens.issue(1L);
+        String token = tokens.issue(testContext.getBean(com.lab.sipim.repo.UserRepository.class)
+                .findByUsername("1001").orElseThrow().getId());
 
         Map<String, Object> req = Map.of(
                 "callee_or_room", "1002",
