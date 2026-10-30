@@ -10,6 +10,7 @@ import com.lab.sipim.repo.RoomRepository;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.ApiAccessPolicy;
 import com.lab.sipim.security.LoginTokens;
+import com.lab.sipim.service.RoomCallStatistics;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.http.ResponseEntity;
@@ -23,16 +24,18 @@ public class CdrController {
     private final RoomRepository roomRepo;
     private final UserRepository userRepo;
     private final LoginTokens tokens;
+    private final RoomCallStatistics roomStatistics;
 
     public CdrController(
             CdrRepository cdrRepo,
             RoomRepository roomRepo,
             UserRepository userRepo,
-            LoginTokens tokens) {
+            LoginTokens tokens, RoomCallStatistics roomStatistics) {
         this.cdrRepo = cdrRepo;
         this.roomRepo = roomRepo;
         this.userRepo = userRepo;
         this.tokens = tokens;
+        this.roomStatistics = roomStatistics;
     }
 
     @PostMapping("/cdr")
@@ -194,27 +197,9 @@ public class CdrController {
 
         // Peak simultaneous room members across all rooms (concurrent overlap, not distinct historical accounts)
         int peakRoomMembers = roomRepo.findPeakMemberCount();
-        Set<String> roomUris = new LinkedHashSet<>();
-        for (Room r : roomRepo.findAll()) {
-            if (r.getSipUri() != null && !r.getSipUri().isBlank()) {
-                roomUris.add(r.getSipUri());
-            }
+        for (int concurrentPeak : roomStatistics.peaksByRoom().values()) {
+            peakRoomMembers = Math.max(peakRoomMembers, concurrentPeak);
         }
-        for (String uri : cdrRepo.findDistinctRoomUris()) {
-            String norm = normalizeRoomUri(uri);
-            if (norm != null) {
-                roomUris.add(norm);
-            } else if (uri != null && !uri.isBlank()) {
-                roomUris.add(uri.trim());
-            }
-        }
-        for (String uri : roomUris) {
-            int concurrentPeak = calculatePeakConcurrentMembersForRoom(uri);
-            if (concurrentPeak > peakRoomMembers) {
-                peakRoomMembers = concurrentPeak;
-            }
-        }
-
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("totalCalls", totalCalls);
         stats.put("totalDurationSec", totalDurationSec);
@@ -225,89 +210,14 @@ public class CdrController {
     }
 
     static String normalizeRoomUri(String target) {
-        if (target == null || target.isBlank()) {
-            return null;
-        }
-        String s = target.trim();
-        if (s.startsWith("sip:")) {
-            s = s.substring(4);
-        }
-        int atIdx = s.indexOf('@');
-        if (atIdx >= 0) {
-            s = s.substring(0, atIdx);
-        }
-        if (s.startsWith("room")) {
-            return s;
-        }
-        return null;
+        String key = RoomCallStatistics.roomKey(target);
+        return key.isEmpty() ? null : key;
     }
 
-    int calculatePeakConcurrentMembersForRoom(String roomUri) {
-        return calculatePeakConcurrentMembersForRoom(this.cdrRepo, roomUri);
+    public static int calculatePeakConcurrentMembersForRoom(CdrRepository records, String room) {
+        if (records == null || room == null || room.isBlank()) return 0;
+        return new RoomCallStatistics(records).peakForRoom(room);
     }
-
-    /**
-     * Calculates peak simultaneous (concurrent) attendees for a specific room
-     * by sweeping through the active call intervals [startedAt, startedAt + durationSec].
-     */
-    public static int calculatePeakConcurrentMembersForRoom(CdrRepository cdrRepo, String roomUri) {
-        if (roomUri == null || roomUri.isBlank() || cdrRepo == null) {
-            return 0;
-        }
-        String normalized = normalizeRoomUri(roomUri);
-        Set<Cdr> roomCdrs = new LinkedHashSet<>(cdrRepo.findByCalleeOrRoomOrderByIdDesc(roomUri.trim()));
-        if (normalized != null && !normalized.equals(roomUri.trim())) {
-            roomCdrs.addAll(cdrRepo.findByCalleeOrRoomOrderByIdDesc(normalized));
-        }
-        if (roomCdrs.isEmpty()) {
-            return 0;
-        }
-
-        List<TimeEvent> events = new ArrayList<>();
-        for (Cdr c : roomCdrs) {
-            if (c.getDurationSec() > 0 && c.getStartedAt() != null) {
-                Instant start = c.getStartedAt();
-                Instant end = start.plusSeconds(c.getDurationSec());
-                events.add(new TimeEvent(start, 1));
-                events.add(new TimeEvent(end, -1));
-            }
-        }
-
-        if (events.isEmpty()) {
-            return 0;
-        }
-
-        // Sort events chronologically. If two events happen at the exact same instant,
-        // process +1 before -1 so simultaneous overlap at boundary is counted.
-        events.sort((e1, e2) -> {
-            int cmp = e1.time.compareTo(e2.time);
-            if (cmp != 0) {
-                return cmp;
-            }
-            return Integer.compare(e2.delta, e1.delta);
-        });
-
-        int current = 0;
-        int peak = 0;
-        for (TimeEvent ev : events) {
-            current += ev.delta;
-            if (current > peak) {
-                peak = current;
-            }
-        }
-        return peak;
-    }
-
-    private static class TimeEvent {
-        final Instant time;
-        final int delta;
-
-        TimeEvent(Instant time, int delta) {
-            this.time = time;
-            this.delta = delta;
-        }
-    }
-
     private static Map<String, Object> formatCdr(Cdr c) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", c.getId());
