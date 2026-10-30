@@ -8,6 +8,7 @@ import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.CdrRepository;
 import com.lab.sipim.repo.RoomRepository;
 import com.lab.sipim.repo.UserRepository;
+import com.lab.sipim.security.ApiAccessPolicy;
 import com.lab.sipim.security.LoginTokens;
 import java.time.Instant;
 import java.util.*;
@@ -44,6 +45,7 @@ public class CdrController {
         }
 
         String caller = request.getCaller();
+        User reporter = null;
         if (authorization != null && !authorization.isBlank()) {
             String token = MeController.bearerToken(authorization);
             if (token == null) {
@@ -57,11 +59,9 @@ public class CdrController {
             if (u.isEmpty()) {
                 return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
             }
+            reporter = u.get();
             if (caller == null || caller.isBlank()) {
-                caller = u.get().getUsername();
-            } else if (!com.lab.sipim.security.ApiAccessPolicy.isAdmin(u.get())
-                    && !com.lab.sipim.security.ApiAccessPolicy.isIdentity(u.get(), caller)) {
-                return ResponseEntity.status(403).body(Map.of("error", "不能冒用其他用户上报通话记录"));
+                caller = reporter.getUsername();
             }
         }
 
@@ -72,6 +72,10 @@ public class CdrController {
 
         if (request.getDurationSec() == null || request.getDurationSec() < 0) {
             return ResponseEntity.badRequest().body(Map.of("error", "duration_sec must be non-negative"));
+        }
+
+        if (reporter != null && !canReportCdr(reporter, caller, calleeOrRoom)) {
+            return ResponseEntity.status(403).body(Map.of("error", "只能上报自己参与的通话记录"));
         }
 
         Instant startedAt = request.getStartedAt();
@@ -91,6 +95,10 @@ public class CdrController {
             List<Cdr> byCallId = cdrRepo.findByCallId(trimmedCallId);
             if (!byCallId.isEmpty()) {
                 Cdr existing = byCallId.get(0);
+                // The submitted participants cannot grant access to someone else's Call-ID.
+                if (reporter != null && !canReportCdr(reporter, existing.getCaller(), existing.getCalleeOrRoom())) {
+                    return ResponseEntity.status(403).body(Map.of("error", "不能修改其他用户的通话记录"));
+                }
                 if (durationSec > existing.getDurationSec()) {
                     existing.setDurationSec(durationSec);
                     existing = cdrRepo.save(existing);
@@ -133,6 +141,12 @@ public class CdrController {
         cdr.setDurationSec(durationSec);
         Cdr saved = cdrRepo.save(cdr);
         return ResponseEntity.ok(formatCdr(saved));
+    }
+
+    private static boolean canReportCdr(User user, String caller, String calleeOrRoom) {
+        return ApiAccessPolicy.isAdmin(user)
+                || ApiAccessPolicy.isIdentity(user, caller)
+                || ApiAccessPolicy.isIdentity(user, calleeOrRoom);
     }
 
     @GetMapping("/cdr")
