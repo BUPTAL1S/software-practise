@@ -6,7 +6,9 @@ import java.util.Properties;
 /** Bounded LAN profiles within the project's existing H.264 Level 3.0 contract. */
 record MediaTuning(String profile, int width, int height, int fps, int averageBps, int maximumBps,
                    int mtu, boolean tuneAudio, int captureMs, int playbackMs, int jitterInitialMs,
-                   int jitterMinMs, int jitterMaxPreMs, int jitterMaxMs, int statisticsSeconds) {
+                   int jitterMinMs, int jitterMaxPreMs, int jitterMaxMs,
+                   int videoJitterInitialMs, int videoJitterMinMs, int videoJitterMaxPreMs,
+                   int videoJitterMaxMs, int statisticsSeconds) {
   static MediaTuning read(Properties values) {
     String profile = values.getProperty("sip.media.profile", "balanced").trim().toLowerCase(Locale.ROOT);
     int width, height, fps, average, maximum;
@@ -26,17 +28,21 @@ record MediaTuning(String profile, int width, int height, int fps, int averageBp
       throw new IllegalArgumentException("video dimensions/fps exceed H.264 Level 3.0 or I420 bounds");
     }
     boolean audio = !profile.equals("legacy");
-    int capture = number(values, "sip.audio.captureMs", 60, 20, 200);
-    int playback = number(values, "sip.audio.playbackMs", 60, 20, 200);
+    int capture = number(values, "sip.audio.captureMs", 40, 20, 200);
+    int playback = number(values, "sip.audio.playbackMs", 40, 20, 200);
     int min = number(values, "sip.audio.jitterMinMs", 20, 0, 500);
-    int initial = number(values, "sip.audio.jitterInitialMs", 60, min, 500);
-    int maxPre = number(values, "sip.audio.jitterMaxPreMs", 120, initial, 1000);
-    int max = number(values, "sip.audio.jitterMaxMs", 240, maxPre, 1000);
+    int initial = number(values, "sip.audio.jitterInitialMs", 40, min, 500);
+    int maxPre = number(values, "sip.audio.jitterMaxPreMs", 80, initial, 1000);
+    int max = number(values, "sip.audio.jitterMaxMs", 160, maxPre, 1000);
+    int videoMin = number(values, "sip.video.jitterMinMs", 0, 0, 500);
+    int videoInitial = number(values, "sip.video.jitterInitialMs", 0, videoMin, 500);
+    int videoMaxPre = number(values, "sip.video.jitterMaxPreMs", 80, videoInitial, 1000);
+    int videoMax = number(values, "sip.video.jitterMaxMs", 200, videoMaxPre, 1000);
     int interval = number(values, "sip.media.statisticsSeconds", 5, 0, 60);
     if (interval == 1) throw new IllegalArgumentException("statistics interval must be 0 or at least 2 seconds");
     return new MediaTuning(profile, width, height, fps, average, maximum,
         number(values, "sip.video.mtu", 1200, 600, 1400), audio, capture, playback,
-        initial, min, maxPre, max, interval);
+        initial, min, maxPre, max, videoInitial, videoMin, videoMaxPre, videoMax, interval);
   }
 
   static MediaTuning defaults() { return read(new Properties()); }

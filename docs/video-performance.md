@@ -20,8 +20,16 @@
 例如：`java -Dsip.media.profile=legacy -jar client.jar`。Windows 新包可先 `set SIP_MEDIA_PROFILE=legacy` 再启动。
 
 音频保留原生时钟、编解码器和回声消除，配置独立 RTP 接收队列及一个接收工作线程。
-balanced/motion 使用 20ms 分帧、采集/播放各 60ms、抖动缓冲初始 60ms、最小 20ms、最大预取 120ms、上限 240ms。
+balanced/motion 使用 20ms 分帧、采集/播放各 40ms、音频抖动缓冲初始 40ms、最小 20ms、最大预取 80ms、上限 160ms。
 这些是缓冲目标，不能相加后当成实测端到端延迟。可用 `sip.audio.captureMs`、`playbackMs`、`jitterInitialMs`、`jitterMinMs`、`jitterMaxPreMs`、`jitterMaxMs` 覆盖；属性完整前缀均为 `sip.audio.`。
+
+视频接收独立配置为初始/最小预取 0ms、最大预取 80ms、上限 200ms，可用 `sip.video.jitterInitialMs`、`jitterMinMs`、`jitterMaxPreMs`、`jitterMaxMs` 覆盖（每项完整前缀均为 `sip.video.`）。最大预取至少为协商解码格式的一帧。
+发送线程的 pacing 允许带宽为平均编码码率三倍与编码上限中的较大值，用于减少关键帧突发排队，不改变编码码率。
+
+Windows 新原生库将解码最小延迟参数设为 40ms、优先最新已解码画面，并修复乱序时误移除下一帧首包的裁剪下标。
+`SIP_VIDEO_LATENCY_MODE=legacy` 可恢复原生旧缓存策略；这是进程环境变量，重启客户端后生效，组帧错误修复仍保留。新启动器选择 legacy 媒体档时自动补上该变量，除非用户已指定。
+24 组合成接收测试中，15fps 缓冲滞后从 200ms 降至 66.667ms，25fps 从 160–200ms 降至 80ms；这不是整通电话的延迟。
+方法、乱序回归和边界见 [延迟补充报告](reports/media-latency-20261030.md)。
 
 ## 性能与诊断实现
 
@@ -32,7 +40,7 @@ balanced/motion 使用 20ms 分帧、采集/播放各 60ms、抖动缓冲初始 
 - 接通后每 5 秒读取各活动流 RTCP/JitterBuffer 统计，首样本只标 warmup；挂断和销毁前停止采样。原生 Call 释放与统计采样使用独立生命周期锁。
 
 日志示意：`audio codec=PCMU negotiated=8000Hz interval=5.00s tx=64.0kbps rx=64.0kbps rxLoss=0.00% jitterMean=2.50ms rttMean=12.00ms jbuf=40ms discarded=0`。
-tx/rx 为采样间隔内的 RTP 字节差换算，丢包率分母为收到包增量加丢包增量；jitterMean/rttMean 是原生统计累计均值。
+tx/rx 为采样间隔内的 RTP 字节差换算，丢包率分母为收到包增量加丢包增量；jitterMean/rttMean 是原生统计累计均值，jbuf 为原生抖动缓冲平均延迟，不是当前端到端排队时间。
 视频中的 `fps(target)` 是协商发送目标，RTP 包数和码率均不是解码/显示帧率。`-Dsip.media.statisticsSeconds=0` 关闭统计，可设置 2–60 秒。
 
 纯编码基准和当前测试数见 [本轮报告](reports/media-backend-optimization-20261030.md)，运行入口为 `scripts/benchmark-media.ps1`。

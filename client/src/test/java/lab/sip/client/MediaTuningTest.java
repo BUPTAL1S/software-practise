@@ -26,10 +26,20 @@ class MediaTuningTest {
     }
   }
   @Test void invalidJitterOrderingAndUnboundedDiagnosticsAreRejected() {
-    for (String[] setting : new String[][]{{"sip.audio.jitterMinMs","100"},{"sip.audio.jitterMaxMs","80"},
+    for (String[] setting : new String[][]{{"sip.audio.jitterMinMs","100"},{"sip.audio.jitterMaxMs","60"},
         {"sip.media.statisticsSeconds","1"},{"sip.video.maximumBps","300000"},{"sip.video.mtu","9000"}}) {
       Properties values = new Properties(); values.setProperty(setting[0],setting[1]);
       assertThrows(IllegalArgumentException.class, () -> MediaTuning.read(values));
     }
+  }
+  @Test void audioAndVideoHaveIndependentBoundedLatencyBudgets() {
+    var defaults = MediaTuning.defaults();
+    assertEquals(40, defaults.captureMs()); assertEquals(40, defaults.playbackMs());
+    assertEquals(160, defaults.jitterMaxMs()); assertEquals(0, defaults.videoJitterInitialMs());
+    assertEquals(200, defaults.videoJitterMaxMs());
+    Properties values = new Properties(); values.setProperty("sip.video.jitterMaxMs","60");
+    assertThrows(IllegalArgumentException.class, () -> MediaTuning.read(values));
+    values.clear(); values.setProperty("sip.video.jitterMinMs","20");
+    assertThrows(IllegalArgumentException.class, () -> MediaTuning.read(values));
   }
 }

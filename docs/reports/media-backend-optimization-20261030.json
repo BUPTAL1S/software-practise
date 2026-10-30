@@ -11,8 +11,8 @@
     "skipped": 1
   },
   "client": {
-    "total": 91,
-    "passed": 82,
+    "total": 92,
+    "passed": 83,
     "failures": 0,
     "errors": 0,
     "skipped": 9
@@ -37,21 +37,33 @@
       "path": "D:\\work\\.codex-execution\\backend-optimization-final.log",
       "sha256": "dd51f5d79e1f8755c1400f724b8205784cb81ac67f89b39c602da5d6ce09610f"
     },
-    "client-optimization-final.log": {
-      "path": "D:\\work\\.codex-execution\\client-optimization-final.log",
-      "sha256": "2d7013d6081c4aa421e8c43d64ebd91515692be5a60e60a456575dd6e1828cd1"
-    },
     "admin-browser-optimization.log": {
       "path": "D:\\work\\.codex-execution\\admin-browser-optimization.log",
       "sha256": "ebedb52705032211158f28a3cf64487fc78c2cf1c10cefa5d31e2df1d2ee9a8f"
     },
-    "native-media-policy-final.log": {
-      "path": "D:\\work\\.codex-execution\\native-media-policy-final.log",
-      "sha256": "051befcacf8623a95f41af1dc99931c341d8565bcf6fe0d68574a86b2c3be0c1"
-    },
     "windows-portable-verification.log": {
       "path": "D:\\work\\.codex-execution\\windows-portable-verification.log",
       "sha256": "a4d3991b74956e27bc8b8c250acfaa2a64c8c964f750f4d6b7152f6bf85d93cf"
+    },
+    "client-latency-final.log": {
+      "path": "D:\\work\\.codex-execution\\client-latency-final.log",
+      "sha256": "95875f7c166313453e5e0db0691b3c93571c1b7b33aa2d45b2da00a7cbace482"
+    },
+    "latency-native-final-policy.log": {
+      "path": "D:\\work\\.codex-execution\\latency-native-final-policy.log",
+      "sha256": "8ea8477335a35b50275e3ea92788716918f04777341d065b3b78ac643e515d9b"
+    },
+    "video-latency-probe.log": {
+      "path": "D:\\work\\.codex-execution\\video-latency-probe.log",
+      "sha256": "db3994219e3c33dc0898fa113e4915cf6bf6f0c1b10cd1afd0745b6956b6221d"
+    },
+    "native-latency-script-verification.log": {
+      "path": "D:\\work\\.codex-execution\\native-latency-script-verification.log",
+      "sha256": "9f38210cb0b3e46e538510bc3f6cf1dc05b5e0314c3a0b05c9b9c43583089519"
+    },
+    "native-latency-final-link.log": {
+      "path": "D:\\work\\.codex-execution\\native-latency-final-link.log",
+      "sha256": "8d5173e464a09a0234abc4d8d73305e423d27a6751382e984e023b035fbdbb83"
     }
   },
   "benchmark": [
@@ -95,8 +107,318 @@
   "boundaries": [
     "No dual-machine call or conference-entry acceptance",
     "No real MCU or teammate Docker changes",
-    "No measured camera/display FPS or end-to-end audio latency",
-    "No macOS runtime or clean native DLL build validation"
+    "No measured camera/display FPS or end-to-end audio/video latency",
+    "No macOS runtime validation"
   ],
-  "mediaIndexFix": "ddb00f0"
+  "mediaIndexFix": "ddb00f0",
+  "latency": {
+    "cases": 24,
+    "framesPerCase": 1000,
+    "inputFps": [
+      15,
+      25
+    ],
+    "renderEveryFrames": [
+      1,
+      5,
+      25
+    ],
+    "intraFrameReordering": true,
+    "nativeDllSha256": "060e37ee39066a02de62185f81e1779ea9332abac0f9a1291f25abb084b9ea7d",
+    "nativeDllBytes": 25418163,
+    "unchangedJniExports": 3065,
+    "sourceCommit": "5a457451fa2712ba18e12b01738e8ff3af2b26fd",
+    "patchSha256": "7b0a248049a8cce18f284825a53299e490b2af8a7753f2c56940e8f79c8b5cf6",
+    "realCallLatencyMeasured": false,
+    "results": [
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "160.000",
+        "max_rtp_lag_ms": "160.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "160.000",
+        "max_rtp_lag_ms": "160.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      }
+    ]
+  }
 }

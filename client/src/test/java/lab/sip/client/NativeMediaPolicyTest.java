@@ -30,9 +30,9 @@ class NativeMediaPolicyTest {
       assertEquals(clock, media.getClockRate()); assertEquals(echo, media.getEcTailLen());
       assertTrue(media.getHasIoqueue()); assertEquals(1, media.getThreadCnt());
       assertEquals(20, media.getAudioFramePtime()); assertEquals(20, media.getPtime());
-      assertEquals(60, media.getSndRecLatency()); assertEquals(60, media.getSndPlayLatency());
-      assertEquals(60, media.getJbInit()); assertEquals(20, media.getJbMinPre());
-      assertEquals(120, media.getJbMaxPre()); assertEquals(240, media.getJbMax());
+      assertEquals(40, media.getSndRecLatency()); assertEquals(40, media.getSndPlayLatency());
+      assertEquals(40, media.getJbInit()); assertEquals(20, media.getJbMinPre());
+      assertEquals(80, media.getJbMaxPre()); assertEquals(160, media.getJbMax());
       config.getLogConfig().setLevel(1); config.getLogConfig().setConsoleLevel(1);
       endpoint.libInit(config);
       VidCodecParam original = endpoint.getVideoCodecParam("H264/97");
@@ -46,6 +46,12 @@ class NativeMediaPolicyTest {
       for (String profile : new String[]{"balanced", "motion", "legacy"}) {
         Properties properties = new Properties(); properties.setProperty("sip.media.profile", profile);
         MediaTuning tuning = MediaTuning.read(properties);
+        AccountConfig account = new AccountConfig();
+        try {
+          VideoMediaPolicy.configureAccount(account, tuning);
+          assertEquals(profile.equals("legacy") ? 0 : Math.max(tuning.maximumBps(), tuning.averageBps()*3L),
+              account.getVideoConfig().getRateControlBandwidth());
+        } finally { account.delete(); }
         VideoMediaPolicy.configureCodecs(endpoint, tuning, System.out::println);
         VidCodecParam actual = endpoint.getVideoCodecParam("H264/97");
         try {
@@ -59,6 +65,18 @@ class NativeMediaPolicyTest {
           assertEquals(receiveWidth, actual.getDecFmt().getWidth()); assertEquals(receiveHeight, actual.getDecFmt().getHeight());
         } finally { actual.delete(); }
       }
+      StreamInfo video = new StreamInfo(); VidCodecParam codec = new VidCodecParam();
+      try {
+        video.setType(pjmedia_type.PJMEDIA_TYPE_VIDEO);
+        codec.getDecFmt().setFpsNum(10); codec.getDecFmt().setFpsDenum(1); video.setVidCodecParam(codec);
+        VideoMediaPolicy.configureStream(video, MediaTuning.defaults());
+        assertEquals(0, video.getJbInit()); assertEquals(0, video.getJbMinPre());
+        assertEquals(100, video.getJbMaxPre()); assertEquals(200, video.getJbMax());
+        video.setJbInit(17); video.setJbMax(999);
+        Properties legacy = new Properties(); legacy.setProperty("sip.media.profile","legacy");
+        VideoMediaPolicy.configureStream(video, MediaTuning.read(legacy));
+        assertEquals(17, video.getJbInit()); assertEquals(999, video.getJbMax());
+      } finally { video.delete(); codec.delete(); }
       System.out.println("PASS native media policy: balanced/motion/legacy, unchanged decoder+fmtp, audio read-back");
     } finally {
       if (created) endpoint.libDestroy();

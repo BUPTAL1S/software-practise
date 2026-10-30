@@ -849,7 +849,7 @@ final class SipService {
     cfg.getNatConfig().setViaRewriteUse(0);
     cfg.getNatConfig().setContactUseSrcPort(0);
     if (hasVideoSupport()) {
-      VideoMediaPolicy.configureAccount(cfg);
+      VideoMediaPolicy.configureAccount(cfg, mediaTuning);
       cfg.getVideoConfig().setAutoShowIncoming(false);
       cfg.getVideoConfig().setAutoTransmitOutgoing(true);
       int capDev = findDefaultCaptureDev();
@@ -1245,6 +1245,9 @@ final class SipService {
       VideoMediaPolicy.configureCodecs(endpoint, mediaTuning, message -> events.log("视频", message));
       events.log("媒体", "配置=" + mediaTuning.profile() + "，音频 20ms 分帧，音频缓冲调优="
           + mediaTuning.tuneAudio() + "，回声消除保留原生设置；统计间隔=" + mediaTuning.statisticsSeconds() + "秒");
+      if (mediaTuning.tuneAudio()) events.log("媒体", "缓冲请求：采集/播放=" + mediaTuning.captureMs() + "/"
+          + mediaTuning.playbackMs() + "ms，音频接收上限=" + mediaTuning.jitterMaxMs()
+          + "ms，视频接收上限=" + mediaTuning.videoJitterMaxMs() + "ms；不是端到端延迟实测值");
     } catch (Exception e) {
       events.log("警告", "视频编码参数设置失败，保留原生默认值：" + e.getMessage());
     }
@@ -1497,6 +1500,10 @@ final class SipService {
   }
 
   private final class ClientCall extends Call {
+    @Override public void onStreamPreCreate(org.pjsip.pjsua2.OnStreamPreCreateParam parameter) {
+      try { VideoMediaPolicy.configureStream(parameter.getStreamInfo(), mediaTuning); }
+      catch (Exception error) { events.log("媒体", "视频缓冲参数未应用，保留原生值：" + error.getMessage()); }
+    }
     private volatile ScheduledFuture<?> statisticsTask;
     private final MediaStreamMetrics metrics = new MediaStreamMetrics();
     private boolean statisticsFailureLogged;

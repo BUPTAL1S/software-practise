@@ -2,7 +2,9 @@
 
 2026-10-30 更新：PR49 已修复并于 17:42:39 合入 main（ca65897c34aa074c34fb9630e28dbf67ef929ca1）。此后用户将本轮范围调整为离线音视频性能优化、后台修复和未完成功能，尽量不动前端，明确排除双机反复通话与入会验收；同学服务器故障期间不部署或修改其 Docker。
 
-本轮已清零客户端原三条失败，完成媒体档位、能力缓存、非阻塞诊断、ESL 字节帧及批量统计优化，并通过 Windows 便携包内 JRE 的隔离启动验证。完整后台 93 项（92 通过、1 跳过）、客户端 91 项（82 通过、9 跳过）、浏览器 10 项通过；真实媒体体验和 macOS 包不在本轮验证结论内。详情见 [优化报告](reports/media-backend-optimization-20261030.md)。以下初始审查快照与后续真机要求保留作追溯，不能当成本轮仍需执行的任务。
+本轮已清零客户端原三条失败，完成媒体档位、能力缓存、非阻塞诊断、ESL 字节帧及批量统计优化，并通过 Windows 便携包内 JRE 的隔离启动验证。完整后台 93 项（92 通过、1 跳过）、客户端 92 项（83 通过、9 跳过）、浏览器 10 项通过；真实媒体体验和 macOS 包不在本轮验证结论内。详情见 [优化报告](reports/media-backend-optimization-20261030.md)。以下初始审查快照与后续真机要求保留作追溯，不能当成本轮仍需执行的任务。
+
+延迟追加范围已完成：音视频接收缓冲分开，重建原生库启用低延迟/最新画面策略，修复 15fps 乱序组帧下标错误。24 组各 1000 帧的合成接收验证通过；15fps 滞后为 66.667ms、25fps 为 80ms，均不等于真实通话端到端延迟，见 [延迟报告](reports/media-latency-20261030.md)。
 
 ## 基线与协作边界
 
@@ -28,7 +30,7 @@ PR 有新提交或 main 发生变化时，重新比较基线并复核受影响�
 | 账号 | 自助注册、昵称、改密码和头像已有实现 | HTTP 与 SIP 鉴权边界仍分离 |
 | ESL | 事件监听、快照核对、视频静音、头像替换、重复及过期成员清理 | 已超出仅监听人数的早期描述 |
 | 视频参数 | 默认 balanced 为 848×480/25fps、1.2Mbps，上限 1.8Mbps；legacy 保留旧档；MCU 仍为 960×540/15fps/1mb | README 已修正；发送目标不等于实测帧率 |
-| 原生库 | pjsua2.dll 不入库，既有视频补丁归档至 native/windows-x64/patches | 原生参数读回和当前补丁反向 dry-run 通过；未从干净源码重编 DLL |
+| 原生库 | pjsua2.dll 不入库，既有视频补丁归档至 native/windows-x64/patches | 原生参数读回和当前补丁反向 dry-run 通过；延迟补充已在独立 2.17 检出重编 DLL |
 
 主要入口：[客户端消息与应用壳](../client/src/main/java/lab/sip/client/MainApp.java)、[通话协调](../client/src/main/java/lab/sip/client/CallUiCoordinator.java)、[SIP 封装](../client/src/main/java/lab/sip/client/SipService.java)、[HTTP 房间](../admin/src/main/java/com/lab/sipim/web/RoomController.java)、[私聊](../admin/src/main/java/com/lab/sipim/web/PrivateMessageController.java)、[ESL](../admin/src/main/java/com/lab/sipim/esl/EslEventListener.java)。
 
@@ -42,7 +44,7 @@ PR 有新提交或 main 发生变化时，重新比较基线并复核受影响�
 | PR49 修复后后台测试 | 79 | 78 | 0 | 0 | 1 | 合并前 head 6356192；含新增 9 项权限回归 |
 | PR49 修复后浏览器测试 | 10 | 10 | 0 | 0 | 0 | Edge 无界面、随机端口假接口；含父测试和 9 个子测试 |
 | 本轮最终后台 | 93 | 92 | 0 | 0 | 1 | 18:34:38 完整 Maven 回归；真实 MCU 项跳过 |
-| 本轮最终客户端 | 91 | 82 | 0 | 0 | 9 | 18:46:23 完整 Maven 回归；硬件/显式原生验证开关关闭 |
+| 本轮最终客户端 | 92 | 83 | 0 | 0 | 9 | 延迟补充后完整 Maven 回归；硬件/显式原生验证开关关闭 |
 | 本轮浏览器 | 10 | 10 | 0 | 0 | 0 | 已等待标签独立请求结束，再统计轮询；无生产网页改动 |
 | CDR 双端上报探针 main | 2 | 2 | 0 | 0 | 0 | 本轮 MockMvc，专用数据库 |
 | CDR 双端上报探针 PR49 | 2 | 1 | 1 | 0 | 0 | 被叫上报预期 200，实际 403 |

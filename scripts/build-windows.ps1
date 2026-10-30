@@ -18,6 +18,12 @@ $native = Join-Path $repo 'native\windows-x64'
 foreach ($name in @('pjsua2.dll','libopenh264-7.dll','SDL2.dll','libwinpthread-1.dll','libgcc_s_seh-1.dll','libstdc++-6.dll','callwindow.dll','winmirror.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $native $name) -PathType Leaf)) { throw "Missing native dependency: $name" }
 }
+$jni = [IO.File]::ReadAllBytes((Join-Path $native 'pjsua2.dll'))
+$pe = [BitConverter]::ToInt32($jni, 0x3c)
+if ([BitConverter]::ToUInt16($jni, $pe+4) -ne 0x8664) { throw 'pjsua2.dll must be an x64 PE binary.' }
+if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('Video latency policy: decode-floor=')) {
+    throw 'This release requires the video latency patch. Rebuild with scripts/build-native-windows.ps1 before packaging.'
+}
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo ('dist\windows-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw "Output already exists; choose a new directory: $output" }
@@ -51,6 +57,7 @@ setlocal
 cd /d "%~dp0"
 set "PATH=%~dp0native;%PATH%"
 if not defined SIP_MEDIA_PROFILE set "SIP_MEDIA_PROFILE=balanced"
+if /I "%SIP_MEDIA_PROFILE%"=="legacy" if not defined SIP_VIDEO_LATENCY_MODE set "SIP_VIDEO_LATENCY_MODE=legacy"
 "%~dp0jre\bin\java.exe" "-Dsip.native.dir=%~dp0native" "-Dsip.media.profile=%SIP_MEDIA_PROFILE%" -jar "%~dp0lib\sip-client.jar" %*
 exit /b %ERRORLEVEL%
 '@
@@ -68,6 +75,7 @@ exit /b %ERRORLEVEL%
 Windows x64 / Java 17 portable client. Run start-client.bat.
 No installed Java, Maven or MSYS2 is required on the receiving computer.
 Optional: set SIP_MEDIA_PROFILE=legacy (previous settings) or motion before launch.
+Native video defaults to interactive buffering; set SIP_VIDEO_LATENCY_MODE=legacy for the old decoder policy.
 SIP/HTTP server addresses are configured in the existing account settings.
 This package contains no MCU or signaling server.
 '@ | Set-Content -LiteralPath (Join-Path $client 'README.txt') -Encoding utf8

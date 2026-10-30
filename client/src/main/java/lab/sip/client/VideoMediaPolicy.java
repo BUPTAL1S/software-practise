@@ -11,6 +11,8 @@ import org.pjsip.pjsua2.MediaConfig;
 import org.pjsip.pjsua2.RtcpFbCap;
 import org.pjsip.pjsua2.RtcpFbConfig;
 import org.pjsip.pjsua2.VidCodecParam;
+import org.pjsip.pjsua2.StreamInfo;
+import org.pjsip.pjsua2.pjmedia_type;
 import org.pjsip.pjsua2.pjmedia_rtcp_fb_type;
 import org.pjsip.pjsua2.pjmedia_vid_stream_rc_method;
 
@@ -35,10 +37,17 @@ final class VideoMediaPolicy {
   }
 
   static void configureAccount(AccountConfig account) {
+    configureAccount(account, MediaTuning.defaults());
+  }
+
+  static void configureAccount(AccountConfig account, MediaTuning tuning) {
     AccountVideoConfig video = account.getVideoConfig();
     // Pace packets on a send thread instead of blocking the capture/encoding thread.
     video.setRateControlMethod(pjmedia_vid_stream_rc_method.PJMEDIA_VID_STREAM_RC_SEND_THREAD);
-    video.setRateControlBandwidth(0); // Follow each codec's maximum bitrate.
+    // Allow a keyframe burst without changing the encoder's average or maximum bitrate.
+    // PJSIP's blocking sender likewise uses at least 3x average bitrate for latency.
+    video.setRateControlBandwidth(tuning.tuneAudio()
+        ? Math.max(tuning.maximumBps(), tuning.averageBps() * 3L) : 0);
     video.setStartKeyframeCount(3);
     video.setStartKeyframeInterval(1000);
 
@@ -54,6 +63,20 @@ final class VideoMediaPolicy {
     } finally {
       pli.delete();
     }
+  }
+
+  static void configureStream(StreamInfo stream, MediaTuning tuning) {
+    if (stream == null || stream.getType() != pjmedia_type.PJMEDIA_TYPE_VIDEO || !tuning.tuneAudio()) return;
+    long frameMs = 40;
+    VidCodecParam codec = stream.getVidCodecParam();
+    if (codec != null && codec.getDecFmt().getFpsNum() > 0 && codec.getDecFmt().getFpsDenum() > 0) {
+      frameMs = (1000L * codec.getDecFmt().getFpsDenum() + codec.getDecFmt().getFpsNum() - 1)
+          / codec.getDecFmt().getFpsNum();
+    }
+    // PJSIP silently falls back to a much larger prefetch when max-pre is below one frame.
+    int maxPre = (int) Math.max(tuning.videoJitterMaxPreMs(), frameMs);
+    stream.setJbInit(tuning.videoJitterInitialMs()); stream.setJbMinPre(tuning.videoJitterMinMs());
+    stream.setJbMaxPre(maxPre); stream.setJbMax(Math.max(tuning.videoJitterMaxMs(), maxPre));
   }
 
   static void configureCodecs(Endpoint endpoint, Consumer<String> log) throws Exception {

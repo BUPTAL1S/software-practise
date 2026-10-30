@@ -24,6 +24,7 @@ pwsh -File scripts/build-windows.ps1 `
 构建验证 JDK 的真实 OS/架构，缺必需 DLL 或 JavaFX Windows 图形类/库时失败。
 JRE 包含 `java.se` 以及 JavaFX/加密/字符集/JFR 等补充模块，覆盖 Spring/Hibernate 对 naming、management、instrumentation、SQL、XML 的需求；不只分析客户端后省略后台所需模块。
 `pjsua2.dll` 当前导入 `libopenh264-7.dll`，需保留原名。NativeLoader 已支持预加载这个版本化名称。
+延迟修复后，组包还检查 DLL 的 x64 PE 类型和低延迟策略构建标记，拒绝静默复用旧 DLL。原生重建入口为 `scripts/build-native-windows.ps1`，不自动安装；补丁、回退变量和验证见 [延迟报告](reports/media-latency-20261030.md)。
 构建只复制 JAR、DLL、运行时和启动说明，不打入本机 `.env`、客户端偏好、现有数据库或上传文件。
 
 ## 独立包验证
