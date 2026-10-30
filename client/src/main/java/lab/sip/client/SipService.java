@@ -1543,12 +1543,13 @@ final class SipService {
           var streams = info.getMedia();
           for (int index = 0; index < streams.size(); index++) {
             CallMediaInfo media = streams.get(index);
+            int mediaIndex = (int) media.getIndex();
             int type = media.getType();
             if (media.getStatus() != pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE
                 || type != pjmedia_type.PJMEDIA_TYPE_AUDIO && type != pjmedia_type.PJMEDIA_TYPE_VIDEO) continue;
-            org.pjsip.pjsua2.StreamInfo stream = getStreamInfo(index);
+            org.pjsip.pjsua2.StreamInfo stream = getStreamInfo(mediaIndex);
             try {
-              org.pjsip.pjsua2.StreamStat statistics = getStreamStat(index);
+              org.pjsip.pjsua2.StreamStat statistics = getStreamStat(mediaIndex);
               try {
                 var rtcp = statistics.getRtcp();
                 var tx = rtcp.getTxStat();
@@ -1564,7 +1565,7 @@ final class SipService {
                     rx.getPkt(), rx.getLoss(), rx.getJitterUsec().getMean() / 1000.0,
                     rtcp.getRttUsec().getMean() / 1000.0, buffer == null ? 0 : buffer.getAvgDelayMsec(),
                     buffer == null ? 0 : buffer.getDiscard());
-                events.log("媒体统计", metrics.record(index,
+                events.log("媒体统计", metrics.record(mediaIndex,
                     type == pjmedia_type.PJMEDIA_TYPE_AUDIO ? "audio" : "video",
                     stream.getCodecName(), negotiated, sample));
               } finally { statistics.delete(); }
