@@ -521,21 +521,22 @@ public final class HttpFileClient {
 
     String fileName = localFile.getFileName().toString();
     long fileSize = Files.size(localFile);
+    if (fileSize > 64L * 1024 * 1024) throw new IOException("文件不能超过 64 MiB");
     String contentType = Files.probeContentType(localFile);
     if (contentType == null || contentType.isBlank()) {
       contentType = "application/octet-stream";
     }
 
     String boundary = "----SipClientBoundary" + System.currentTimeMillis() + Long.toHexString(System.nanoTime());
-    byte[] body = buildMultipartBody(boundary, localFile, fileName, contentType, fromUser, toUserOrRoom);
+    HttpRequest.BodyPublisher body = buildMultipartBody(boundary, localFile, fileName, contentType, fromUser, toUserOrRoom);
 
     URI uploadUri = URI.create(getEffectiveBaseUrl() + "/api/files");
     HttpRequest.Builder uploadReqBuilder =
         HttpRequest.newBuilder()
             .uri(uploadUri)
             .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-            .timeout(Duration.ofSeconds(30))
-            .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+            .timeout(Duration.ofSeconds(120))
+            .POST(body);
     if (authToken != null && !authToken.isBlank()) {
       uploadReqBuilder.header("Authorization", "Bearer " + authToken);
     }
@@ -703,7 +704,7 @@ public final class HttpFileClient {
             .uri(URI.create(absUrl))
             .timeout(Duration.ofSeconds(60))
             .GET();
-    if (authToken != null && !authToken.isBlank()) {
+    if (sameOrigin(URI.create(absUrl), URI.create(getEffectiveBaseUrl())) && authToken != null && !authToken.isBlank()) {
       downloadReqBuilder.header("Authorization", "Bearer " + authToken);
     }
     HttpRequest req = downloadReqBuilder.build();
@@ -712,26 +713,47 @@ public final class HttpFileClient {
       Files.createDirectories(targetFile.getParent());
     }
 
-    HttpResponse<Path> resp;
+    Path temporary = Files.createTempFile(targetFile.toAbsolutePath().getParent(), ".sip-download-", ".part");
     try {
-      resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(
-          targetFile,
-          java.nio.file.StandardOpenOption.CREATE,
-          java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-          java.nio.file.StandardOpenOption.WRITE));
-    } catch (IOException e) {
-      throw new IOException("下载文件连接失败 (" + absUrl + "): " + e.getMessage(), e);
-    }
-
-    if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-      try {
-        Files.deleteIfExists(targetFile);
-      } catch (Exception ignored) {
+      HttpResponse<Path> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(temporary));
+      if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+        throw new IOException("文件下载失败，HTTP " + resp.statusCode());
       }
-      throw new IOException("文件下载失败，HTTP " + resp.statusCode() + " (" + absUrl + ")");
+      try {
+        Files.move(temporary, targetFile, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+        Files.move(temporary, targetFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      }
+      return targetFile;
+    } finally {
+      Files.deleteIfExists(temporary);
     }
+  }
 
-    return targetFile;
+  private static boolean sameOrigin(URI left, URI right) {
+    return Objects.equals(left.getScheme(), right.getScheme())
+        && left.getHost() != null && left.getHost().equalsIgnoreCase(right.getHost())
+        && effectivePort(left) == effectivePort(right) && left.getUserInfo() == null;
+  }
+
+  private static int effectivePort(URI uri) {
+    return uri.getPort() >= 0 ? uri.getPort() : ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80);
+  }
+
+  /** Authenticated thumbnails with bounded response size; called on an IO worker. */
+  public byte[] downloadThumbnail(String url) throws IOException, InterruptedException {
+    URI uri = URI.create(normalizeFileUrl(url));
+    if (!sameOrigin(uri, URI.create(getEffectiveBaseUrl()))) throw new IOException("不支持外部图片预览");
+    var builder = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15)).GET();
+    if (authToken != null && !authToken.isBlank()) builder.header("Authorization", "Bearer " + authToken);
+    var response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+    try (var input = response.body()) {
+      if (response.statusCode() != 200) throw new IOException("图片下载失败，HTTP " + response.statusCode());
+      byte[] bytes = input.readNBytes(8 * 1024 * 1024 + 1);
+      if (bytes.length > 8 * 1024 * 1024) throw new IOException("图片过大，请下载查看");
+      return bytes;
+    }
   }
 
   private String resolveDownloadUrl(String responseJson) {
@@ -763,7 +785,7 @@ public final class HttpFileClient {
     return null;
   }
 
-  private static byte[] buildMultipartBody(
+  private static HttpRequest.BodyPublisher buildMultipartBody(
       String boundary,
       Path file,
       String fileName,
@@ -791,15 +813,12 @@ public final class HttpFileClient {
     // Field: file
     out.write(("--" + boundary + crlf).getBytes(StandardCharsets.UTF_8));
     out.write(
-        ("Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"" + crlf)
+        ("Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName.replaceAll("[\\r\\n\\\"]", "_") + "\"" + crlf)
             .getBytes(StandardCharsets.UTF_8));
     out.write(("Content-Type: " + contentType + crlf + crlf).getBytes(StandardCharsets.UTF_8));
-    Files.copy(file, out);
-    out.write(crlf.getBytes(StandardCharsets.UTF_8));
-
-    // End boundary
-    out.write(("--" + boundary + "--" + crlf).getBytes(StandardCharsets.UTF_8));
-    return out.toByteArray();
+    return HttpRequest.BodyPublishers.concat(HttpRequest.BodyPublishers.ofByteArray(out.toByteArray()),
+        HttpRequest.BodyPublishers.ofFile(file),
+        HttpRequest.BodyPublishers.ofString(crlf + "--" + boundary + "--" + crlf, StandardCharsets.UTF_8));
   }
 
   /**

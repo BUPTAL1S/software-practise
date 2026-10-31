@@ -5,6 +5,7 @@ import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.FileIndexRepository;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
+import com.lab.sipim.security.ApiAccessPolicy;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -80,11 +81,19 @@ public class FileController {
         if (originalName == null || originalName.isBlank()) {
             originalName = "upload.bin";
         }
-        String safeName = Paths.get(originalName).getFileName().toString();
+        String safeName = originalName.replace('\\', '/');
+        safeName = safeName.substring(safeName.lastIndexOf('/') + 1).replaceAll("[\\p{Cntrl}\\\":*?<>|]", "_");
+        if (safeName.isBlank() || safeName.equals(".") || safeName.equals("..")) safeName = "upload.bin";
+        if (safeName.length() > 180) safeName = safeName.substring(safeName.length() - 180);
         String storedName = UUID.randomUUID() + "_" + safeName;
         Path targetPath = uploadDir.resolve(storedName);
 
-        Files.copy(file.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+        try (var input = file.getInputStream()) {
+            Files.copy(input, targetPath);
+        } catch (IOException failure) {
+            Files.deleteIfExists(targetPath);
+            throw failure;
+        }
 
         FileIndex index = new FileIndex();
         index.setFromUser(finalFrom);
@@ -92,7 +101,13 @@ public class FileController {
         index.setPath(targetPath.toString());
         index.setSize(file.getSize());
         index.setCreatedAt(Instant.now());
-        FileIndex saved = fileRepo.save(index);
+        FileIndex saved;
+        try {
+            saved = fileRepo.saveAndFlush(index);
+        } catch (RuntimeException failure) {
+            Files.deleteIfExists(targetPath);
+            throw failure;
+        }
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("id", saved.getId());
@@ -147,13 +162,26 @@ public class FileController {
     }
 
     @GetMapping("/files/{id}")
-    public ResponseEntity<Resource> download(@PathVariable("id") Long id) {
+    public ResponseEntity<Resource> download(@PathVariable("id") Long id,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         Optional<FileIndex> found = fileRepo.findById(id);
         if (found.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
 
         FileIndex index = found.get();
+        // Merely labelling an upload as "profile" must not publish a private file.
+        boolean avatar = "profile".equals(index.getToUserOrRoom()) && userRepo.existsByAvatarUrl("/api/files/" + id);
+        if (!avatar) {
+            User viewer = tokens.userIdOf(MeController.bearerToken(authorization)).flatMap(userRepo::findById).orElse(null);
+            if (viewer == null) return ResponseEntity.status(401).build();
+            String recipient = Optional.ofNullable(index.getToUserOrRoom()).orElse("");
+            String roomKey = recipient.replaceFirst("(?i)^sip:", "").split("@", 2)[0];
+            // Rooms currently form a public directory: their attachments require a logged-in account.
+            if (!ApiAccessPolicy.isAdmin(viewer) && !ApiAccessPolicy.isIdentity(viewer, index.getFromUser())
+                    && !ApiAccessPolicy.isIdentity(viewer, recipient) && !"broadcast".equals(recipient)
+                    && !roomKey.matches("room-[A-Za-z0-9_-]+")) return ResponseEntity.status(403).build();
+        }
         Path filePath = Paths.get(index.getPath());
         if (!Files.exists(filePath)) {
             return ResponseEntity.notFound().build();

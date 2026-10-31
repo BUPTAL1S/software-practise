@@ -63,8 +63,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
                 || read && (path.equals("/api/health") || path.equals("/api/users")
                 || path.matches("/api/users/[^/]+") || path.equals("/api/rooms")
                 || path.matches("/api/rooms/[^/]+")
-                // JavaFX avatars and chat-image previews use this existing client URL without headers.
-                // Management file lists/downloads use the separate protected workbench routes.
+                // FileController checks ownership; only published profile avatars are public.
                 || path.matches("/api/files/[0-9]+"));
         if (publicRoute && !adminOnly) return true;
 
