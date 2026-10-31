@@ -54,7 +54,8 @@ final class SipService {
   static final String VIDEO_AVATAR_ON = "[VIDEO_AVATAR_ON]";
 
   static boolean isVideoAvatarControl(String body) {
-    return VIDEO_AVATAR_OFF.equals(body) || VIDEO_AVATAR_ON.equals(body);
+    return VIDEO_AVATAR_OFF.equals(body) || VIDEO_AVATAR_ON.equals(body)
+        || body != null && body.startsWith(VideoStateMessage.PREFIX);
   }
 
   interface Events extends SipEvents {}
@@ -75,11 +76,19 @@ final class SipService {
   });
   private Endpoint endpoint;
   private SipLogWriter logWriter;
-  private ClientAccount account;
-  private ClientCall activeCall;
+  private volatile ClientAccount account;
+  private volatile ClientCall activeCall;
   /** 最近一次创建的通话包装对象；关机时必须显式 delete，否则 finalize 会在库销毁后断言。 */
   private volatile ClientCall lastCall;
-  private VideoPreview videoPreview;
+  private volatile VideoPreview videoPreview;
+  private volatile long previewHandle;
+  private final Object previewLock = new Object();
+  private final java.util.concurrent.ExecutorService nativeCleanup = Executors.newSingleThreadExecutor(task -> {
+    Thread thread = new Thread(task, "sip-native-cleanup"); thread.setDaemon(true); return thread;
+  });
+  private final ScheduledExecutorService cameraSync = Executors.newSingleThreadScheduledExecutor(task -> {
+    Thread thread = new Thread(task, "sip-camera-state"); thread.setDaemon(true); return thread;
+  });
   private AudioMedia callAudioMedia;
   private AudioMedia captureAudioMedia;
   private volatile boolean audioMuted;
@@ -89,11 +98,12 @@ final class SipService {
   private final CapabilitySnapshotCache<VideoDetails> videoCapabilities =
       new CapabilitySnapshotCache<>(TimeUnit.SECONDS.toNanos(5));
   private static final VideoDetails NO_VIDEO = new VideoDetails(false, "引擎未启动", "无", "无", -1, -1);
-  private boolean incomingRinging;
+  private volatile VideoDetails lastVideoDetails = NO_VIDEO;
+  private volatile boolean incomingRinging;
   private int boundPort;
   private String advertisedIp = "";
   private String outboundProxy = "";
-  private int lastRegCode;
+  private volatile int lastRegCode;
   private int hangupWatchSeq;
   private boolean byeAnswered;
   private ScheduledFuture<?> hangupWatchTask;
@@ -108,11 +118,11 @@ final class SipService {
     this((SipEvents) events);
   }
 
-  synchronized boolean isStarted() {
+  boolean isStarted() {
     return started;
   }
 
-  synchronized boolean isRegistered() {
+  boolean isRegistered() {
     return started && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
   }
 
@@ -147,12 +157,15 @@ final class SipService {
 
   VideoDetails queryVideoDetails() {
     if (!started || shuttingDown) return NO_VIDEO;
+    // Rendering must never wait behind SDL/PJSUA or a device enumeration lock.
+    if (Platform.isFxApplicationThread()) return lastVideoDetails;
     VideoDetails cached = videoCapabilities.peek();
     if (cached != null) return cached;
     synchronized (this) {
       if (!started || shuttingDown) return NO_VIDEO;
       // Always take the engine lock before the cache loader lock, including during startup.
-      return videoCapabilities.get(this::readVideoDetails);
+      lastVideoDetails = videoCapabilities.get(this::readVideoDetails);
+      return lastVideoDetails;
     }
   }
 
@@ -200,6 +213,10 @@ final class SipService {
             int dir = info.getDir();
             if (dir == 1 || dir == 3) {
               String name = info.getName();
+              String preferred = System.getProperty("sip.captureDeviceName", "");
+              if (!preferred.isBlank() && name.toLowerCase(java.util.Locale.ROOT).contains(preferred.toLowerCase(java.util.Locale.ROOT))) {
+                capId = i; capName = name;
+              }
               if (!name.toLowerCase().contains("colorbar") && capId < 0) {
                 capId = i;
                 capName = name;
@@ -245,34 +262,37 @@ final class SipService {
   private volatile boolean cameraEnabled = true;
 
   public boolean isCameraEnabled() {
-    return cameraEnabled;
+    ClientCall call = activeCall;
+    return call == null ? cameraEnabled : call.cameraDesired;
   }
 
   public void setCameraEnabled(boolean enabled) {
     this.cameraEnabled = enabled;
   }
 
-  public synchronized void setCallVideoTransmit(boolean transmit) {
-    if (activeCall != null) {
-      activeCall.setTransmitVideo(transmit);
+  Object callIdentity() { return activeCall != null ? activeCall : mockTarget; }
+
+  void publishCameraState() {
+    ClientCall call = activeCall;
+    if (call != null && !shuttingDown) cameraSync.execute(call::publishVideoState);
+  }
+
+  public void setCallVideoTransmit(boolean transmit) {
+    ClientCall call = activeCall;
+    if (call != null) {
+      try { call.setTransmitVideo(transmit); }
+      catch (Exception failure) { throw new IllegalStateException("视频切换未完成：" + failure.getMessage(), failure); }
     }
   }
 
-  public synchronized boolean isCallActive() {
+  public boolean isCallActive() {
     return activeCall != null;
   }
 
   /** True only after the INVITE has been confirmed. */
-  public synchronized boolean isCallConnected() {
-    if (activeCall == null) {
-      return false;
-    }
-    try {
-      ensureThreadRegistered();
-      return activeCall.getInfo().getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED;
-    } catch (Throwable ignored) {
-      return false;
-    }
+  public boolean isCallConnected() {
+    ClientCall call = activeCall;
+    return call != null && call.cachedState == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED && !call.callDisconnected;
   }
 
   public boolean isAudioMuted() {
@@ -298,28 +318,14 @@ final class SipService {
   }
 
   /** Native handle of the remote PJSIP video window (HWND on Windows, NSWindow on macOS). */
-  public synchronized long getActiveVideoWindowHandle() {
-    if (activeCall == null || !isCallConnected()) {
-      return 0;
-    }
-    try {
-      ensureThreadRegistered();
-    } catch (Throwable ignored) {
-    }
-    return nativeVideoWindowHandle(activeCall.getActiveVideoWindow());
+  public long getActiveVideoWindowHandle() {
+    ClientCall call = activeCall;
+    return call != null && !call.callDisconnected ? call.nativeVideoHandle : 0;
   }
 
   /** Native handle of the PJSIP camera preview window. */
-  public synchronized long getPreviewWindowHandle() {
-    if (videoPreview == null) {
-      return 0;
-    }
-    try {
-      ensureThreadRegistered();
-      return nativeVideoWindowHandle(videoPreview.getVideoWindow());
-    } catch (Throwable ignored) {
-      return 0;
-    }
+  public long getPreviewWindowHandle() {
+    return previewHandle;
   }
 
   private static long nativeVideoWindowHandle(VideoWindow win) {
@@ -345,15 +351,8 @@ final class SipService {
     }
   }
 
-  public synchronized String getActiveCallRemoteUri() {
-    if (activeCall != null) {
-      try {
-        CallInfo ci = activeCall.getInfo();
-        return ci.getRemoteUri();
-      } catch (Throwable ignored) {
-      }
-    }
-    return "";
+  public String getActiveCallRemoteUri() {
+    return currentCallTarget();
   }
 
   public boolean isVideoCallAllowed() {
@@ -362,11 +361,11 @@ final class SipService {
 
   private volatile boolean previewMirrorEnabled = true;
 
-  synchronized boolean isPreviewActive() {
+  boolean isPreviewActive() {
     return videoPreview != null;
   }
 
-  synchronized boolean isPreviewMirrorEnabled() {
+  boolean isPreviewMirrorEnabled() {
     return previewMirrorEnabled;
   }
 
@@ -424,6 +423,10 @@ final class SipService {
   }
 
   private void startPreviewInternal(boolean allowDuringCall) throws Exception {
+    synchronized (previewLock) { startPreviewLocked(allowDuringCall); }
+  }
+
+  private void startPreviewLocked(boolean allowDuringCall) throws Exception {
     if (!started || endpoint == null) {
       throw new IllegalStateException("请先启动引擎");
     }
@@ -442,13 +445,19 @@ final class SipService {
     if (!vd.supported || vd.captureDevId < 0) {
       throw new IllegalStateException("未检测到可用的视频输入设备");
     }
-    videoPreview = new VideoPreview(vd.captureDevId);
+    VideoPreview candidate = new VideoPreview(vd.captureDevId);
     VideoPreviewOpParam opParam = new VideoPreviewOpParam();
-    videoPreview.start(opParam);
-    opParam.delete();
+    try {
+      candidate.start(opParam);
+      videoPreview = candidate;
+    } catch (Exception failure) {
+      candidate.delete();
+      throw failure;
+    } finally { opParam.delete(); }
     VideoWindow win = null;
     try {
       win = videoPreview.getVideoWindow();
+      previewHandle = nativeVideoWindowHandle(win);
       if (win != null) {
         VideoWindowInfo winInfo = null;
         boolean nativeWindow = false;
@@ -506,11 +515,18 @@ final class SipService {
     events.stateChanged();
   }
 
-  synchronized void stopPreview() {
+  void stopPreview() {
+    synchronized (previewLock) { stopPreviewLocked(); }
+  }
+
+  private void stopPreviewLocked() {
     if (videoPreview != null) {
       ensureThreadRegistered();
       VideoPreview vp = videoPreview;
       videoPreview = null;
+      long oldHandle = previewHandle;
+      previewHandle = 0;
+      if (oldHandle != 0) NativeMirror.restoreNormal(oldHandle, "摄像头预览");
       VideoWindow win = null;
       try {
         win = vp.getVideoWindow();
@@ -543,31 +559,16 @@ final class SipService {
   }
 
   boolean hasIncoming() {
-    ClientCall call;
-    boolean ringing;
-    synchronized (this) {
-      call = activeCall;
-      ringing = incomingRinging;
-    }
-    if (call == null || call.isOutgoing) {
-      return false;
-    }
-    try {
-      int state = call.getInfo().getState();
-      return state == pjsip_inv_state.PJSIP_INV_STATE_INCOMING
-          || state == pjsip_inv_state.PJSIP_INV_STATE_EARLY;
-    } catch (Exception e) {
-      return ringing;
-    }
+    ClientCall call = activeCall;
+    return call != null && !call.isOutgoing && !call.callDisconnected
+        && (incomingRinging || call.cachedState == pjsip_inv_state.PJSIP_INV_STATE_INCOMING
+            || call.cachedState == pjsip_inv_state.PJSIP_INV_STATE_EARLY);
   }
 
   /** 当前来电是否带视频 offer。只在真正的 incoming call 上有效。 */
-  synchronized boolean isIncomingVideo() {
+  boolean isIncomingVideo() {
     ClientCall call = activeCall;
-    if (call == null || call.isOutgoing) {
-      return false;
-    }
-    return call.offersVideo();
+    return call != null && !call.isOutgoing && call.videoIntent;
   }
 
   private volatile String mockTarget = null;
@@ -607,31 +608,18 @@ final class SipService {
     return testNativeVideoWindow;
   }
 
-  synchronized boolean isInCall() {
+  boolean isInCall() {
     return activeCall != null || mockTarget != null;
   }
 
-  synchronized String currentCallTarget() {
-    if (mockTarget != null) {
-      return mockTarget;
-    }
-    if (activeCall == null) {
-      return "";
-    }
-    String dst = activeCall.dialedDst;
-    if (dst != null && !dst.isBlank()) {
-      return dst.trim();
-    }
-    try {
-      CallInfo info = activeCall.getInfo();
-      String remote = info.getRemoteUri();
-      return remote != null ? remote.trim() : "";
-    } catch (Exception e) {
-      return dst != null ? dst.trim() : "";
-    }
+  String currentCallTarget() {
+    if (mockTarget != null) return mockTarget;
+    ClientCall call = activeCall;
+    if (call == null) return "";
+    return call.dialedDst.isBlank() ? call.cachedRemote : call.dialedDst;
   }
 
-  synchronized boolean isCurrentRoom(String roomSipUri) {
+  boolean isCurrentRoom(String roomSipUri) {
     if (mockTarget != null) {
       if (roomSipUri == null || roomSipUri.isBlank()) {
         return false;
@@ -652,7 +640,7 @@ final class SipService {
     return !u1.isEmpty() && u1.equalsIgnoreCase(u2);
   }
 
-  synchronized boolean isInRoomCall() {
+  boolean isInRoomCall() {
     if (mockTarget != null) {
       String u = extractUser(mockTarget);
       return u.startsWith("room-");
@@ -665,28 +653,27 @@ final class SipService {
     return u.startsWith("room-");
   }
 
-  synchronized boolean isCurrentCallVideo() {
+  boolean isCurrentCallVideo() {
     if (mockVideo != null) {
       return mockVideo;
     }
     if (testNativeVideoWindow != null) {
       return true;
     }
-    if (activeCall == null) {
-      return false;
-    }
-    return activeCall.isVideoActive();
+    ClientCall call = activeCall;
+    return call != null && call.videoStreamActive;
   }
 
   /** True if the call was offered/started as a video call, even if it was answered audio-only. */
-  synchronized boolean isCurrentCallVideoIntent() {
+  boolean isCurrentCallVideoIntent() {
     if (mockVideoIntent != null) {
       return mockVideoIntent;
     }
     if (mockVideo != null) {
       return mockVideo;
     }
-    return activeCall != null && activeCall.hasVideoIntent();
+    ClientCall call = activeCall;
+    return call != null && call.videoIntent;
   }
 
   synchronized void closeActiveVideoWindow() {
@@ -708,73 +695,14 @@ final class SipService {
   }
 
   String statusText() {
-    ClientCall call;
-    boolean on;
-    boolean ringing;
-    String proxy;
-    int reg;
-    synchronized (this) {
-      on = started;
-      call = activeCall;
-      ringing = incomingRinging;
-      proxy = outboundProxy;
-      reg = lastRegCode;
-    }
-    if (mockTarget != null) {
-      String remote = mockTarget;
-      boolean isRoom = remote.contains("room-");
-      if (isRoom) {
-        boolean hasVideo = isCurrentCallVideo();
-        String mode = hasVideo ? "视频会议 (3×3 混流)" : "语音会议 (纯音频)";
-        return "在会中 · " + mode + "  " + remote;
-      }
-      return "通话中  " + remote;
-    }
-    if (!on) {
-      return "引擎未启动";
-    }
-    if (call != null) {
-      try {
-        CallInfo info = call.getInfo();
-        String remote = info.getRemoteUri();
-        if (remote == null || remote.isBlank()) {
-          remote = "";
-        }
-        boolean isRoom =
-            (remote.contains("room-")
-                || (call.dialedDst != null && call.dialedDst.contains("room-")));
-        if (isRoom) {
-          boolean hasVideo = false;
-          try {
-            for (int i = 0; i < info.getMedia().size(); i++) {
-              if (info.getMedia().get(i).getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO
-                  && info.getMedia().get(i).getStatus()
-                      == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
-                hasVideo = true;
-                break;
-              }
-            }
-          } catch (Exception ignored) {
-          }
-          String stateStr =
-              (info.getState() == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED)
-                  ? "在会中"
-                  : info.getStateText();
-          String mode = hasVideo ? "视频会议 (3×3 混流)" : "语音会议 (纯音频)";
-          return stateStr + " · " + mode + (remote.isEmpty() ? "" : "  " + remote);
-        }
-        return info.getStateText() + (remote.isEmpty() ? "" : "  " + remote);
-      } catch (Exception e) {
-        return ringing ? "来电" : "通话中";
-      }
-    }
-    if (reg == pjsip_status_code.PJSIP_SC_OK) {
-      return "已注册" + (proxy.isEmpty() ? "" : "  代理 " + proxy);
-    }
-    return "已启动，未注册";
+    if (mockTarget != null) return (isInRoomCall() ? "在会中 · " + (isCurrentCallVideo() ? "视频会议" : "语音会议") : "通话中") + "  " + mockTarget;
+    if (!started) return "引擎未启动";
+    ClientCall call = activeCall;
+    if (call != null) return call.cachedStateText + "  " + currentCallTarget();
+    return isRegistered() ? "已注册" + (outboundProxy.isEmpty() ? "" : "  代理 " + outboundProxy) : "已启动，未注册";
   }
 
-  synchronized int boundPort() {
+  int boundPort() {
     return boundPort;
   }
 
@@ -851,7 +779,7 @@ final class SipService {
     if (hasVideoSupport()) {
       VideoMediaPolicy.configureAccount(cfg, mediaTuning);
       cfg.getVideoConfig().setAutoShowIncoming(false);
-      cfg.getVideoConfig().setAutoTransmitOutgoing(true);
+      cfg.getVideoConfig().setAutoTransmitOutgoing(false);
       int capDev = findDefaultCaptureDev();
       if (capDev >= 0) {
         cfg.getVideoConfig().setDefaultCaptureDevice(capDev);
@@ -1077,6 +1005,7 @@ final class SipService {
     shuttingDown = true;
     videoCapabilities.invalidate();
     mediaStatistics.shutdownNow();
+    cameraSync.shutdownNow();
     ensureThreadRegistered();
     stopPreview();
     cancelHangupWatch();
@@ -1117,6 +1046,14 @@ final class SipService {
       } catch (Exception ignored) {
       }
     }
+    // All queued native deletes must finish before libDestroy clears global PJ mutexes.
+    nativeCleanup.shutdown();
+    try {
+      if (!nativeCleanup.awaitTermination(3, TimeUnit.SECONDS)) {
+        events.log("警告", "媒体清理尚未返回，暂缓销毁原生引擎，请退出后重启客户端");
+        return;
+      }
+    } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
     // libDestroy joins SIP workers. Their final BYE/log callbacks can acquire this
     // monitor, so holding it here deadlocks shutdown against those workers.
     closeEndpointQuiet();
@@ -1225,17 +1162,6 @@ final class SipService {
     }
     try {
       endpoint.libRegisterThread(Thread.currentThread().getName());
-    } catch (Throwable ignored) {
-    }
-    try {
-      Platform.runLater(() -> {
-        try {
-          if (endpoint != null && !endpoint.libIsThreadRegistered()) {
-            endpoint.libRegisterThread("javafx-ui");
-          }
-        } catch (Throwable ignored) {
-        }
-      });
     } catch (Throwable ignored) {
     }
     createTransport(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP, port, publicIp);
@@ -1382,6 +1308,23 @@ final class SipService {
     return s == null ? "" : s;
   }
 
+  private void acceptVideoState(String from, String body) {
+    ClientCall call = activeCall;
+    if (call == null || call.callDisconnected || !isCallConnected()
+        || !extractUser(currentCallTarget()).equalsIgnoreCase(extractUser(from))) return;
+    VideoStateMessage message = VideoStateMessage.parse(body);
+    if (message != null) {
+      synchronized (call) {
+        if (!message.appliesTo(call.cachedCallId, currentCallTarget(), from, call.receivedVideoSequence)) return;
+        call.receivedVideoSequence = message.sequence();
+      }
+      events.videoAvatarChanged(from, !message.enabled());
+    } else if (VIDEO_AVATAR_OFF.equals(body) || VIDEO_AVATAR_ON.equals(body)) {
+      // Legacy peers are accepted only within the current connected peer relationship.
+      if (call.receivedVideoSequence < 0) events.videoAvatarChanged(from, VIDEO_AVATAR_OFF.equals(body));
+    }
+  }
+
   private final class ClientAccount extends Account {
     private final String username;
 
@@ -1423,7 +1366,7 @@ final class SipService {
             events.log("警告", "回 486 Busy 失败：" + e.getMessage());
           }
           try {
-            Platform.runLater(
+            nativeCleanup.execute(
                 () -> {
                   try {
                     ensureThreadRegistered();
@@ -1452,11 +1395,13 @@ final class SipService {
       String callId = "";
       try {
         CallInfo info = incoming.getInfo();
+        incoming.cacheInfo(info);
         remote = nullToEmpty(info.getRemoteUri());
         callId = nullToEmpty(info.getCallIdString());
         CallOpParam ring = new CallOpParam();
         ring.setStatusCode(pjsip_status_code.PJSIP_SC_RINGING);
-        incoming.answer(ring);
+        try { incoming.answer(ring); }
+        finally { ring.delete(); info.delete(); }
       } catch (Exception e) {
         events.log("警告", "回 180 失败：" + e.getMessage());
       }
@@ -1478,7 +1423,7 @@ final class SipService {
       String body = nullToEmpty(prm.getMsgBody());
       String contentType = nullToEmpty(prm.getContentType());
       if (isVideoAvatarControl(body)) {
-        events.videoAvatarChanged(fromUri, VIDEO_AVATAR_OFF.equals(body));
+        acceptVideoState(fromUri, body);
         return;
       }
       String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;
@@ -1523,6 +1468,37 @@ final class SipService {
     private volatile int videoMediaIndex = -1;
     /** Whether the call was originally offered as video, even if answered voice-only. */
     private volatile boolean videoIntent;
+    private volatile int cachedState;
+    private volatile String cachedStateText = "正在呼叫";
+    private volatile String cachedRemote = "";
+    private volatile String cachedCallId = "";
+    private volatile long nativeVideoHandle;
+    private volatile boolean cameraDesired;
+    private volatile boolean transmitting;
+    private volatile boolean upgradePending;
+    private volatile long receivedVideoSequence = -1;
+    private final java.util.concurrent.atomic.AtomicLong videoSequence = new java.util.concurrent.atomic.AtomicLong();
+    private volatile ScheduledFuture<?> cameraStateTask;
+
+    private void cacheInfo(CallInfo info) {
+      cachedState = info.getState(); cachedStateText = info.getStateText();
+      cachedRemote = nullToEmpty(info.getRemoteUri()); cachedCallId = nullToEmpty(info.getCallIdString());
+    }
+
+    private void publishVideoState() {
+      if (activeCall != this || callDisconnected || cachedCallId.isBlank() || extractUser(cachedRemote).startsWith("room-")) return;
+      nativeLifetime.readLock().lock();
+      try {
+        if (callDisconnected || activeCall != this) return;
+        ensureThreadRegistered();
+        SendInstantMessageParam message = new SendInstantMessageParam();
+        try {
+          message.setContent(new VideoStateMessage(cachedCallId, videoSequence.get(), transmitting).encode());
+          sendInstantMessage(message);
+        } finally { message.delete(); }
+      } catch (Exception failure) { events.log("警告", "摄像头状态同步失败，将在下个周期重试"); }
+      finally { nativeLifetime.readLock().unlock(); }
+    }
 
     private void startMediaStatistics() {
       int seconds = mediaTuning.statisticsSeconds();
@@ -1588,6 +1564,8 @@ final class SipService {
     }
 
     @Override public void delete() {
+      callDisconnected = true;
+      if (cameraStateTask != null) cameraStateTask.cancel(false);
       stopMediaStatistics();
       nativeLifetime.writeLock().lock();
       try { super.delete(); }
@@ -1600,6 +1578,8 @@ final class SipService {
       this.dialedDst = dialedDst != null ? dialedDst : "";
       this.videoConfigured = videoConfigured;
       this.videoIntent = videoConfigured;
+      this.cameraDesired = videoConfigured && cameraEnabled;
+      this.cachedRemote = this.dialedDst;
     }
 
     ClientCall(Account acc, String dialedDst) {
@@ -1615,6 +1595,7 @@ final class SipService {
 
     synchronized void setVideoConfigured(boolean video) {
       this.videoConfigured = video;
+      this.cameraDesired = video && cameraEnabled;
       if (video) {
         this.videoIntent = true;
       }
@@ -1624,30 +1605,11 @@ final class SipService {
       this.videoIntent = video;
     }
 
-    synchronized boolean hasVideoIntent() {
+    boolean hasVideoIntent() {
       return videoIntent;
     }
 
-    synchronized boolean isVideoActive() {
-      if (videoStreamActive || activeVideoWindow != null) {
-        return true;
-      }
-      if (connectTime == null && videoConfigured) {
-        return true;
-      }
-      try {
-        CallInfo ci = getInfo();
-        for (int i = 0; i < ci.getMedia().size(); i++) {
-          CallMediaInfo media = ci.getMedia().get(i);
-          if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO
-              && media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
-            return true;
-          }
-        }
-      } catch (Throwable ignored) {
-      }
-      return false;
-    }
+    boolean isVideoActive() { return videoStreamActive; }
 
     /** 来电 SDP 里是否包含视频媒体（不要求已经协商为 ACTIVE）。 */
     synchronized boolean offersVideo() {
@@ -1696,6 +1658,7 @@ final class SipService {
       activeVideoWinId = -1;
       videoStreamActive = false;
       videoMediaIndex = -1;
+      nativeVideoHandle = 0;
       if (win == null) {
         return;
       }
@@ -1722,37 +1685,94 @@ final class SipService {
       }
     }
 
-    synchronized void setTransmitVideo(boolean transmit) {
-      if (!videoStreamActive) return;
-      try {
-        ensureThreadRegistered();
-        CallVidSetStreamParam vParam = new CallVidSetStreamParam();
+    private final Object videoControlLock = new Object();
+
+    void setTransmitVideo(boolean transmit) throws Exception {
+      synchronized (videoControlLock) {
+        nativeLifetime.readLock().lock();
+        boolean previous = cameraDesired;
         try {
-          vParam.setMedIdx(videoMediaIndex >= 0 ? videoMediaIndex : -1);
-          int op = transmit
-              ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT
-              : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_STOP_TRANSMIT;
-          if (transmit) {
-            int devId = findDefaultCaptureDev();
-            if (devId >= 0) {
-              vParam.setCapDev(devId);
-            }
+          if (shuttingDown || callDisconnected || activeCall != this) throw new IllegalStateException("通话已结束");
+          cameraDesired = transmit;
+          ensureThreadRegistered();
+          if (!videoStreamActive) {
+            if (!transmit || !isCallConnected()) return;
+            if (upgradePending) throw new IllegalStateException("视频协商正在进行，请稍候");
+            int device = findDefaultCaptureDev();
+            if (device < 0) throw new IllegalStateException("未检测到可用摄像头");
+            CallVidSetStreamParam param = new CallVidSetStreamParam();
+            try {
+              param.setCapDev(device);
+              param.setDir(org.pjsip.pjsua2.pjmedia_dir.PJMEDIA_DIR_ENCODING_DECODING);
+              param.setMedIdx(videoMediaIndex);
+              upgradePending = true;
+              vidSetStream(videoMediaIndex < 0 ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_ADD
+                  : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_CHANGE_DIR, param);
+              videoIntent = true;
+              events.log("通话", "已发起语音转视频协商，等待对端媒体确认");
+              cameraSync.schedule(() -> {
+                if (upgradePending && activeCall == this && !callDisconnected) {
+                  upgradePending = false; cameraDesired = false;
+                  events.log("警告", "视频升级未在 12 秒内完成，语音保留，可再次开启摄像头");
+                  events.stateChanged();
+                }
+              }, 12, TimeUnit.SECONDS);
+            } catch (Exception failure) { upgradePending = false; throw failure; }
+            finally { param.delete(); }
+          } else {
+            applyTransmission(transmit);
           }
-          vidSetStream(op, vParam);
-          events.log("通话", "本地视频推流已" + (transmit ? "恢复传输" : "暂停传输"));
-        } finally {
-          vParam.delete();
-        }
-      } catch (Throwable t) {
-        events.log("警告", "设置视频推流状态失败: " + t.getMessage());
+        } catch (Exception failure) { cameraDesired = previous; throw failure; }
+        finally { nativeLifetime.readLock().unlock(); events.stateChanged(); }
       }
+    }
+
+    private void applyTransmission(boolean enabled) throws Exception {
+      CallVidSetStreamParam param = new CallVidSetStreamParam();
+      try {
+        param.setMedIdx(videoMediaIndex);
+        vidSetStream(enabled ? pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_START_TRANSMIT
+            : pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_STOP_TRANSMIT, param);
+        transmitting = enabled;
+        videoSequence.incrementAndGet();
+        if (enabled) {
+          try { vidSetStream(pjsua_call_vid_strm_op.PJSUA_CALL_VID_STRM_SEND_KEYFRAME, param); }
+          catch (Exception ignored) { /* Normal periodic keyframes remain available. */ }
+        }
+        cameraSync.execute(this::publishVideoState);
+        events.log("通话", enabled ? "摄像头视频已开始发送" : "摄像头视频已停止发送");
+      } finally { param.delete(); }
+    }
+
+    @Override public void onCallRxOffer(org.pjsip.pjsua2.OnCallRxOfferParam prm) {
+      String sdp = prm.getOffer().getWholeSdp();
+      if (sdp != null && java.util.regex.Pattern.compile("(?m)^m=video[ \\t]+[1-9][0-9]*[ \\t]").matcher(sdp).find()) {
+        prm.getOpt().setVideoCount(1);
+        videoIntent = true;
+        // Receiving an upgrade must never turn on this user's camera automatically.
+        events.stateChanged();
+      }
+    }
+
+    @Override public void onCallTsxState(org.pjsip.pjsua2.OnCallTsxStateParam prm) {
+      try {
+        var transaction = prm.getE().getBody().getTsxState().getTsx();
+        int status = transaction.getStatusCode();
+        if (upgradePending && "INVITE".equals(transaction.getMethod()) && status >= 300) {
+          upgradePending = false; cameraDesired = false;
+          events.log("警告", "对端未接受视频升级 (" + status + ")，语音继续，可稍后重试");
+          events.stateChanged();
+        }
+      } catch (Exception ignored) { }
     }
 
     @Override
     public void onCallState(OnCallStateParam prm) {
       ensureThreadRegistered();
+      CallInfo ci = null;
       try {
-        CallInfo ci = getInfo();
+        ci = getInfo();
+        cacheInfo(ci);
         int state = ci.getState();
         if (state == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED) {
           if (connectTime == null) {
@@ -1760,10 +1780,13 @@ final class SipService {
             events.log("通话", "通话已接通确认 (开始计时)");
           }
           startMediaStatistics();
+          if (cameraStateTask == null) cameraStateTask = cameraSync.scheduleWithFixedDelay(this::publishVideoState, 0, 3, TimeUnit.SECONDS);
           // The outgoing side has no answer-button action to refresh its window.
           events.stateChanged();
         } else if (state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
           callDisconnected = true;
+          nativeVideoHandle = 0;
+          if (cameraStateTask != null) cameraStateTask.cancel(false);
           stopMediaStatistics();
           boolean local = localHangup;
           synchronized (SipService.this) {
@@ -1815,7 +1838,7 @@ final class SipService {
             events.callEnded(callId, callerUser, calleeUser, startAt, durationSec, connected);
           }
 
-          Platform.runLater(
+          nativeCleanup.execute(
               () -> {
                 try {
                   ensureThreadRegistered();
@@ -1835,154 +1858,60 @@ final class SipService {
         }
       } catch (Exception e) {
         events.log("错误", "通话状态错误：" + e.getMessage());
-      }
+      } finally { if (ci != null) ci.delete(); }
     }
 
 
     @Override
     public void onCallMediaState(OnCallMediaStateParam prm) {
       ensureThreadRegistered();
+      CallInfo info = null;
       try {
-        CallInfo ci = getInfo();
-        org.pjsip.pjsua2.CallMediaInfoVector mediaVec = ci.getMedia();
-        for (int i = 0; i < mediaVec.size(); i++) {
-          CallMediaInfo media = mediaVec.get(i);
-          if (media.getType() == pjmedia_type.PJMEDIA_TYPE_AUDIO) {
-            AudioMedia audio = getAudioMedia(i);
+        info = getInfo(); cacheInfo(info);
+        if (callDisconnected || activeCall != this) return;
+        boolean activeVideo = false;
+        var media = info.getMedia();
+        for (int i = 0; i < media.size(); i++) {
+          CallMediaInfo stream = media.get(i);
+          int index = (int) stream.getIndex();
+          boolean active = stream.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE;
+          if (stream.getType() == pjmedia_type.PJMEDIA_TYPE_AUDIO && active) {
+            AudioMedia audio = getAudioMedia(index);
             AudioMedia capture = endpoint.audDevManager().getCaptureDevMedia();
-            callAudioMedia = audio;
-            captureAudioMedia = capture;
-            if (!audioMuted) {
-              capture.startTransmit(audio);
-            }
+            callAudioMedia = audio; captureAudioMedia = capture;
+            if (!audioMuted) capture.startTransmit(audio);
             audio.startTransmit(endpoint.audDevManager().getPlaybackDevMedia());
-            events.log("通话", "音频已接通" + (audioMuted ? "（静音中）" : ""));
-
-          } else if (media.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
-            if (media.getStatus() == pjsua_call_media_status.PJSUA_CALL_MEDIA_ACTIVE) {
-              synchronized (this) {
-                this.videoStreamActive = true;
-                this.videoMediaIndex = i;
-              }
-              boolean room = (dialedDst != null && dialedDst.contains("room-"))
-                  || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
-              // Sending must not depend on the remote renderer already having a window.
-              // Otherwise members can wait on each other's first frame indefinitely.
-              if (room && hasCaptureDevice() && isCameraEnabled()) {
-                setTransmitVideo(true);
-              }
-              int winId = media.getVideoIncomingWindowId();
-              if (winId >= 0) {
-                try {
-                  VideoWindow vidWin;
-                  synchronized (this) {
-                    if (this.activeVideoWinId == winId && this.activeVideoWindow != null) {
-                      vidWin = this.activeVideoWindow;
-                    } else {
-                      vidWin = new VideoWindow(winId);
-                      if (this.activeVideoWindow != null) {
-                        try {
-                          this.activeVideoWindow.Show(false);
-                          this.activeVideoWindow.delete();
-                        } catch (Throwable ignored) {
-                        }
-                      }
-                      this.activeVideoWindow = vidWin;
-                      this.activeVideoWinId = winId;
-                    }
-                    this.videoStreamActive = true;
-                    this.videoMediaIndex = i;
-                  }
-                  VideoWindowInfo winInfo = null;
-                  boolean nativeWindow = false;
-                  try {
-                    winInfo = vidWin.getInfo();
-                    nativeWindow = winInfo != null && winInfo.getIsNative();
-                  } catch (Throwable t) {
-                    events.log("警告", "视频窗口尚未就绪: " + t.getMessage());
-                  } finally {
-                    if (winInfo != null) {
-                      try {
-                        winInfo.delete();
-                      } catch (Throwable ignored) {
-                      }
-                    }
-                  }
-                  boolean isRoom = (dialedDst != null && dialedDst.contains("room-"))
-                      || (ci.getRemoteUri() != null && ci.getRemoteUri().contains("room-"));
-                  boolean sizeSet = false;
-                  if (!nativeWindow) {
-                    MediaSize sz = new MediaSize();
-                    if (isRoom) {
-                      sz.setW(960);
-                      sz.setH(540);
-                    } else {
-                      sz.setW(640);
-                      sz.setH(360);
-                    }
-                    try {
-                      vidWin.setSize(sz);
-                      sizeSet = true;
-                    } catch (Throwable t) {
-                      events.log("警告", "设置视频窗口分辨率失败: " + t.getMessage());
-                    } finally {
-                      sz.delete();
-                    }
-                    try {
-                      vidWin.Show(true);
-                    } catch (Throwable t) {
-                      events.log("警告", "显示视频窗口失败: " + t.getMessage());
-                    }
-                    // 不使用 SDL 独占全屏：它会切换桌面分辨率/缩放，导致整个
-                    // JavaFX 界面看起来被放大。保持普通独立窗口。
-                  }
-                  if (isRoom) {
-                    boolean hasCap = hasCaptureDevice();
-                    boolean camOn = isCameraEnabled();
-                    String capNote;
-                    if (!hasCap) {
-                      capNote = "本地无可用摄像头，仅接收混流画面";
-                    } else if (camOn) {
-                      capNote = "已请求本地摄像头推流，发送结果见推流状态日志";
-                    } else {
-                      capNote = "本地摄像头已禁用，MCU 画布正以个人头像展示";
-                    }
-                    if (sizeSet) {
-                      events.log(
-                          "通话",
-                          "MCU 会议室视频流已接通，正在渲染 3×3 九宫格混流画布 (窗口 ID="
-                              + winId
-                              + ", 分辨率=960×540，"
-                              + capNote
-                              + "。若会议室其他成员未开启视频推流，其余宫格显示为黑底)");
-                    } else {
-                      events.log(
-                          "通话",
-                          "MCU 会议室视频流已接通，使用系统默认分辨率 (窗口 ID="
-                              + winId
-                              + "，"
-                              + capNote
-                              + "。若无远端画面其余宫格显示为黑底)");
-                    }
-                  } else {
-                    String resStr = sizeSet ? ", 分辨率=640×360" : "";
-                    events.log("通话", "点对点双向视频流已接通，已拉起独立原生视频窗口 (窗口 ID=" + winId + resStr + ")");
-                  }
-                } catch (Exception ve) {
-                  events.log("警告", "视频窗口显示异常: " + ve.getMessage());
-                }
-              } else {
-                events.log("通话", "视频媒体已激活（等待远端画面）");
-              }
+          } else if (stream.getType() == pjmedia_type.PJMEDIA_TYPE_VIDEO) {
+            videoMediaIndex = index;
+            if (!active) continue;
+            activeVideo = true; videoIntent = true;
+            int windowId = stream.getVideoIncomingWindowId();
+            if (windowId >= 0 && (activeVideoWindow == null || activeVideoWinId != windowId)) {
+              abandonVideoWindow(activeVideoWindow);
+              VideoWindow window = new VideoWindow(windowId);
+              activeVideoWindow = window; activeVideoWinId = windowId;
+              nativeVideoHandle = nativeVideoWindowHandle(window);
+              // The host controls visibility after it has valid bounds. Avoid floating duplicates.
+              window.Show(!WindowLayout.isAvailable());
             }
+            nativeVideoHandle = windowId >= 0 ? nativeVideoWindowHandle(activeVideoWindow) : 0;
           }
         }
-      } catch (Exception e) {
-        events.log("错误", "媒体连接处理失败：" + e.getMessage());
-      } finally {
-        // Video may become ready after CONFIRMED; refresh the renderer/PiP then as well.
-        events.stateChanged();
-      }
+        videoStreamActive = activeVideo;
+        if (!activeVideo) { nativeVideoHandle = 0; transmitting = false; }
+        else {
+          upgradePending = false;
+          cameraSync.execute(() -> {
+            try { setTransmitVideo(cameraDesired); }
+            catch (Exception failure) {
+              cameraDesired = false; transmitting = false;
+              events.log("警告", "视频发送未启用：" + failure.getMessage());
+              publishVideoState(); events.stateChanged();
+            }
+          });
+        }
+      } catch (Exception failure) { events.log("错误", "媒体连接处理失败：" + failure.getMessage()); }
+      finally { if (info != null) info.delete(); events.stateChanged(); }
     }
 
     @Override
@@ -1992,7 +1921,7 @@ final class SipService {
       String body = nullToEmpty(prm.getMsgBody());
       String contentType = nullToEmpty(prm.getContentType());
       if (isVideoAvatarControl(body)) {
-        events.videoAvatarChanged(fromUri, VIDEO_AVATAR_OFF.equals(body));
+        acceptVideoState(fromUri, body);
         return;
       }
       String logBody = body.startsWith("[FILE]") ? "[文件通知]" : body;

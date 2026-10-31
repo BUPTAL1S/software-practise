@@ -13,7 +13,10 @@ import javafx.application.Platform;
 
 /** Serial native work while JavaFX continues pumping the shared SDL window queue. */
 final class CallPreviewLifecycle implements AutoCloseable {
-  private static final long NATIVE_TIMEOUT_SECONDS = 8;
+  private final long timeoutMillis;
+
+  CallPreviewLifecycle() { this(8000); }
+  CallPreviewLifecycle(long timeoutMillis) { this.timeoutMillis = timeoutMillis; }
 
   private final AtomicInteger pending = new AtomicInteger();
   private volatile boolean stuck;
@@ -28,14 +31,19 @@ final class CallPreviewLifecycle implements AutoCloseable {
     return thread;
   });
 
-  boolean isBusy() { return pending.get() != 0; }
+  boolean isBusy() { return stuck || pending.get() != 0; }
 
   void start(SipService sip, VideoCallWindow window, Runnable completed, Consumer<Throwable> failed) {
     // Only the local preview window is recreated. Detaching the remote child
     // here invalidates its SDL handle while the call is still using it.
     window.detachPip();
     window.setMediaBusy(true);
-    execute(sip::startCallPreview, completed, failed);
+    Object call = sip.callIdentity();
+    execute(() -> {
+      if (sip.callIdentity() != call || !sip.isCameraEnabled()) return;
+      sip.startCallPreview();
+      if (sip.callIdentity() != call || !sip.isCameraEnabled()) sip.stopPreview();
+    }, completed, failed);
   }
 
   void changeCamera(SipService sip, VideoCallWindow window, boolean enabled,
@@ -63,11 +71,10 @@ final class CallPreviewLifecycle implements AutoCloseable {
     ScheduledFuture<?> watchdog = timeouts.schedule(() -> {
       if (finished.compareAndSet(false, true)) {
         stuck = true;
-        pending.decrementAndGet();
         Platform.runLater(() -> failed.accept(
-            new IOException("摄像头预览超时，已停止等待")));
+            new IOException("原生媒体操作超时，界面仍可操作；摄像头操作将等待原生任务释放")));
       }
-    }, NATIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }, timeoutMillis, TimeUnit.MILLISECONDS);
 
     worker.execute(() -> {
       Throwable error = null;
@@ -77,9 +84,9 @@ final class CallPreviewLifecycle implements AutoCloseable {
         error = failure;
       }
       final Throwable result = error;
+      pending.decrementAndGet();
       if (finished.compareAndSet(false, true)) {
         watchdog.cancel(false);
-        pending.decrementAndGet();
         Platform.runLater(() -> {
           if (result == null) completed.run(); else failed.accept(result);
         });
@@ -87,6 +94,7 @@ final class CallPreviewLifecycle implements AutoCloseable {
         // The watchdog already reported the timeout. The native call eventually
         // returned, so allow a later camera action to try again.
         stuck = false;
+        Platform.runLater(() -> { if (result == null) completed.run(); else failed.accept(result); });
       }
     });
   }

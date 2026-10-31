@@ -49,6 +49,7 @@ class CallWindowAndLifecycleTest {
   @Test
   void testIncomingCallWindowLifecycle() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
+    var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
     AtomicBoolean answeredVideo = new AtomicBoolean(false);
     AtomicBoolean answeredAudio = new AtomicBoolean(false);
     AtomicBoolean rejected = new AtomicBoolean(false);
@@ -71,17 +72,19 @@ class CallWindowAndLifecycleTest {
             // 3. Close
             win.close();
             assertFalse(win.isShowing());
-          } finally {
+          } catch (Throwable error) { failure.set(error); } finally {
             latch.countDown();
           }
         });
 
     assertTrue(latch.await(5, TimeUnit.SECONDS), "IncomingCallWindow UI actions timed out");
+    if (failure.get() != null) throw new AssertionError(failure.get());
   }
 
   @Test
   void testVideoCallWindowLifecycle() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
+    var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
     AtomicBoolean hungup = new AtomicBoolean(false);
 
     Platform.runLater(
@@ -106,12 +109,13 @@ class CallWindowAndLifecycleTest {
             // Close
             win.close();
             assertFalse(win.isShowing());
-          } finally {
+          } catch (Throwable error) { failure.set(error); } finally {
             latch.countDown();
           }
         });
 
     assertTrue(latch.await(5, TimeUnit.SECONDS), "VideoCallWindow UI actions timed out");
+    if (failure.get() != null) throw new AssertionError(failure.get());
   }
 
   @Test

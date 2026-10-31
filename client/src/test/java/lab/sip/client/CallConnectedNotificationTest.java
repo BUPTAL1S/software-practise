@@ -74,6 +74,9 @@ class CallConnectedNotificationTest {
     final Thread receiver;
     volatile String invite;
     volatile java.net.SocketAddress caller;
+    volatile int upgradeStatus;
+    final java.util.concurrent.atomic.AtomicInteger inviteCount = new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.BlockingQueue<VideoStateMessage> videoStates = new java.util.concurrent.LinkedBlockingQueue<>();
 
     Peer() throws Exception {
       receiver = new Thread(() -> {
@@ -82,7 +85,12 @@ class CallConnectedNotificationTest {
             DatagramPacket packet = new DatagramPacket(new byte[65535], 65535);
             socket.receive(packet);
             String request = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-            if (request.startsWith("REGISTER ") || request.startsWith("BYE ")) {
+            if (request.startsWith("MESSAGE ")) {
+              respond(request, packet.getSocketAddress(), "200 OK", "");
+              int body = request.indexOf("\r\n\r\n");
+              VideoStateMessage state = VideoStateMessage.parse(body < 0 ? "" : request.substring(body + 4));
+              if (state != null) videoStates.add(state);
+            } else if (request.startsWith("REGISTER ") || request.startsWith("BYE ")) {
               respond(request, packet.getSocketAddress(), "200 OK", "");
               if (request.startsWith("BYE ")) bye.countDown();
             } else if (request.startsWith("INVITE ")) {
@@ -90,6 +98,10 @@ class CallConnectedNotificationTest {
               caller = packet.getSocketAddress();
               respond(request, caller, "180 Ringing", "");
               invited.countDown();
+              if (inviteCount.incrementAndGet() > 1 && upgradeStatus != 0) {
+                if (upgradeStatus == 200) answerWithVideo();
+                else respond(request, caller, upgradeStatus + " Not Acceptable Here", "");
+              }
             }
           } catch (Exception e) {
             if (!socket.isClosed()) throw new RuntimeException(e);
