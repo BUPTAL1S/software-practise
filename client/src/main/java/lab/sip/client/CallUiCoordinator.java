@@ -50,6 +50,7 @@ final class CallUiCoordinator implements AutoCloseable {
   private CheckBox cameraToggleBox;
   private boolean incomingAnswered;
   private boolean remoteAvatarOff;
+  private Object presentedCall;
   private Timeline pipLayoutTimeline;
   private boolean callPreviewErrorLogged;
   private boolean callPreviewStarted;
@@ -78,82 +79,34 @@ final class CallUiCoordinator implements AutoCloseable {
   }
 
   CheckBox cameraToggleBox() {
-    if (cameraToggleBox != null) {
-      return cameraToggleBox;
+    if (cameraToggleBox == null) {
+      cameraToggleBox = new CheckBox();
+      cameraToggleBox.setOnAction(e -> setCallCamera(cameraToggleBox.isSelected()));
+      updateCameraUi();
     }
-    SipService sip = host.sip();
-    boolean cameraOn = sip.isCameraEnabled();
-    cameraToggleBox = new CheckBox(cameraOn ? "摄像头: 已开启" : "摄像头: 已禁用");
-    cameraToggleBox.setSelected(cameraOn);
-    cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
-    cameraToggleBox.setOnAction(
-        e -> {
-          if (callPreviews.isBusy()) {
-            cameraToggleBox.setSelected(sip.isCameraEnabled());
-            return;
-          }
-          boolean enabled = cameraToggleBox.isSelected();
-          callPreviewErrorLogged = false;
-          sip.setCameraEnabled(enabled);
-          host.cameraStateChanged(enabled);
-          if (videoCallWindow != null) {
-            videoCallWindow.setCameraState(enabled);
-          }
-          cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
-          cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
-          String remote = sip.isCallActive() ? sip.getActiveCallRemoteUri() : "";
-          String mySip = host.user();
-          VideoCallWindow expectedWindow = videoCallWindow;
-          callPreviews.changeCamera(
-              sip,
-              expectedWindow,
-              enabled,
-              () -> {
-                if (callPreviews.isBusy()) {
-                  return;
-                }
-                if (videoCallWindow == expectedWindow && expectedWindow != null) {
-                  expectedWindow.setMediaBusy(false);
-                }
-                if (!enabled) {
-                  callPreviewStarted = false;
-                }
-                if (!remote.isBlank()) {
-                  if (MainApp.isRoomTarget(remote)) {
-                    final boolean cameraEnabled = enabled;
-                    roomCameraUpdates.execute(() -> {
-                      boolean applied = host.http().toggleRoomVmute(remote, mySip, !cameraEnabled);
-                      Platform.runLater(() -> {
-                        LogView logView = host.logs();
-                        if (logView != null) {
-                          logView.append(applied ? "通话" : "警告", applied
-                              ? (cameraEnabled ? "MCU 已恢复实时视频" : "MCU 已切换为个人头像")
-                              : "本地摄像头状态已更新，MCU 同步失败");
-                        }
-                      });
-                    });
-                  } else {
-                    sendAvatarControl(!enabled);
-                  }
-                }
-                // Do not call back into MainApp.refreshButtons here: the native
-                // preview worker may still hold the SipService monitor.
-              },
-              error -> {
-                if (videoCallWindow == expectedWindow && expectedWindow != null) {
-                  expectedWindow.setMediaBusy(false);
-                }
-                LogView logView = host.logs();
-                if (logView != null) {
-                  logView.append("警告", "摄像头切换失败：" + error.getMessage());
-                }
-              });
-        });
     return cameraToggleBox;
+  }
+
+  private void updateCameraUi() {
+    boolean enabled = host.sip().isCameraEnabled();
+    host.cameraStateChanged(enabled);
+    if (cameraToggleBox != null) {
+      cameraToggleBox.setSelected(enabled);
+      cameraToggleBox.setDisable(callPreviews.isBusy());
+      cameraToggleBox.setText(enabled ? "摄像头: 已开启" : "摄像头: 已禁用");
+      cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", enabled ? "camera-toggle-on" : "camera-toggle-off");
+    }
+    if (videoCallWindow != null) {
+      videoCallWindow.setCameraState(enabled);
+      videoCallWindow.setMediaBusy(callPreviews.isBusy());
+    }
   }
 
   void sync() {
     SipService sip = host.sip();
+    Object current = sip.callIdentity();
+    if (current != presentedCall) { remoteAvatarOff = false; presentedCall = current; }
+    updateCameraUi();
     boolean inCall = sip.isInCall();
     boolean connected = sip.isCallConnected();
     boolean incoming = sip.hasIncoming();
@@ -235,7 +188,7 @@ final class CallUiCoordinator implements AutoCloseable {
               runSip(sip::hangup);
             },
             muted -> {
-              sip.setAudioMuted(muted);
+              runSip(() -> sip.setAudioMuted(muted));
               if (videoCallWindow != null) {
                 videoCallWindow.setMuted(sip.isAudioMuted());
               }
@@ -253,63 +206,22 @@ final class CallUiCoordinator implements AutoCloseable {
               : "对方正在使用语音，视频画面暂不可用");
       videoCallWindow.setRemoteAvatarOff(showAvatar, target);
 
-      long remote = sip.getActiveVideoWindowHandle();
-      if (connected && !showAvatar && remote != 0) {
-        long pip = 0;
-        if (cameraOn && !inRoom) {
-          if (!sip.isPreviewActive() && !callPreviews.isBusy()) {
-            if (!callPreviewErrorLogged) {
-              VideoCallWindow expectedWindow = videoCallWindow;
-              callPreviews.start(
-                  sip,
-                  expectedWindow,
-                  () -> {
-                    if (videoCallWindow == expectedWindow) {
-                      expectedWindow.setMediaBusy(false);
-                      callPreviewStarted = true;
-                      if (!callPreviews.isBusy()) {
-                        host.refreshMainUi();
-                      }
-                    }
-                  },
-                  error -> {
-                    if (videoCallWindow == expectedWindow) {
-                      expectedWindow.setMediaBusy(false);
-                      callPreviewErrorLogged = true;
-                      LogView logView = host.logs();
-                      if (logView != null) {
-                        logView.append("警告", "本地小窗预览启动失败: " + error.getMessage());
-                      }
-                      if (!callPreviews.isBusy()) {
-                        host.refreshMainUi();
-                      }
-                    }
-                  });
-              return;
-            }
-          } else {
-            callPreviewStarted = true;
-          }
-          pip = sip.getPreviewWindowHandle();
-        } else {
-          videoCallWindow.detachPip();
-          if (callPreviewStarted && sip.isPreviewActive()) {
-            sip.stopPreview();
-          }
-          callPreviewStarted = false;
-        }
-        videoCallWindow.attachNative(remote, pip);
+      long remote = showAvatar ? 0 : sip.getActiveVideoWindowHandle();
+      if (connected) {
+        // Local preview is independent of whether the peer is currently sending video.
+        if (cameraOn && !inRoom && !sip.isPreviewActive() && !callPreviews.isBusy() && !callPreviewErrorLogged) {
+          VideoCallWindow expected = videoCallWindow;
+          callPreviews.start(sip, expected, () -> {
+            if (videoCallWindow == expected) { callPreviewStarted = true; updateCameraUi(); sync(); }
+          }, error -> {
+            callPreviewErrorLogged = true; updateCameraUi(); logFailure("本地预览未开启：" + error.getMessage());
+          });
+        } else if (!cameraOn || inRoom) {
+          videoCallWindow.detachPip(); stopCallPreview();
+        } else if (sip.isPreviewActive()) callPreviewStarted = true;
+        videoCallWindow.attachNative(remote, cameraOn && !inRoom ? sip.getPreviewWindowHandle() : 0);
         startPipLayout();
-      } else {
-        if (showAvatar) {
-          videoCallWindow.detachPip();
-          if (callPreviewStarted && sip.isPreviewActive()) {
-            sip.stopPreview();
-          }
-          callPreviewStarted = false;
-        }
-        stopPipLayout();
-      }
+      } else stopPipLayout();
     } else {
       if (videoCallWindow != null) {
         videoCallWindow.close();
@@ -326,7 +238,7 @@ final class CallUiCoordinator implements AutoCloseable {
             connected,
             () -> runSip(sip::hangup),
             muted -> {
-              sip.setAudioMuted(muted);
+              runSip(() -> sip.setAudioMuted(muted));
               if (callWindow != null) {
                 callWindow.setMuted(muted);
               }
@@ -337,15 +249,14 @@ final class CallUiCoordinator implements AutoCloseable {
       }
       callWindow.setMuted(sip.isAudioMuted());
       callWindow.setAvatar(callAvatar(targetId));
-      if (callPreviewStarted && sip.isPreviewActive()) {
-        sip.stopPreview();
-      }
-      callPreviewStarted = false;
+      stopCallPreview();
       stopPipLayout();
     }
   }
 
   void setRemoteAvatarOff(boolean off, String fromUri) {
+    if (!host.sip().isCallConnected() || !MainApp.extractUser(host.sip().currentCallTarget())
+        .equalsIgnoreCase(MainApp.extractUser(fromUri))) return;
     remoteAvatarOff = off;
     if (!callPreviews.isBusy() && videoCallWindow != null && videoCallWindow.isShowing()) {
       videoCallWindow.setRemoteAvatarOff(off, MainApp.extractUser(fromUri));
@@ -388,42 +299,48 @@ final class CallUiCoordinator implements AutoCloseable {
       callWindow = null;
     }
     stopPipLayout();
-    if (!callPreviews.isBusy() && callPreviewStarted && host.sip().isPreviewActive()) {
-      host.sip().stopPreview();
-    }
-    callPreviewStarted = false;
+    stopCallPreview();
     callPreviewErrorLogged = false;
   }
 
-  void sendAvatarControl(boolean off) {
-    SipService sip = host.sip();
-    String remote = sip.getActiveCallRemoteUri();
-    String peer = MainApp.extractUser(remote);
-    if (peer.isBlank() || peer.startsWith("room-") || !sip.isCurrentCallVideo()) {
-      return;
-    }
-    String body = off ? SipService.VIDEO_AVATAR_OFF : SipService.VIDEO_AVATAR_ON;
-    runSip(
-        () -> {
-          try {
-            sip.sendMessage(peer, host.domain(), body);
-          } catch (Exception ex) {
-            LogView logView = host.logs();
-            if (logView != null) {
-              logView.append("警告", "发送摄像头头像状态失败: " + ex.getMessage());
-            }
-          }
-        });
-  }
+  void sendAvatarControl(boolean off) { host.sip().publishCameraState(); }
 
   void setCallCamera(boolean enabled) {
-    if (cameraToggleBox == null) {
-      host.sip().setCameraEnabled(enabled);
-      return;
-    }
-    if (cameraToggleBox.isSelected() != enabled) {
-      cameraToggleBox.fire();
-    }
+    if (callPreviews.isBusy()) { updateCameraUi(); return; }
+    SipService sip = host.sip();
+    Object call = sip.callIdentity();
+    boolean previous = sip.isCameraEnabled();
+    sip.setCameraEnabled(enabled);
+    String remote = sip.currentCallTarget();
+    String user = host.user();
+    callPreviewErrorLogged = false;
+    callPreviews.changeCamera(sip, videoCallWindow, enabled, () -> {
+      if (sip.callIdentity() != call) return;
+      if (!enabled) callPreviewStarted = false;
+      updateCameraUi();
+      if (MainApp.isRoomTarget(remote)) roomCameraUpdates.execute(() -> {
+        boolean applied = host.http().toggleRoomVmute(remote, user, !enabled);
+        if (!applied) Platform.runLater(() -> logFailure("本地摄像头已更新，MCU 头像同步失败"));
+      });
+      sip.publishCameraState();
+      sync();
+    }, failure -> {
+      sip.setCameraEnabled(previous);
+      updateCameraUi();
+      logFailure("摄像头切换失败：" + failure.getMessage());
+      if (!callPreviews.isBusy()) sync();
+    });
+    updateCameraUi();
+  }
+
+  private void logFailure(String text) {
+    if (host.logs() != null) host.logs().append("警告", text);
+  }
+
+  private void stopCallPreview() {
+    if (!callPreviewStarted || !host.sip().isPreviewActive() || callPreviews.isBusy()) return;
+    callPreviewStarted = false;
+    callPreviews.execute(host.sip()::stopPreview, this::updateCameraUi, error -> logFailure(error.getMessage()));
   }
 
   private void startPipLayout() {
@@ -441,11 +358,9 @@ final class CallUiCoordinator implements AutoCloseable {
                   if (videoCallWindow == null || !host.sip().isCallConnected()) {
                     return;
                   }
-                  long remote = host.sip().getActiveVideoWindowHandle();
+                  long remote = remoteAvatarOff ? 0 : host.sip().getActiveVideoWindowHandle();
                   long pip = host.sip().isPreviewActive() ? host.sip().getPreviewWindowHandle() : 0;
-                  if (remote != 0) {
-                    videoCallWindow.attachNative(remote, pip);
-                  }
+                  videoCallWindow.attachNative(remote, pip);
                 }));
     pipLayoutTimeline.setCycleCount(Timeline.INDEFINITE);
     pipLayoutTimeline.play();
@@ -491,7 +406,7 @@ final class CallUiCoordinator implements AutoCloseable {
   public void close() {
     sipControl.shutdownNow();
     roomCameraUpdates.shutdownNow();
-    callPreviews.close();
     closeWindows();
+    callPreviews.close();
   }
 }

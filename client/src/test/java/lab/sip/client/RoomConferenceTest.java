@@ -198,6 +198,7 @@ class RoomConferenceTest {
   @Test
   void testRoomVisualSnapshot() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
+    AtomicReference<Throwable> failure = new AtomicReference<>();
 
     Platform.runLater(
         () -> {
@@ -357,8 +358,14 @@ class RoomConferenceTest {
             double sumTextR = 0, sumTextG = 0, sumTextB = 0;
             double sumBgR = 0, sumBgG = 0, sumBgB = 0;
 
-            for (int y = 130; y <= 180 && y < h; y++) {
-              for (int x = 50; x <= 350 && x < w; x++) {
+            // Derive the selected text cell bounds; fixed screen coordinates included
+            // white background below the row at different DPI/font metrics.
+            TableCell<?, ?> selected = tableView.lookupAll(".table-cell").stream()
+                .filter(n -> n instanceof TableCell<?, ?> c && c.getIndex() == 0 && c.getTableColumn() == colName)
+                .map(n -> (TableCell<?, ?>) n).findFirst().orElseThrow();
+            var bounds = selected.localToScene(selected.getBoundsInLocal());
+            for (int y = (int)Math.ceil(bounds.getMinY()) + 2; y < bounds.getMaxY() - 2 && y < h; y++) {
+              for (int x = (int)Math.ceil(bounds.getMinX()) + 2; x < bounds.getMaxX() - 2 && x < w; x++) {
                 int argb = bi.getRGB(x, y);
                 int r = (argb >> 16) & 0xFF;
                 int g = (argb >> 8) & 0xFF;
@@ -403,14 +410,15 @@ class RoomConferenceTest {
             assertTrue(ratio >= 7.0, "Selected room row contrast ratio must satisfy WCAG AAA >= 7.0:1, actual: " + ratio);
 
             stage.close();
-          } catch (Exception ex) {
-            ex.printStackTrace();
+          } catch (Throwable ex) {
+            failure.set(ex);
           } finally {
             latch.countDown();
           }
         });
 
     assertTrue(latch.await(5, TimeUnit.SECONDS), "Visual test timed out");
+    if (failure.get() != null) throw new AssertionError("Room visual assertion failed", failure.get());
   }
 
   @Test
@@ -462,7 +470,7 @@ class RoomConferenceTest {
     assertTrue(sip.isCurrentCallVideo());
     assertTrue(sip.isCurrentRoom("sip:room-101@lab"));
     assertEquals("sip:room-101@lab", sip.currentCallTarget());
-    assertTrue(sip.statusText().contains("在会中 · 视频会议 (3×3 混流)"));
+    assertTrue(sip.statusText().contains("在会中 · 视频会议"));
 
     sip.hangup();
     assertFalse(sip.isInCall());

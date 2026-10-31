@@ -51,8 +51,9 @@ final class CallWindow {
     initialLabel.setText(CallUi.initial(target));
     refreshStatus();
     setCameraOn(cameraOn);
-    cameraBtn.setVisible(video);
-    cameraBtn.setManaged(video);
+    cameraBtn.setVisible(true);
+    cameraBtn.setManaged(true);
+    cameraBtn.setDisable(!connected);
     CallUi.state(hangupBtn, connected ? "挂断" : "取消呼叫", false);
     timerLabel.setVisible(connected);
     if (connected) startTimer();
