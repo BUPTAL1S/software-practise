@@ -77,6 +77,26 @@ final class CallUiCoordinator implements AutoCloseable {
     return callPreviews.isBusy();
   }
 
+  void toggleStandalonePreview() {
+    if (callPreviews.isBusy()) return;
+    callPreviews.execute(() -> {
+      if (host.sip().isPreviewActive()) host.sip().stopPreview();
+      else host.sip().startPreview();
+    }, host::refreshMainUi, error -> {
+      if (host.logs() != null) host.logs().append("警告", "摄像头预览失败：" + error.getMessage());
+      if (!callPreviews.isBusy()) host.refreshMainUi();
+    });
+  }
+
+  void dial(String target, String domain, boolean video) {
+    if (callPreviews.isBusy()) return;
+    callPreviews.execute(() -> host.sip().call(target, domain, video), host::refreshMainUi,
+        error -> {
+          if (host.logs() != null) host.logs().append("错误", "呼叫失败：" + error.getMessage());
+          if (!callPreviews.isBusy()) host.refreshMainUi();
+        });
+  }
+
   CheckBox cameraToggleBox() {
     if (cameraToggleBox != null) {
       return cameraToggleBox;
@@ -92,6 +112,7 @@ final class CallUiCoordinator implements AutoCloseable {
             cameraToggleBox.setSelected(sip.isCameraEnabled());
             return;
           }
+          boolean previousEnabled = sip.isCameraEnabled();
           boolean enabled = cameraToggleBox.isSelected();
           callPreviewErrorLogged = false;
           sip.setCameraEnabled(enabled);
@@ -136,23 +157,32 @@ final class CallUiCoordinator implements AutoCloseable {
                     sendAvatarControl(!enabled);
                   }
                 }
-                // Do not call back into MainApp.refreshButtons here: the native
-                // preview worker may still hold the SipService monitor.
+                // Native work has returned and busy isolation is released; rebuild PiP/UI now.
+                host.refreshMainUi();
               },
               error -> {
-                if (videoCallWindow == expectedWindow && expectedWindow != null) {
+                if (!callPreviews.isBusy()) {
+                  sip.setCameraEnabled(previousEnabled);
+                  cameraToggleBox.setSelected(previousEnabled);
+                  host.cameraStateChanged(previousEnabled);
+                  if (videoCallWindow == expectedWindow && expectedWindow != null)
+                    expectedWindow.setCameraState(previousEnabled);
+                }
+                if (!callPreviews.isBusy() && videoCallWindow == expectedWindow && expectedWindow != null) {
                   expectedWindow.setMediaBusy(false);
                 }
                 LogView logView = host.logs();
                 if (logView != null) {
                   logView.append("警告", "摄像头切换失败：" + error.getMessage());
                 }
+                if (!callPreviews.isBusy()) host.refreshMainUi();
               });
         });
     return cameraToggleBox;
   }
 
   void sync() {
+    if (callPreviews.isBusy()) return;
     SipService sip = host.sip();
     boolean inCall = sip.isInCall();
     boolean connected = sip.isCallConnected();
@@ -235,7 +265,7 @@ final class CallUiCoordinator implements AutoCloseable {
               runSip(sip::hangup);
             },
             muted -> {
-              sip.setAudioMuted(muted);
+              runSip(() -> sip.setAudioMuted(muted));
               if (videoCallWindow != null) {
                 videoCallWindow.setMuted(sip.isAudioMuted());
               }
@@ -274,7 +304,7 @@ final class CallUiCoordinator implements AutoCloseable {
                   },
                   error -> {
                     if (videoCallWindow == expectedWindow) {
-                      expectedWindow.setMediaBusy(false);
+                      if (!callPreviews.isBusy()) expectedWindow.setMediaBusy(false);
                       callPreviewErrorLogged = true;
                       LogView logView = host.logs();
                       if (logView != null) {
@@ -326,7 +356,7 @@ final class CallUiCoordinator implements AutoCloseable {
             connected,
             () -> runSip(sip::hangup),
             muted -> {
-              sip.setAudioMuted(muted);
+              runSip(() -> sip.setAudioMuted(muted));
               if (callWindow != null) {
                 callWindow.setMuted(muted);
               }
@@ -353,11 +383,16 @@ final class CallUiCoordinator implements AutoCloseable {
   }
 
   void answer(boolean video) {
+    if (callPreviews.isBusy()) return;
     incomingAnswered = true;
     closeIncomingWindow();
-    runSip(() -> {
-      host.sip().answer(video);
-      Platform.runLater(this::sync);
+    callPreviews.execute(() -> host.sip().answer(video), () -> {
+      host.refreshMainUi();
+      sync();
+    }, error -> {
+      incomingAnswered = false;
+      if (host.logs() != null) host.logs().append("错误", "接听失败：" + error.getMessage());
+      if (!callPreviews.isBusy()) { host.refreshMainUi(); sync(); }
     });
   }
 

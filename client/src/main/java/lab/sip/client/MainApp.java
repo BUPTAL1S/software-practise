@@ -609,6 +609,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             public void stateChanged() {
               Platform.runLater(
                   () -> {
+                    if (sessionClosed || calls.isBusy()) return;
                     refreshButtons();
                     if (sip.isRegistered()) {
                       if ("tcp".equalsIgnoreCase(transport.getValue())) {
@@ -1055,22 +1056,18 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
     callAudio.setOnAction(
         e -> {
-          run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), false));
-          Platform.runLater(this::syncCallWindow);
+          calls.dial(peer.getText().trim(), domain.getText().trim(), false);
         });
     callVideo.setOnAction(
         e -> {
-          run(() -> sip.call(peer.getText().trim(), domain.getText().trim(), true));
-          Platform.runLater(this::syncCallWindow);
+          calls.dial(peer.getText().trim(), domain.getText().trim(), true);
         });
 
     answerAudio.setOnAction(e -> {
-      run(() -> sip.answer(false));
-      Platform.runLater(this::syncCallWindow);
+      calls.answer(false);
     });
     answerVideo.setOnAction(e -> {
-      run(() -> sip.answer(true));
-      Platform.runLater(this::syncCallWindow);
+      calls.answer(true);
     });
     hangup.setOnAction(e -> run(sip::hangup));
 
@@ -1087,16 +1084,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
     cameraToggleBox = getCameraToggleBox();
 
-    previewBtn.setOnAction(
-        e ->
-            run(
-                () -> {
-                  if (sip.isPreviewActive()) {
-                    sip.stopPreview();
-                  } else {
-                    sip.startPreview();
-                  }
-                }));
+    previewBtn.setOnAction(e -> calls.toggleStandalonePreview());
 
     // 呼叫与拨号面板
     HBox dialRow = new HBox(8);
@@ -1519,7 +1507,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void pollOnlineStatusesAndRoomMessages() {
-    if (sessionClosed) return;
+    if (sessionClosed || calls.isBusy()) return;
     if (!pollInFlight.compareAndSet(false, true)) {
       return;
     }
@@ -1801,7 +1789,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void refreshButtons() {
-    if (sessionClosed) return;
+    if (sessionClosed || calls.isBusy()) return;
     boolean on = sip.isStarted();
     boolean reg = sip.isRegistered();
     boolean incoming = sip.hasIncoming();
@@ -2266,7 +2254,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           String target = getTargetFromCdr(sel);
           if (!target.isEmpty()) {
             peer.setText(target);
-            run(() -> sip.call(target, domain.getText().trim(), false));
+            calls.dial(target, domain.getText().trim(), false);
           }
         });
         videoBtn.setOnAction(e -> {
@@ -2274,7 +2262,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           String target = getTargetFromCdr(sel);
           if (!target.isEmpty()) {
             peer.setText(target);
-            run(() -> sip.call(target, domain.getText().trim(), true));
+            calls.dial(target, domain.getText().trim(), true);
           }
         });
       }
@@ -2326,7 +2314,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         if (!row.isEmpty()) {
           String target = getTargetFromCdr(row.getItem());
           peer.setText(target);
-          run(() -> sip.call(target, domain.getText().trim(), false));
+          calls.dial(target, domain.getText().trim(), false);
         }
       });
 
@@ -2335,7 +2323,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         if (!row.isEmpty()) {
           String target = getTargetFromCdr(row.getItem());
           peer.setText(target);
-          run(() -> sip.call(target, domain.getText().trim(), true));
+          calls.dial(target, domain.getText().trim(), true);
         }
       });
 
@@ -2510,7 +2498,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           HttpFileClient.RoomInfo room = row.getItem();
           if (room != null && room.sipUri() != null) {
             peer.setText(room.sipUri());
-            run(() -> sip.call(room.sipUri(), domain.getText().trim(), true));
+            calls.dial(room.sipUri(), domain.getText().trim(), true);
           }
         }
       });
@@ -2521,7 +2509,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           HttpFileClient.RoomInfo room = row.getItem();
           if (room != null && room.sipUri() != null) {
             peer.setText(room.sipUri());
-            run(() -> sip.call(room.sipUri(), domain.getText().trim(), false));
+            calls.dial(room.sipUri(), domain.getText().trim(), false);
           }
         }
       });
@@ -2624,7 +2612,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           logs.append(
               "操作",
               "加入会议 " + room.sipUri() + "：" + (useVideo ? "视频入会（3×3 混流）" : "语音入会（纯音频）"));
-          run(() -> sip.call(room.sipUri(), dom, useVideo));          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
+          calls.dial(room.sipUri(), dom, useVideo);
+          if (rightTabPane != null && !rightTabPane.getTabs().isEmpty()) {
             rightTabPane.getSelectionModel().select(0);
           }
         }
@@ -2644,7 +2633,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             return;
           }
           logRoomAction("操作", "加入会议 " + room.sipUri() + "：视频入会（3×3 混流）");
-          run(() -> sip.call(room.sipUri(), dom, true));
+          calls.dial(room.sipUri(), dom, true);
         }
       });
 
@@ -2662,7 +2651,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             return;
           }
           logRoomAction("操作", "加入会议 " + room.sipUri() + "：语音入会（纯音频）");
-          run(() -> sip.call(room.sipUri(), dom, false));
+          calls.dial(room.sipUri(), dom, false);
         }
       });
 
@@ -3175,6 +3164,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
    * 之前这里是静默 return，点按钮没有任何反应，用户完全不知道缺什么。
    */
   private String roomJoinBlocker(boolean wantVideo) {
+    if (calls.isBusy()) return "正在处理通话或摄像头，请稍后再试";
     if (!sip.isStarted()) {
       return "引擎还没启动，请先点【启动引擎】，等状态变成已注册后再入会。";
     }

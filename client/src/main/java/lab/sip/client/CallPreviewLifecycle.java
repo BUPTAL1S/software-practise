@@ -61,11 +61,12 @@ final class CallPreviewLifecycle implements AutoCloseable {
     pending.incrementAndGet();
     AtomicBoolean finished = new AtomicBoolean();
     ScheduledFuture<?> watchdog = timeouts.schedule(() -> {
-      if (finished.compareAndSet(false, true)) {
-        stuck = true;
-        pending.decrementAndGet();
-        Platform.runLater(() -> failed.accept(
-            new IOException("摄像头预览超时，已停止等待")));
+      synchronized (this) {
+        if (finished.compareAndSet(false, true)) {
+          stuck = true;
+          Platform.runLater(() -> failed.accept(
+              new IOException("摄像头预览超时，原生操作仍在执行，暂时禁止重复操作")));
+        }
       }
     }, NATIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
@@ -77,17 +78,16 @@ final class CallPreviewLifecycle implements AutoCloseable {
         error = failure;
       }
       final Throwable result = error;
-      if (finished.compareAndSet(false, true)) {
+      synchronized (this) {
+        finished.set(true);
         watchdog.cancel(false);
         pending.decrementAndGet();
-        Platform.runLater(() -> {
-          if (result == null) completed.run(); else failed.accept(result);
-        });
-      } else {
-        // The watchdog already reported the timeout. The native call eventually
-        // returned, so allow a later camera action to try again.
-        stuck = false;
+        if (pending.get() == 0) stuck = false;
       }
+      // Report completion even after a timeout, so the UI can safely release its busy state.
+      Platform.runLater(() -> {
+        if (result == null) completed.run(); else failed.accept(result);
+      });
     });
   }
 
