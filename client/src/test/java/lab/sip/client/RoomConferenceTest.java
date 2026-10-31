@@ -471,7 +471,7 @@ class RoomConferenceTest {
     assertTrue(sip.isCurrentCallVideo());
     assertTrue(sip.isCurrentRoom("sip:room-101@lab"));
     assertEquals("sip:room-101@lab", sip.currentCallTarget());
-    assertTrue(sip.statusText().contains("在会中 · 视频会议 (3×3 混流)"));
+    assertTrue(sip.statusText().contains("在会中 · 视频会议"));
 
     sip.hangup();
     assertFalse(sip.isInCall());

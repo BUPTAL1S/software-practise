@@ -13,7 +13,10 @@ import javafx.application.Platform;
 
 /** Serial native work while JavaFX continues pumping the shared SDL window queue. */
 final class CallPreviewLifecycle implements AutoCloseable {
-  private static final long NATIVE_TIMEOUT_SECONDS = 8;
+  private final long timeoutMillis;
+
+  CallPreviewLifecycle() { this(8000); }
+  CallPreviewLifecycle(long timeoutMillis) { this.timeoutMillis = timeoutMillis; }
 
   private final AtomicInteger pending = new AtomicInteger();
   private volatile boolean stuck;
@@ -28,14 +31,19 @@ final class CallPreviewLifecycle implements AutoCloseable {
     return thread;
   });
 
-  boolean isBusy() { return pending.get() != 0; }
+  boolean isBusy() { return stuck || pending.get() != 0; }
 
   void start(SipService sip, VideoCallWindow window, Runnable completed, Consumer<Throwable> failed) {
     // Only the local preview window is recreated. Detaching the remote child
     // here invalidates its SDL handle while the call is still using it.
     window.detachPip();
     window.setMediaBusy(true);
-    execute(sip::startCallPreview, completed, failed);
+    Object call = sip.callIdentity();
+    execute(() -> {
+      if (sip.callIdentity() != call || !sip.isCameraEnabled()) return;
+      sip.startCallPreview();
+      if (sip.callIdentity() != call || !sip.isCameraEnabled()) sip.stopPreview();
+    }, completed, failed);
   }
 
   void changeCamera(SipService sip, VideoCallWindow window, boolean enabled,
@@ -68,7 +76,7 @@ final class CallPreviewLifecycle implements AutoCloseable {
               new IOException("摄像头预览超时，原生操作仍在执行，暂时禁止重复操作")));
         }
       }
-    }, NATIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }, timeoutMillis, TimeUnit.MILLISECONDS);
 
     worker.execute(() -> {
       Throwable error = null;
