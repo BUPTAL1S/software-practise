@@ -228,6 +228,40 @@ class HttpFileClientTest {
     assertArrayEquals(TEST_FILE_CONTENT, Files.readAllBytes(result));
   }
 
+  @Test void failedDownloadPreservesExistingFileAndDoesNotLeakToken(@TempDir Path dir) throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    client.login("1001", "1001");
+    var foreign = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    var authorization = new java.util.concurrent.atomic.AtomicReference<String>();
+    foreign.createContext("/denied", exchange -> {
+      authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+      exchange.sendResponseHeaders(403, -1); exchange.close();
+    });
+    foreign.start();
+    try {
+      Path target = Files.writeString(dir.resolve("existing.txt"), "keep me");
+      assertThrows(IOException.class, () -> client.downloadFile("http://127.0.0.1:" + foreign.getAddress().getPort() + "/denied", target));
+      assertNull(authorization.get());
+      assertEquals("keep me", Files.readString(target));
+      try (var paths = Files.list(dir)) { assertEquals(1, paths.count()); }
+    } finally { foreign.stop(0); }
+  }
+
+  @Test void thumbnailUsesBackendSession() throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    client.login("1001", "1001");
+    var token = new java.util.concurrent.atomic.AtomicReference<String>();
+    server.createContext("/thumbnail", exchange -> {
+      token.set(exchange.getRequestHeaders().getFirst("Authorization"));
+      exchange.sendResponseHeaders(200, TEST_FILE_CONTENT.length);
+      try (var output = exchange.getResponseBody()) { output.write(TEST_FILE_CONTENT); }
+    });
+    try {
+      assertArrayEquals(TEST_FILE_CONTENT, client.downloadThumbnail("/thumbnail"));
+      assertEquals("Bearer tok-abc-123", token.get());
+    } finally { server.removeContext("/thumbnail"); }
+  }
+
   @Test
   void testDownloadRelativeAndLocalhostRewriting(@TempDir Path tempDir) throws Exception {
     HttpFileClient client = new HttpFileClient(serverBaseUrl);

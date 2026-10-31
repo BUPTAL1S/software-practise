@@ -82,6 +82,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private final Object httpAuthLock = new Object();
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
+  private final AttachmentPreviews attachmentPreviews = new AttachmentPreviews();
 
   public ObservableList<ChatMessage> getOrCreateSession(String target) {
     if (target == null || target.isBlank()) {
@@ -2967,8 +2968,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             if (hasLocal) {
               img = new Image(item.getLocalPath().toUri().toString(), 180, 0, true, true);
             } else {
-              String normUrl = httpFileClient.normalizeFileUrl(fm.getUrl());
-              img = new Image(normUrl, 180, 0, true, true, true);
+              img = null;
+              attachmentPreviews.load(httpFileClient, fm.getUrl()).thenAccept(loaded -> Platform.runLater(() -> {
+                if (getItem() == item && !isEmpty()) previewImageView.setImage(loaded);
+              }));
             }
             previewImageView.setImage(img);
             previewImageView.setVisible(true);
@@ -2983,7 +2986,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                         getHostServices().showDocument(item.getLocalPath().toUri().toString());
                       }
                     } else {
-                      getHostServices().showDocument(httpFileClient.normalizeFileUrl(fm.getUrl()));
+                      handleDownloadFile(item);
                     }
                   } catch (Exception ex) {
                     logs.append("错误", "打开图片失败: " + ex.getMessage());
@@ -3147,6 +3150,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   @Override
   public void stop() throws Exception {
+    attachmentPreviews.close();
     roomCameraUpdates.shutdownNow();
     pollExecutor.shutdownNow();
     calls.close();

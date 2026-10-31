@@ -37,5 +37,6 @@ public class AdminWorkbenchController {
     @GetMapping("/files") public ResponseEntity<?> files(@RequestParam(defaultValue = "100") int limit) {
         return files.list(null, null, limit);
     }
-    @GetMapping("/files/{id}") public ResponseEntity<?> file(@PathVariable Long id) { return files.download(id); }
+    @GetMapping("/files/{id}") public ResponseEntity<?> file(@PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authorization) { return files.download(id, authorization); }
 }
