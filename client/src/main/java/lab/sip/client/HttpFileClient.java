@@ -302,7 +302,7 @@ public final class HttpFileClient {
     if (resp.statusCode() == 200) {
       return parseUsers(resp.body());
     }
-    return List.of();
+    throw new IOException("拉取用户列表失败 (HTTP " + resp.statusCode() + ")");
   }
 
   private static List<UserSummary> parseUsers(String json) {

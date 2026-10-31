@@ -80,6 +80,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private volatile long lastPrivateHistoryPollAt;
   private volatile String privateChatUser = "";
   private final Object httpAuthLock = new Object();
+  private volatile boolean sessionClosed;
+  private volatile boolean backgroundLoginAllowed = true;
+  // JavaFX calls stop() on the original Application even after a new account session starts.
+  private MainApp applicationOwner = this;
+  private MainApp activeSession = this;
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
 
@@ -227,6 +232,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     }
     final String loginPassword = p;
     synchronized (httpAuthLock) {
+      if (sessionClosed || !backgroundLoginAllowed) return false;
       try {
         httpFileClient.setBaseUrl(httpServerField.getText().trim());
         String token = httpFileClient.login(u, loginPassword);
@@ -400,6 +406,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   /** Pull PENDING messages for this user, show them, then acknowledge delivery. */
   private void pollPrivateInbox() {
+    if (sessionClosed) return;
     String me = myUsername();
     if (me.isBlank() || httpFileClient.getAuthToken() == null
         || httpFileClient.getAuthToken().isBlank()) {
@@ -421,6 +428,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                 }
                 Platform.runLater(
                     () -> {
+                      if (sessionClosed) return;
                       for (HttpFileClient.PrivateMessageInfo info : list) {
                         if (info.id() <= 0 || !seenPrivateMessageIds.add(info.id())) {
                           continue;
@@ -491,6 +499,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   /** Refresh delivery states for the currently open private conversation. */
   private void refreshActivePrivateStatuses() {
+    if (sessionClosed) return;
     String target = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
     if (target.isBlank() || target.startsWith("room-") || myUsername().isBlank()
         || httpFileClient.getAuthToken() == null || httpFileClient.getAuthToken().isBlank()) {
@@ -818,6 +827,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       });
   private final java.util.concurrent.atomic.AtomicBoolean pollInFlight =
       new java.util.concurrent.atomic.AtomicBoolean();
+  private final java.util.concurrent.atomic.AtomicBoolean directoryRefreshInFlight =
+      new java.util.concurrent.atomic.AtomicBoolean();
   private final CallUiCoordinator calls = new CallUiCoordinator(this);
 
   private String campusIp = "";
@@ -836,8 +847,15 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   @Override
   public void start(Stage stage) {
-    this.primaryStage = stage;
     Map<String, String> named = (getParameters() != null) ? getParameters().getNamed() : Map.of();
+    boolean loginRequired = getParameters() != null && !named.containsKey("snapshot")
+        && System.getProperty("ui.snapshot") == null;
+    startSession(stage, named, loginRequired);
+  }
+
+  private void startSession(Stage stage, Map<String, String> named, boolean loginRequired) {
+    this.primaryStage = stage;
+    backgroundLoginAllowed = !loginRequired;
     LocalPrefs.load();
     campusIp = CampusLan.detect();
     ConnectionDefaults.Settings defaults = ConnectionDefaults.resolve(
@@ -1226,8 +1244,12 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     stage.setScene(scene);
 
     Timeline probeAndPollTimeline =
-        new Timeline(new KeyFrame(Duration.millis(2500), e -> pollOnlineStatusesAndRoomMessages()));
+        new Timeline(new KeyFrame(Duration.millis(2500), e -> {
+          refreshDirectory();
+          pollOnlineStatusesAndRoomMessages();
+        }));
     probeAndPollTimeline.setCycleCount(Animation.INDEFINITE);
+    assembler.setOnLogout(() -> logoutToLogin(probeAndPollTimeline, roomPollingTimeline));
 
     stage.setOnCloseRequest(
         e -> {
@@ -1276,8 +1298,6 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           watchdog.setDaemon(true);
           watchdog.start();
         });
-    boolean loginRequired = getParameters() != null && !named.containsKey("snapshot")
-        && System.getProperty("ui.snapshot") == null;
     if (loginRequired) {
       LoginView[] login = new LoginView[1];
       login[0] = new LoginView(user.getText(), server.getText(), httpServerField.getText(),
@@ -1409,6 +1429,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           httpStatusBadge.setText("后台: 已登录");
           httpStatusBadge.getStyleClass().setAll("badge-online");
           privateChatUser = credentials.username();
+          backgroundLoginAllowed = true;
           privateHistoryLoaded.clear(); seenPrivateMessageIds.clear(); privateMessagesById.clear();
           refreshMyProfile();
           refreshButtons(); refreshRooms();
@@ -1421,6 +1442,64 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       }
     }, "account-login");
     thread.setDaemon(true); thread.start();
+  }
+
+  private void logoutToLogin(Timeline polling, Timeline roomPolling) {
+    if (sessionClosed) return;
+    sessionClosed = true;
+    backgroundLoginAllowed = false;
+    polling.stop();
+    roomPolling.stop();
+    logs.dockBack();
+    // Capture connection settings only. Passwords and account data stay with the retired session.
+    Map<String, String> settings = Map.of(
+        "user", user.getText().trim(), "server", server.getText().trim(),
+        "http", httpServerField.getText().trim(), "port", sipPort.getText().trim(),
+        "domain", domain.getText().trim(), "transport", transport.getValue(),
+        "peer", peer.getText().trim());
+    password.clear();
+    for (javafx.stage.Window window : new ArrayList<>(javafx.stage.Window.getWindows())) {
+      if (window instanceof Stage child && child.getOwner() == primaryStage) child.close();
+    }
+    Label status = new Label("正在退出登录并释放通话连接…");
+    status.setWrapText(true);
+    Button retry = new Button("重试退出登录");
+    retry.setVisible(false);
+    VBox progress = new VBox(16, status, retry);
+    progress.setAlignment(Pos.CENTER);
+    progress.setPadding(new Insets(40));
+    primaryStage.setTitle("退出登录 · SIP Connect");
+    primaryStage.setScene(new Scene(progress, 860, 660));
+    Runnable finishLogout = () -> {
+      retry.setVisible(false);
+      Thread worker = new Thread(() -> {
+        try {
+          // Keep the native engine's existing teardown, including hangup/unregister.
+          sip.shutdown();
+          synchronized (httpAuthLock) { httpFileClient.logout(); }
+          Platform.runLater(() -> {
+            if (!primaryStage.isShowing()) return;
+            calls.close();
+            roomCameraUpdates.shutdownNow();
+            // Let already queued HTTP work drain against the retired session, never the new account.
+            pollExecutor.shutdown();
+            MainApp next = new MainApp();
+            next.applicationOwner = applicationOwner;
+            applicationOwner.activeSession = next;
+            next.startSession(primaryStage, settings, true);
+          });
+        } catch (Throwable error) {
+          Platform.runLater(() -> {
+            status.setText("退出时释放通话连接失败，请重试：" + error.getMessage());
+            retry.setVisible(true);
+          });
+        }
+      }, "account-logout");
+      worker.setDaemon(true);
+      worker.start();
+    };
+    retry.setOnAction(e -> finishLogout.run());
+    finishLogout.run();
   }
 
   private void refreshMyProfile() {
@@ -1437,6 +1516,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void pollOnlineStatusesAndRoomMessages() {
+    if (sessionClosed) return;
     if (!pollInFlight.compareAndSet(false, true)) {
       return;
     }
@@ -1718,6 +1798,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void refreshButtons() {
+    if (sessionClosed) return;
     boolean on = sip.isStarted();
     boolean reg = sip.isRegistered();
     boolean incoming = sip.hasIncoming();
@@ -1947,6 +2028,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
 
   private void performLogin(boolean silent) {
+    if (sessionClosed || !backgroundLoginAllowed) return;
     String url = httpServerField.getText().trim();
     String u = user.getText().trim();
     String p = password.getText();
@@ -1969,7 +2051,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                 httpFileClient.setBaseUrl(url);
               }
               try {
-                String token = httpFileClient.login(u, p);
+                String token;
+                synchronized (httpAuthLock) {
+                  if (sessionClosed || !backgroundLoginAllowed) return;
+                  token = httpFileClient.login(u, p);
+                }
                 Platform.runLater(
                     () -> {
                       httpStatusBadge.setText("后台: 已登录");
@@ -2651,23 +2737,20 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
    * users never appeared in the sidebar.
    */
   private void refreshDirectory() {
+    if (sessionClosed) return;
+    if (!directoryRefreshInFlight.compareAndSet(false, true)) return;
     String httpUrl = httpServerField.getText().trim();
     httpFileClient.setBaseUrl(httpUrl);
     new Thread(
             () -> {
               try {
                 List<HttpFileClient.UserSummary> users = httpFileClient.fetchUsers();
-                if (users.isEmpty()) {
-                  // fetchUsers() returns an empty list for both "no users" and
-                  // an expired token; try a lazy re-login once.
-                  reloginHttp();
-                  users = httpFileClient.fetchUsers();
-                }
                 List<HttpFileClient.RoomInfo> rooms = httpFileClient.fetchRooms();
                 final List<HttpFileClient.UserSummary> finalUsers = users;
                 final List<HttpFileClient.RoomInfo> finalRooms = rooms;
                 Platform.runLater(
                     () -> {
+                      if (sessionClosed) return;
                       if (roomRefreshFailed) {
                         logs.append("系统", "刷新通讯录已恢复正常");
                         roomRefreshFailed = false;
@@ -2678,7 +2761,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                       if (roomCountBadge != null) {
                         roomCountBadge.setText(finalRooms.size() + " 间");
                       }
-                      if (assembler != null && !finalUsers.isEmpty()) {
+                      if (assembler != null) {
                         assembler.rebuildDirectory(
                             finalUsers,
                             finalRooms,
@@ -2697,6 +2780,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                         logs.append("警告", "刷新通讯录失败: " + ex.getMessage());
                       }
                     });
+              } finally {
+                directoryRefreshInFlight.set(false);
               }
             },
             "directory-refresh")
@@ -2849,6 +2934,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   class ChatMessageCell extends ListCell<ChatMessage> {
+    private final VBox timelineRow = new VBox(8);
+    private final Label dateLabel = new Label();
+    private final HBox dateRow = new HBox(dateLabel);
     private final VBox root = new VBox(4);
     private final HBox header = new HBox(8);
     private final Label metaLabel = new Label();
@@ -2867,6 +2955,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     }
 
     ChatMessageCell() {
+      dateRow.setAlignment(Pos.CENTER);
+      dateRow.getStyleClass().add("chat-date-divider");
+      dateLabel.getStyleClass().add("chat-date-label");
+      timelineRow.getChildren().addAll(dateRow, root);
       metaLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px;");
       statusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #94A3B8;");
       textLabel.setWrapText(true);
@@ -2895,8 +2987,27 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     }
 
     @Override
+    public void updateIndex(int index) {
+      super.updateIndex(index);
+      updateDateSeparator();
+    }
+
+    private void updateDateSeparator() {
+      ChatMessage item = getItem();
+      int index = getIndex();
+      var items = getListView() == null ? null : getListView().getItems();
+      boolean show = !isEmpty() && item != null && index >= 0 && items != null
+          && index < items.size() && (index == 0
+              || !item.formatDate().equals(items.get(index - 1).formatDate()));
+      dateLabel.setText(show ? item.formatDate() : "");
+      dateRow.setVisible(show);
+      dateRow.setManaged(show);
+    }
+
+    @Override
     public void updateItem(ChatMessage item, boolean empty) {
       super.updateItem(item, empty);
+      updateDateSeparator();
       if (empty || item == null) {
         setGraphic(null);
         return;
@@ -3021,7 +3132,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         textLabel.setText(item.getText());
       }
 
-      setGraphic(root);
+      setGraphic(timelineRow);
     }
   }
 
@@ -3142,6 +3253,12 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   @Override
   public void stop() throws Exception {
+    if (activeSession != this) {
+      activeSession.stop();
+      return;
+    }
+    sessionClosed = true;
+    backgroundLoginAllowed = false;
     roomCameraUpdates.shutdownNow();
     pollExecutor.shutdownNow();
     calls.close();

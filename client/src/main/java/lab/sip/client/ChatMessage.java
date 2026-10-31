@@ -13,6 +13,8 @@ import java.util.Objects;
 public final class ChatMessage {
   private static final DateTimeFormatter TIME_FMT =
       DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
+  private static final DateTimeFormatter DATE_FMT =
+      DateTimeFormatter.ofPattern("yyyy年M月d日").withZone(ZoneId.systemDefault());
 
   private final String sender;
   private final String receiver;
@@ -90,6 +92,10 @@ public final class ChatMessage {
 
   public String formatTime() {
     return TIME_FMT.format(timestamp);
+  }
+
+  public String formatDate() {
+    return DATE_FMT.format(timestamp);
   }
 
   public String getStatus() {

@@ -70,6 +70,9 @@
     .btn-primary:hover { background: var(--primary-hover); }
     .btn-accent { background: var(--accent); color: #fff; }
     .btn-accent:hover { background: var(--accent-hover); }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
     .btn-outline:hover { background: #334155; }
     .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -414,6 +417,24 @@
   <div id="tab-users" class="tab-content">
     <div class="card">
       <div class="card-title">
+        <span>管理员 · 用户管理</span>
+        <span class="badge badge-gray" id="userAdminBadge">未登录</span>
+      </div>
+      <form class="form-inline" onsubmit="userAdminLogin(event)">
+        <div class="input-group">
+          <label class="input-label" for="userAdminName">管理员账号:</label>
+          <input id="userAdminName" value="1001" autocomplete="username" required style="width: 110px;">
+        </div>
+        <div class="input-group">
+          <label class="input-label" for="userAdminPassword">密码:</label>
+          <input type="password" id="userAdminPassword" autocomplete="current-password" required style="width: 140px;">
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">登录管理</button>
+      </form>
+      <div style="font-size:12px; color:var(--text-muted);">登录管理员后可删除普通用户。删除后，该账号无法登录后台，客户端联系人会自动同步移除；历史聊天、文件和通话记录保留。管理员账号受保护。</div>
+    </div>
+    <div class="card">
+      <div class="card-title">
         <span>快速注册 / 添加用户</span>
       </div>
       <form class="form-inline" onsubmit="handleRegisterUser(event)">
@@ -446,10 +467,11 @@
               <th>用户名</th>
               <th>SIP 分机号 (sip_id)</th>
               <th>后台会话状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody id="usersTableBody">
-            <tr><td colspan="4" class="empty-state">加载中...</td></tr>
+            <tr><td colspan="5" class="empty-state">加载中...</td></tr>
           </tbody>
         </table>
         <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">注：此处显示 HTTP 业务管理后台会话状态（2小时无操作自动过期）；SIP 语音与视频通话信令在线状态请以客户端 Kamailio 注册为准。</div>
@@ -584,6 +606,7 @@
     </div>
   </div>
 
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script>
     if (location.protocol === 'file:') {
       document.body.innerHTML =
@@ -836,21 +859,31 @@
 
         const tbody = document.getElementById('usersTableBody');
         if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="4" class="empty-state">暂无用户</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="5" class="empty-state">暂无用户</td></tr>`;
           return;
         }
 
         tbody.innerHTML = list.map(u => {
           const isOnline = onlineSet.has(u.username) || onlineSet.has(u.sipId);
+          const protectedUser = String(u.role || '').toUpperCase() === 'ADMIN';
+          const deleting = pendingUserDeletes.has(u.id);
           return `
           <tr>
             <td><span class="badge badge-gray">#${u.id}</span></td>
-            <td><strong>${u.username}</strong></td>
-            <td><span class="badge badge-primary text-mono">${u.sipId || u.sip_id || u.username}</span></td>
+            <td><strong>${escapeHtml(u.username)}</strong></td>
+            <td><span class="badge badge-primary text-mono">${escapeHtml(u.sipId || u.sip_id || u.username)}</span></td>
             <td><span class="badge ${isOnline ? 'badge-success' : 'badge-gray'}" title="${isOnline ? '持有有效后台会话 (2小时自动过期)' : '未登录后台或会话已超时'}">${isOnline ? '后台已登录' : '未登录后台'}</span></td>
+            <td><button class="btn btn-danger btn-sm" data-delete-user-id="${u.id}"
+              ${protectedUser || !userAdmin || deleting ? 'disabled' : ''}
+              title="${protectedUser ? '管理员账号受保护' : !userAdmin ? '请先登录管理员' : '删除此用户'}">
+              ${protectedUser ? '管理员受保护' : deleting ? '正在删除…' : '删除用户'}</button></td>
           </tr>
         `;
         }).join('');
+        tbody.querySelectorAll('[data-delete-user-id]').forEach(button => {
+          const user = list.find(u => String(u.id) === button.dataset.deleteUserId);
+          button.addEventListener('click', () => deleteUser(user.id, user.username));
+        });
       } catch (err) {
         console.error('Users error:', err);
       }
@@ -918,6 +951,76 @@
     }
 
     let chatAdminToken = sessionStorage.getItem('chatAdminToken') || '';
+    let userAdmin = null;
+    const pendingUserDeletes = new Set();
+
+    function setAdminSession(me, token = '') {
+      userAdmin = me;
+      chatAdminToken = token;
+      if (token) sessionStorage.setItem('chatAdminToken', token);
+      else sessionStorage.removeItem('chatAdminToken');
+      for (const id of ['userAdminBadge', 'chatLoginBadge']) {
+        const badge = document.getElementById(id);
+        badge.innerText = me ? '管理员 ' + me.username : '未登录';
+        badge.className = 'badge ' + (me ? 'badge-success' : 'badge-gray');
+      }
+    }
+
+    async function authenticateAdmin(username, password) {
+      setAdminSession(null);
+      if (!username || !password) throw new Error('请填写管理员账号和密码');
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '登录失败');
+      const meRes = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + data.token}});
+      const me = await meRes.json();
+      if (!meRes.ok || String(me.role || '').toUpperCase() !== 'ADMIN')
+        throw new Error('只有管理员可以管理用户和查看聊天记录');
+      setAdminSession(me, data.token);
+    }
+
+    async function userAdminLogin(event) {
+      event.preventDefault();
+      try {
+        await authenticateAdmin(document.getElementById('userAdminName').value.trim(),
+            document.getElementById('userAdminPassword').value);
+        document.getElementById('userAdminPassword').value = '';
+        showToast('管理员登录成功');
+      } catch (error) { showToast('登录失败: ' + error.message, true); }
+      await loadUsers();
+    }
+
+    async function restoreAdminSession() {
+      if (!chatAdminToken) return;
+      try {
+        const res = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + chatAdminToken}});
+        const me = await res.json();
+        if (!res.ok || String(me.role || '').toUpperCase() !== 'ADMIN') throw new Error('expired');
+        setAdminSession(me, chatAdminToken);
+      } catch (error) { setAdminSession(null); }
+    }
+
+    async function deleteUser(id, username) {
+      if (!userAdmin || !chatAdminToken) { showToast('请先登录管理员', true); return; }
+      if (pendingUserDeletes.has(id)) return;
+      if (!confirm(`确定删除用户 ${username} 吗？\n该账号将无法登录后台，客户端联系人会自动移除。\n历史聊天、文件和通话记录保留。此操作不可撤销。`)) return;
+      pendingUserDeletes.add(id);
+      const button = document.querySelector(`[data-delete-user-id="${id}"]`);
+      if (button) { button.disabled = true; button.innerText = '正在删除…'; }
+      try {
+        const res = await fetch('/api/users/' + encodeURIComponent(id), {
+          method: 'DELETE', headers: {Authorization: 'Bearer ' + chatAdminToken}
+        });
+        const data = await res.json();
+        if (res.status === 401 || res.status === 403) setAdminSession(null);
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('用户 ' + username + ' 已删除，客户端联系人将自动同步');
+      } catch (error) { showToast('删除失败: ' + error.message, true); }
+      finally { pendingUserDeletes.delete(id); await loadUsers(); }
+    }
 
     function escapeHtml(s) {
       return String(s == null ? '' : s)
@@ -940,26 +1043,9 @@
         return;
       }
       try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({username, password})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '登录失败');
-        chatAdminToken = data.token || '';
-        const meRes = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + chatAdminToken}});
-        const me = await meRes.json();
-        if (!meRes.ok || String(me.role || '').toUpperCase() !== 'ADMIN') {
-          chatAdminToken = '';
-          sessionStorage.removeItem('chatAdminToken');
-          document.getElementById('chatLoginBadge').innerText = '无权限';
-          showToast('只有管理员 1001 可以查看聊天记录', true);
-          return;
-        }
-        sessionStorage.setItem('chatAdminToken', chatAdminToken);
-        document.getElementById('chatLoginBadge').innerText = '管理员 ' + me.username;
-        document.getElementById('chatLoginBadge').className = 'badge badge-success';
+        await authenticateAdmin(username, password);
+        document.getElementById('chatAdminPass').value = '';
+        await loadUsers();
         await loadChatMessages();
         await loadRoomChatMessages();
       } catch (err) {
@@ -984,10 +1070,7 @@
           headers: {Authorization: 'Bearer ' + chatAdminToken}
         });
         if (res.status === 401 || res.status === 403) {
-          chatAdminToken = '';
-          sessionStorage.removeItem('chatAdminToken');
-          document.getElementById('chatLoginBadge').innerText = '未登录';
-          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          setAdminSession(null);
           const message = res.status === 401
             ? '登录已过期，请重新用 1001 登录'
             : '只有管理员 1001 可以查看聊天记录';
@@ -1035,10 +1118,7 @@
           headers: {Authorization: 'Bearer ' + chatAdminToken}
         });
         if (res.status === 401 || res.status === 403) {
-          chatAdminToken = '';
-          sessionStorage.removeItem('chatAdminToken');
-          document.getElementById('chatLoginBadge').innerText = '未登录';
-          document.getElementById('chatLoginBadge').className = 'badge badge-gray';
+          setAdminSession(null);
           tbody.innerHTML = '<tr><td colspan="6" class="empty-state">登录已过期，请重新登录</td></tr>';
           if (badge) badge.innerText = '0 条';
           return;
@@ -1111,7 +1191,8 @@
       }
     }
 
-    window.onload = function() {
+    window.onload = async function() {
+      await restoreAdminSession();
       loadAllData();
       toggleAutoRefresh(true);
     };

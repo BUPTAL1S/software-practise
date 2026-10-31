@@ -85,6 +85,9 @@ class CallConnectedNotificationTest {
             if (request.startsWith("REGISTER ") || request.startsWith("BYE ")) {
               respond(request, packet.getSocketAddress(), "200 OK", "");
               if (request.startsWith("BYE ")) bye.countDown();
+            } else if (request.startsWith("INFO ") || request.startsWith("OPTIONS ") || request.startsWith("UPDATE ")) {
+              // Keyframe requests/session maintenance must not expire the long-running fixture call.
+              respond(request, packet.getSocketAddress(), "200 OK", "");
             } else if (request.startsWith("INVITE ")) {
               invite = request;
               caller = packet.getSocketAddress();
