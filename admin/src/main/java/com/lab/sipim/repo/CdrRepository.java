@@ -18,6 +18,9 @@ public interface CdrRepository extends JpaRepository<Cdr, Long> {
 
     List<Cdr> findByCallId(String callId);
 
+    @Query("SELECT c FROM Cdr c WHERE LOWER(c.calleeOrRoom) LIKE 'room%' OR LOWER(c.calleeOrRoom) LIKE 'sip:room%'")
+    List<Cdr> findRoomCalls();
+
     @Query("SELECT c FROM Cdr c WHERE c.caller = :caller AND c.calleeOrRoom = :callee AND c.startedAt >= :since AND c.startedAt <= :until ORDER BY c.id DESC")
     List<Cdr> findDuplicates(
             @Param("caller") String caller,

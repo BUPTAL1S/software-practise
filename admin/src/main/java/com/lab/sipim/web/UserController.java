@@ -82,7 +82,7 @@ public class UserController {
         if (caller.isEmpty()) {
             return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
         }
-        if (!"ADMIN".equalsIgnoreCase(caller.get().getRole())) {
+        if (!com.lab.sipim.security.ApiAccessPolicy.isAdmin(caller.get())) {
             return ResponseEntity.status(403).body(Map.of("error", "仅管理员可以删除用户"));
         }
         Optional<User> found = users.findById(id);

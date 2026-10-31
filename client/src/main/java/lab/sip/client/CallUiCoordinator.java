@@ -34,6 +34,9 @@ final class CallUiCoordinator implements AutoCloseable {
 
     void refreshMainUi();
 
+    /** Update cached UI state only; never query the native engine from this callback. */
+    default void cameraStateChanged(boolean enabled) {}
+
     @FunctionalInterface
     interface Throwing {
       void run() throws Exception;
@@ -92,6 +95,7 @@ final class CallUiCoordinator implements AutoCloseable {
           boolean enabled = cameraToggleBox.isSelected();
           callPreviewErrorLogged = false;
           sip.setCameraEnabled(enabled);
+          host.cameraStateChanged(enabled);
           if (videoCallWindow != null) {
             videoCallWindow.setCameraState(enabled);
           }

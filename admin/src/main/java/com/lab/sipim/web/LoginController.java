@@ -79,7 +79,7 @@ public class LoginController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
+    public synchronized ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
         if (request == null || blank(request.username()) || blank(request.password())) {
             return ResponseEntity.badRequest().body(Map.of("error", MISSING));
         }
@@ -89,10 +89,12 @@ public class LoginController {
                 ? request.sipId().trim()
                 : username;
 
-        if (users.findByUsername(username).isPresent()) {
+        // Usernames and extensions are both accepted as identities. Reserve the
+        // entire alias namespace so a new account cannot claim another user's extension/name.
+        if (users.findByUsername(username).isPresent() || users.findBySipId(username).isPresent()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "username already exists"));
         }
-        if (users.findBySipId(sipId).isPresent()) {
+        if (users.findBySipId(sipId).isPresent() || users.findByUsername(sipId).isPresent()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "sipId already exists"));
         }
 

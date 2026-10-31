@@ -1,6 +1,5 @@
 package lab.sip.client;
 
-import java.io.PrintWriter;
 import org.pjsip.pjsua2.LogEntry;
 import org.pjsip.pjsua2.LogWriter;
 
@@ -12,12 +11,12 @@ final class SipLogWriter extends LogWriter {
 
   private final SipEvents events;
   private final ByeListener byeListener;
-  private PrintWriter fileSink;
-  private boolean fileSinkInit;
+  private final AsyncLogFile fileSink;
 
   SipLogWriter(SipEvents events, ByeListener byeListener) {
     this.events = events;
     this.byeListener = byeListener;
+    this.fileSink = AsyncLogFile.fromEnvironment();
   }
 
   @Override
@@ -44,20 +43,12 @@ final class SipLogWriter extends LogWriter {
   }
 
   private void mirrorToFile(String msg) {
-    if (!fileSinkInit) {
-      fileSinkInit = true;
-      String path = System.getenv("UI_LOG_FILE");
-      if (path != null && !path.isBlank()) {
-        try {
-          fileSink = new PrintWriter(new java.io.FileWriter(path, true), true);
-        } catch (Throwable ignored) {
-          fileSink = null;
-        }
-      }
-    }
-    if (fileSink != null) {
-      fileSink.println(msg);
-    }
+    if (fileSink != null) fileSink.offer(msg);
+  }
+
+  @Override public synchronized void delete() {
+    if (fileSink != null) fileSink.close();
+    super.delete();
   }
 
   private boolean forwardSipDump(String msg) {
@@ -75,7 +66,6 @@ final class SipLogWriter extends LogWriter {
     if (summary.isEmpty()) {
       summary = compactPjsipHeader(msg);
     }
-    events.sip(tx, summary, msg);
     if (rx && msg.contains("Response msg ") && msg.contains("/BYE/") && summary.startsWith("SIP/2.0 ")) {
       String[] parts = summary.split("\\s+", 3);
       try {
@@ -87,6 +77,7 @@ final class SipLogWriter extends LogWriter {
         // not a status line
       }
     }
+    events.sip(tx, summary, msg);
     return true;
   }
 

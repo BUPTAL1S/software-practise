@@ -765,6 +765,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private Button callAudio;
   private Button callVideo;
   private Button previewBtn;
+  private boolean previewAvailable;
+  private boolean previewInCall;
+  private String previewCameraOnText = "摄像头预览";
   private Button answerAudio;
   private Button answerVideo;
   private Button hangup;
@@ -1842,16 +1845,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       cameraToggleBox.getStyleClass().setAll("camera-toggle-btn", cameraOn ? "camera-toggle-on" : "camera-toggle-off");
     }
     if (previewBtn != null) {
-      previewBtn.setDisable(!on || !videoSupported || !hasCapture || !cameraOn || sip.isInCall());
-      if (sip.isInCall()) {
-        previewBtn.setText("通话中请用摄像头开关");
-      } else if (!cameraOn) {
-        previewBtn.setText("摄像头已禁用");
-      } else if (!hasCapture && videoSupported) {
-        previewBtn.setText("无摄像头");
-      } else {
-        previewBtn.setText(sip.isPreviewActive() ? "关闭预览" : "摄像头预览");
-      }
+      previewAvailable = on && videoSupported && hasCapture;
+      previewInCall = sip.isInCall();
+      previewCameraOnText = !hasCapture && videoSupported ? "无摄像头"
+          : sip.isPreviewActive() ? "关闭预览" : "摄像头预览";
+      cameraStateChanged(cameraOn);
     }
 
     if (startEngine == null) {
@@ -2882,6 +2880,13 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   @Override
   public void refreshMainUi() {
     refreshButtons();
+  }
+
+  @Override public void cameraStateChanged(boolean enabled) {
+    if (previewBtn == null) return;
+    previewBtn.setDisable(!previewAvailable || !enabled || previewInCall);
+    previewBtn.setText(previewInCall ? "通话中请用摄像头开关"
+        : enabled ? previewCameraOnText : "摄像头已禁用");
   }
 
   private void run(Throwing action) {

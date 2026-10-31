@@ -72,7 +72,6 @@
     .btn-accent:hover { background: var(--accent-hover); }
     .btn-danger { background: #dc2626; color: #fff; }
     .btn-danger:hover { background: #b91c1c; }
-    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
     .btn-outline:hover { background: #334155; }
     .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -245,25 +244,50 @@
       display: none;
       z-index: 1000;
     }
+    [hidden] { display: none !important; }
+    .auth-card { max-width: 400px; margin: 12vh auto; }
+    .auth-card h1 { font-size: 24px; margin-bottom: 8px; }
+    .auth-card label { display: block; margin-top: 16px; }
+    .auth-card input { width: 100%; margin: 6px 0; padding: 10px; }
+    .auth-card button { width: 100%; justify-content: center; margin-top: 18px; }
+    .section-note, .data-status { font-size: 12px; color: var(--text-muted); margin: 8px 0; }
+    .error-text { color: #fca5a5; }
+    .header-actions { flex-wrap: wrap; }
+    .btn:disabled { opacity: .55; cursor: wait; }
   </style>
 </head>
 <body>
 
+  <section id="loginPanel" class="card auth-card" aria-labelledby="loginTitle">
+    <h1 id="loginTitle">管理工作台</h1>
+    <p class="section-note">请使用管理员账号 1001 登录。</p>
+    <form id="loginForm" method="post" action="/api/admin/login">
+      <label for="adminUser">管理员账号</label>
+      <input id="adminUser" name="username" autocomplete="username" value="1001" required>
+      <label for="adminPassword">密码</label>
+      <input id="adminPassword" name="password" type="password" autocomplete="current-password" required>
+      <p id="loginError" class="error-text" role="alert"></p>
+      <button type="submit" class="btn btn-primary">登录工作台</button>
+    </form>
+  </section>
+  <main id="workbench" hidden>
   <div class="header">
     <div class="header-title">
       <h1><span>📡</span> Java SIP & Admin 控制台</h1>
       <p>Spring Boot 3.3 · SQLite · 阶段 5 房间 MCU 与 ESL 人数统计大盘</p>
     </div>
     <div class="header-actions">
-      <span id="syncStatus" class="badge badge-success">● 系统在线</span>
-      <span id="eslStatus" class="badge badge-gray">● ESL 监听中</span>
-      <button class="btn btn-outline btn-sm" onclick="loadAllData()">🔄 刷新数据</button>
+      <span id="adminIdentity" class="badge badge-gray"></span><button id="logoutButton" class="btn btn-outline btn-sm">退出登录</button>
+      <span id="syncStatus" class="badge badge-gray">● 尚未连接</span>
+      <span id="eslStatus" class="badge badge-gray">● ESL 状态未知</span>
+      <button class="btn btn-outline btn-sm" id="refreshAll">🔄 刷新数据</button>
       <label style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
-        <input type="checkbox" id="autoRefreshToggle" checked onchange="toggleAutoRefresh(this.checked)"> 自动刷新 (5s)
+        <input type="checkbox" id="autoRefreshToggle" checked > 自动刷新 (5s)
       </label>
     </div>
   </div>
 
+  <p id="syncDetails" class="section-note" role="status">尚未更新</p>
   <!-- 看板指标卡片 -->
   <div class="stats-grid">
     <div class="stat-card">
@@ -310,15 +334,16 @@
 
   <!-- 选项卡切换 -->
   <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('tab-cdr')">📞 通话记录 (CDR)</button>
-    <button class="tab-btn" onclick="switchTab('tab-rooms')">👥 会议房间 (Rooms)</button>
-    <button class="tab-btn" onclick="switchTab('tab-users')">👤 用户列表 (Users)</button>
-    <button class="tab-btn" onclick="switchTab('tab-files')">📁 文件记录 (Files)</button>
-    <button class="tab-btn" onclick="switchTab('tab-chat')">💬 聊天记录 (仅 1001)</button>
+    <button class="tab-btn active" data-tab="tab-cdr">📞 通话记录 (CDR)</button>
+    <button class="tab-btn" data-tab="tab-rooms">👥 会议房间 (Rooms)</button>
+    <button class="tab-btn" data-tab="tab-users">👤 用户列表 (Users)</button>
+    <button class="tab-btn" data-tab="tab-files">📁 文件记录 (Files)</button>
+    <button class="tab-btn" data-tab="tab-chat">💬 聊天记录 (仅 1001)</button>
   </div>
 
   <!-- Tab 1: 通话记录 -->
   <div id="tab-cdr" class="tab-content active">
+    <p id="dataStatus-cdr" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
         <span>通话话单列表 (CDR)</span>
@@ -341,8 +366,8 @@
             <option value="200">200 条</option>
           </select>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="loadCdrList()">查询筛选</button>
-        <button class="btn btn-outline btn-sm" onclick="resetCdrFilter()">重置</button>
+        <button class="btn btn-primary btn-sm" id="queryCdr">查询筛选</button>
+        <button class="btn btn-outline btn-sm" id="resetCdr">重置</button>
       </div>
 
       <div style="overflow-x: auto;">
@@ -367,18 +392,19 @@
 
   <!-- Tab 2: 会议房间 -->
   <div id="tab-rooms" class="tab-content">
+    <p id="dataStatus-rooms" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
         <span>新建研讨/会议房间</span>
       </div>
-      <form class="form-inline" onsubmit="handleCreateRoom(event)">
+      <form class="form-inline" id="roomForm">
         <div class="input-group">
           <span class="input-label">房间名称:</span>
           <input type="text" id="roomNameInput" placeholder="如 研发周会室" required>
         </div>
         <div class="input-group">
           <span class="input-label">最大容纳人数:</span>
-          <input type="number" id="roomMaxMembersInput" value="8" min="2" max="16" style="width: 80px;">
+          <input type="number" id="roomMaxMembersInput" value="8" min="8" max="8" readonly aria-label="会议室人数固定为8人" style="width: 80px;">
         </div>
         <div class="input-group">
           <span class="input-label">自定义 URI (可选):</span>
@@ -415,29 +441,13 @@
 
   <!-- Tab 3: 用户列表 -->
   <div id="tab-users" class="tab-content">
-    <div class="card">
-      <div class="card-title">
-        <span>管理员 · 用户管理</span>
-        <span class="badge badge-gray" id="userAdminBadge">未登录</span>
-      </div>
-      <form class="form-inline" onsubmit="userAdminLogin(event)">
-        <div class="input-group">
-          <label class="input-label" for="userAdminName">管理员账号:</label>
-          <input id="userAdminName" value="1001" autocomplete="username" required style="width: 110px;">
-        </div>
-        <div class="input-group">
-          <label class="input-label" for="userAdminPassword">密码:</label>
-          <input type="password" id="userAdminPassword" autocomplete="current-password" required style="width: 140px;">
-        </div>
-        <button type="submit" class="btn btn-primary btn-sm">登录管理</button>
-      </form>
-      <div style="font-size:12px; color:var(--text-muted);">登录管理员后可删除普通用户。删除后，该账号无法登录后台，客户端联系人会自动同步移除；历史聊天、文件和通话记录保留。管理员账号受保护。</div>
-    </div>
+    <p id="dataStatus-users" class="data-status" role="status">等待更新</p>
+    <p class="section-note">管理员可删除普通用户。删除后账号无法登录后台，客户端联系人自动同步移除；历史聊天、文件和通话记录保留。管理员账号受保护。</p>
     <div class="card">
       <div class="card-title">
         <span>快速注册 / 添加用户</span>
       </div>
-      <form class="form-inline" onsubmit="handleRegisterUser(event)">
+      <form class="form-inline" id="registerForm">
         <div class="input-group">
           <span class="input-label">用户名:</span>
           <input type="text" id="regUsername" placeholder="如 1009" required style="width: 110px;">
@@ -481,6 +491,7 @@
 
   <!-- Tab 4: 文件传输记录 -->
   <div id="tab-files" class="tab-content">
+    <p id="dataStatus-files" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
         <span>文件传输索引 (Files)</span>
@@ -509,22 +520,13 @@
 
   <!-- Tab 5: 私聊记录（仅管理员 1001） -->
   <div id="tab-chat" class="tab-content">
+    <p id="dataStatus-chat" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
         <span>私聊记录查询（仅管理员 1001 可见）</span>
         <span class="badge badge-primary" id="chatLoginBadge">未登录</span>
       </div>
-      <div class="form-inline">
-        <div class="input-group">
-          <span class="input-label">管理员账号:</span>
-          <input type="text" id="chatAdminUser" value="1001" style="width: 90px;">
-        </div>
-        <div class="input-group">
-          <span class="input-label">密码:</span>
-          <input type="password" id="chatAdminPass" placeholder="1001" style="width: 110px;">
-        </div>
-        <button class="btn btn-primary btn-sm" onclick="chatAdminLogin()">登录并查询</button>
-      </div>
+      <p class="section-note">已使用工作台管理员会话，无需重复登录。</p>
       <div class="form-inline" style="margin-top: 8px;">
         <div class="input-group">
           <span class="input-label">用户过滤:</span>
@@ -542,7 +544,7 @@
             <option value="500">500 条</option>
           </select>
         </div>
-        <button class="btn btn-accent btn-sm" onclick="loadChatMessages()">查询聊天记录</button>
+        <button class="btn btn-accent btn-sm" id="queryChat">查询聊天记录</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         私聊消息由客户端在 SIP 送达后写入后台；对方离线时状态为 PENDING，对方重新上线后通过 HTTP 拉取并标记 DELIVERED。
@@ -581,7 +583,7 @@
           <span class="input-label">发送方:</span>
           <input type="text" id="chatRoomSenderFilter" placeholder="如 1002" style="width: 100px;">
         </div>
-        <button class="btn btn-accent btn-sm" onclick="loadRoomChatMessages()">查询聊天室记录</button>
+        <button class="btn btn-accent btn-sm" id="queryRoomChat">查询聊天室记录</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         会议室聊天由客户端通过 HTTP 写入 `room_messages`，这里展示持久化后的房间聊天记录。
@@ -606,596 +608,8 @@
     </div>
   </div>
 
+  </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script>
-    if (location.protocol === 'file:') {
-      document.body.innerHTML =
-        '<div style="max-width:760px;margin:80px auto;padding:28px;border:1px solid #334155;' +
-        'border-radius:8px;background:#1e293b;color:#f8fafc;font-family:Arial,sans-serif;line-height:1.8;">' +
-        '<h2>请通过后台地址打开管理页</h2>' +
-        '<p>不要直接双击 admin.html 文件，否则浏览器无法访问 <code>/api/login</code>。</p>' +
-        '<p>请打开：<a style="color:#60a5fa" href="http://127.0.0.1:8080/admin.html">' +
-        'http://127.0.0.1:8080/admin.html</a></p>' +
-        '</div>';
-      throw new Error('admin.html must be served over HTTP');
-    }
-    let autoRefreshTimer = null;
-
-    function showToast(msg, isError = false) {
-      const toast = document.getElementById('toast');
-      toast.innerText = msg;
-      toast.style.borderColor = isError ? '#ef4444' : '#10b981';
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 2600);
-    }
-
-    function copyText(text) {
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(text).then(() => {
-          showToast('已复制: ' + text);
-        }).catch(() => {
-          showToast('已复制: ' + text);
-        });
-      } else {
-        showToast('已复制: ' + text);
-      }
-    }
-
-    function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      event.target.classList.add('active');
-      document.getElementById(tabId).classList.add('active');
-    }
-
-    function formatDuration(sec) {
-      if (!sec || sec <= 0) return '0s';
-      const m = Math.floor(sec / 60);
-      const s = sec % 60;
-      if (m > 0) return `${m}分 ${s}秒 (${sec}s)`;
-      return `${sec}s`;
-    }
-
-    function formatBytes(bytes) {
-      if (!bytes || bytes <= 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-    }
-
-    function formatTime(isoStr) {
-      if (!isoStr) return '-';
-      try {
-        const d = new Date(isoStr);
-        return d.toLocaleString('zh-CN', { hour12: false });
-      } catch (e) {
-        return isoStr;
-      }
-    }
-
-    function getFileIcon(filename) {
-      if (!filename) return '📄';
-      const parts = filename.split('.');
-      if (parts.length < 2) return '📄';
-      const ext = parts.pop().toLowerCase();
-      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return '🖼️';
-      if (['mp3', 'wav', 'aac', 'ogg', 'm4a'].includes(ext)) return '🎵';
-      if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) return '🎬';
-      if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return '📦';
-      if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) return '📑';
-      return '📄';
-    }
-
-    async function loadStats() {
-      try {
-        const res = await fetch('/api/cdr/stats');
-        if (!res.ok) throw new Error('拉取统计失败');
-        const data = await res.json();
-        document.getElementById('statTotalCalls').innerText = data.totalCalls ?? 0;
-        const totalSec = data.totalDurationSec ?? 0;
-        document.getElementById('statTotalDuration').innerText = totalSec + 's';
-        const mins = Math.floor(totalSec / 60);
-        const remSec = totalSec % 60;
-        document.getElementById('statTotalDurationDesc').innerText = `${mins} 分 ${remSec} 秒`;
-        document.getElementById('statAvgDuration').innerText = (data.averageDurationSec ?? 0) + 's';
-        document.getElementById('statPeakRoomMembers').innerText = data.peakRoomMembers ?? 0;
-      } catch (err) {
-        console.error('Stats error:', err);
-      }
-    }
-
-    async function loadCdrList() {
-      const caller = document.getElementById('filterCaller').value.trim();
-      const callee = document.getElementById('filterCallee').value.trim();
-      const limit = document.getElementById('filterLimit').value;
-
-      let url = `/api/cdr?limit=${limit}`;
-      if (caller) url += `&caller=${encodeURIComponent(caller)}`;
-      if (callee) url += `&callee=${encodeURIComponent(callee)}`;
-
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('拉取 CDR 失败');
-        const list = await res.json();
-
-        let totalDuration = 0;
-        for (const c of list) {
-          totalDuration += (c.duration_sec ?? c.durationSec ?? 0);
-        }
-        document.getElementById('cdrCountBadge').innerText = `${list.length} 条 · 累计 ${formatDuration(totalDuration)}`;
-
-        const tbody = document.getElementById('cdrTableBody');
-        if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">暂无通话记录</td></tr>`;
-          return;
-        }
-
-        tbody.innerHTML = list.map(c => `
-          <tr>
-            <td><span class="badge badge-gray">#${c.id}</span></td>
-            <td><span class="text-mono">${c.call_id || c.callId || '<span style="color:var(--text-muted)">-</span>'}</span></td>
-            <td><strong style="cursor:pointer; text-decoration:underline;" title="点击按此主叫筛选" onclick="quickFilterCaller('${c.caller}')">${c.caller}</strong></td>
-            <td><span class="badge ${c.callee_or_room && c.callee_or_room.startsWith('room') ? 'badge-primary' : 'badge-gray'}" style="cursor:pointer;" title="点击按此被叫筛选" onclick="quickFilterCallee('${c.callee_or_room}')">${c.callee_or_room}</span></td>
-            <td style="color:var(--text-muted)">${formatTime(c.started_at || c.startedAt)}</td>
-            <td><span class="badge badge-success">${formatDuration(c.duration_sec ?? c.durationSec)}</span></td>
-          </tr>
-        `).join('');
-      } catch (err) {
-        console.error('CDR error:', err);
-      }
-    }
-
-    function quickFilterCaller(val) {
-      document.getElementById('filterCaller').value = val;
-      loadCdrList();
-    }
-
-    function quickFilterCallee(val) {
-      document.getElementById('filterCallee').value = val;
-      loadCdrList();
-    }
-
-    function resetCdrFilter() {
-      document.getElementById('filterCaller').value = '';
-      document.getElementById('filterCallee').value = '';
-      document.getElementById('filterLimit').value = '100';
-      loadCdrList();
-    }
-
-    async function loadRooms() {
-      try {
-        const res = await fetch('/api/rooms');
-        if (!res.ok) throw new Error('拉取房间失败');
-        const list = await res.json();
-        document.getElementById('roomCountBadge').innerText = `${list.length} 间`;
-
-        const tbody = document.getElementById('roomsTableBody');
-        if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="6" class="empty-state">暂无房间</td></tr>`;
-          return;
-        }
-
-        tbody.innerHTML = list.map(r => `
-          <tr>
-            <td><span class="badge badge-gray">#${r.id}</span></td>
-            <td><strong>${r.name}</strong></td>
-            <td><span class="badge badge-primary text-mono">${r.sip_uri || r.sipUri}</span></td>
-            <td>${r.max_members || r.maxMembers} 人</td>
-            <td><span class="badge ${r.member_count > 0 ? 'badge-primary' : 'badge-gray'}">${r.member_count ?? r.memberCount ?? 0} 人 (当前在会)</span></td>
-            <td>
-              <button class="btn btn-outline btn-sm" onclick="copyText('${r.sip_uri || r.sipUri}')">复制 URI</button>
-              <span style="color:var(--text-muted); margin-left: 6px; font-size: 12px;">客户端输入 <code>${r.sip_uri || r.sipUri}</code> 呼叫</span>
-            </td>
-          </tr>
-        `).join('');
-      } catch (err) {
-        console.error('Rooms error:', err);
-      }
-    }
-
-    async function handleCreateRoom(e) {
-      e.preventDefault();
-      const name = document.getElementById('roomNameInput').value.trim();
-      const maxMembers = parseInt(document.getElementById('roomMaxMembersInput').value) || 8;
-      const sipUri = document.getElementById('roomSipUriInput').value.trim();
-
-      const payload = { name, max_members: maxMembers };
-      if (sipUri) payload.sip_uri = sipUri;
-
-      try {
-        const res = await fetch('/api/rooms', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          showToast(data.error || '创建房间失败', true);
-          return;
-        }
-        showToast(`房间创建成功: ${data.name} (${data.sip_uri})`);
-        document.getElementById('roomNameInput').value = '';
-        document.getElementById('roomSipUriInput').value = '';
-        loadRooms();
-      } catch (err) {
-        showToast('请求异常: ' + err.message, true);
-      }
-    }
-
-    async function loadOnlineUsers() {
-      try {
-        const res = await fetch('/api/users/online');
-        if (!res.ok) throw new Error('拉取在线用户失败: ' + res.status);
-        const data = await res.json();
-        const names = Array.isArray(data.users) ? data.users : [];
-        const count = data.count ?? names.length;
-        const countEl = document.getElementById('statOnlineUsers');
-        if (countEl) countEl.innerText = count;
-        const descEl = document.getElementById('statOnlineUsersDesc');
-        if (descEl) {
-          descEl.innerText = names.length > 0
-            ? ('活跃: ' + names.join('、'))
-            : '暂无活跃会话 (未登录或已超时)';
-        }
-        return new Set(names);
-      } catch (err) {
-        console.error('Online users error:', err);
-        const countEl = document.getElementById('statOnlineUsers');
-        if (countEl && countEl.innerText === '0') countEl.innerText = '--';
-        const descEl = document.getElementById('statOnlineUsersDesc');
-        if (descEl) descEl.innerText = '拉取在线状态失败，稍后重试';
-        return new Set();
-      }
-    }
-
-    async function loadUsers() {
-      try {
-        const res = await fetch('/api/users');
-        if (!res.ok) throw new Error('拉取用户失败');
-        const list = await res.json();
-        const onlineSet = await loadOnlineUsers();
-        document.getElementById('userCountBadge').innerText = `${list.length} 人`;
-
-        const tbody = document.getElementById('usersTableBody');
-        if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="5" class="empty-state">暂无用户</td></tr>`;
-          return;
-        }
-
-        tbody.innerHTML = list.map(u => {
-          const isOnline = onlineSet.has(u.username) || onlineSet.has(u.sipId);
-          const protectedUser = String(u.role || '').toUpperCase() === 'ADMIN';
-          const deleting = pendingUserDeletes.has(u.id);
-          return `
-          <tr>
-            <td><span class="badge badge-gray">#${u.id}</span></td>
-            <td><strong>${escapeHtml(u.username)}</strong></td>
-            <td><span class="badge badge-primary text-mono">${escapeHtml(u.sipId || u.sip_id || u.username)}</span></td>
-            <td><span class="badge ${isOnline ? 'badge-success' : 'badge-gray'}" title="${isOnline ? '持有有效后台会话 (2小时自动过期)' : '未登录后台或会话已超时'}">${isOnline ? '后台已登录' : '未登录后台'}</span></td>
-            <td><button class="btn btn-danger btn-sm" data-delete-user-id="${u.id}"
-              ${protectedUser || !userAdmin || deleting ? 'disabled' : ''}
-              title="${protectedUser ? '管理员账号受保护' : !userAdmin ? '请先登录管理员' : '删除此用户'}">
-              ${protectedUser ? '管理员受保护' : deleting ? '正在删除…' : '删除用户'}</button></td>
-          </tr>
-        `;
-        }).join('');
-        tbody.querySelectorAll('[data-delete-user-id]').forEach(button => {
-          const user = list.find(u => String(u.id) === button.dataset.deleteUserId);
-          button.addEventListener('click', () => deleteUser(user.id, user.username));
-        });
-      } catch (err) {
-        console.error('Users error:', err);
-      }
-    }
-
-    async function handleRegisterUser(e) {
-      e.preventDefault();
-      const username = document.getElementById('regUsername').value.trim();
-      const password = document.getElementById('regPassword').value.trim();
-      const sipId = document.getElementById('regSipId').value.trim();
-
-      const payload = { username, password };
-      if (sipId) payload.sip_id = sipId;
-
-      try {
-        const res = await fetch('/api/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          showToast(data.error || '注册用户失败', true);
-          return;
-        }
-        showToast(`用户 ${data.username} 注册成功!`);
-        document.getElementById('regUsername').value = '';
-        document.getElementById('regPassword').value = '';
-        document.getElementById('regSipId').value = '';
-        loadUsers();
-      } catch (err) {
-        showToast('请求异常: ' + err.message, true);
-      }
-    }
-
-    async function loadFiles() {
-      try {
-        const res = await fetch('/api/files');
-        if (!res.ok) throw new Error('拉取文件失败');
-        const list = await res.json();
-        document.getElementById('fileCountBadge').innerText = `${list.length} 个`;
-
-        const tbody = document.getElementById('filesTableBody');
-        if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="7" class="empty-state">暂无文件记录</td></tr>`;
-          return;
-        }
-
-        tbody.innerHTML = list.map(f => `
-          <tr>
-            <td><span class="badge badge-gray">#${f.id}</span></td>
-            <td><span>${getFileIcon(f.name)}</span> <strong>${f.name}</strong></td>
-            <td style="color:var(--text-muted)">${formatBytes(f.size)}</td>
-            <td><span class="badge badge-gray">${f.from}</span></td>
-            <td><span class="badge badge-primary">${f.to}</span></td>
-            <td style="color:var(--text-muted)">${formatTime(f.created_at || f.createdAt)}</td>
-            <td>
-              <a href="${f.url}" download="${f.name}" class="btn btn-outline btn-sm" style="text-decoration:none;">⬇️ 下载</a>
-            </td>
-          </tr>
-        `).join('');
-      } catch (err) {
-        console.error('Files error:', err);
-      }
-    }
-
-    let chatAdminToken = sessionStorage.getItem('chatAdminToken') || '';
-    let userAdmin = null;
-    const pendingUserDeletes = new Set();
-
-    function setAdminSession(me, token = '') {
-      userAdmin = me;
-      chatAdminToken = token;
-      if (token) sessionStorage.setItem('chatAdminToken', token);
-      else sessionStorage.removeItem('chatAdminToken');
-      for (const id of ['userAdminBadge', 'chatLoginBadge']) {
-        const badge = document.getElementById(id);
-        badge.innerText = me ? '管理员 ' + me.username : '未登录';
-        badge.className = 'badge ' + (me ? 'badge-success' : 'badge-gray');
-      }
-    }
-
-    async function authenticateAdmin(username, password) {
-      setAdminSession(null);
-      if (!username || !password) throw new Error('请填写管理员账号和密码');
-      const res = await fetch('/api/login', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username, password})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '登录失败');
-      const meRes = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + data.token}});
-      const me = await meRes.json();
-      if (!meRes.ok || String(me.role || '').toUpperCase() !== 'ADMIN')
-        throw new Error('只有管理员可以管理用户和查看聊天记录');
-      setAdminSession(me, data.token);
-    }
-
-    async function userAdminLogin(event) {
-      event.preventDefault();
-      try {
-        await authenticateAdmin(document.getElementById('userAdminName').value.trim(),
-            document.getElementById('userAdminPassword').value);
-        document.getElementById('userAdminPassword').value = '';
-        showToast('管理员登录成功');
-      } catch (error) { showToast('登录失败: ' + error.message, true); }
-      await loadUsers();
-    }
-
-    async function restoreAdminSession() {
-      if (!chatAdminToken) return;
-      try {
-        const res = await fetch('/api/me', {headers: {Authorization: 'Bearer ' + chatAdminToken}});
-        const me = await res.json();
-        if (!res.ok || String(me.role || '').toUpperCase() !== 'ADMIN') throw new Error('expired');
-        setAdminSession(me, chatAdminToken);
-      } catch (error) { setAdminSession(null); }
-    }
-
-    async function deleteUser(id, username) {
-      if (!userAdmin || !chatAdminToken) { showToast('请先登录管理员', true); return; }
-      if (pendingUserDeletes.has(id)) return;
-      if (!confirm(`确定删除用户 ${username} 吗？\n该账号将无法登录后台，客户端联系人会自动移除。\n历史聊天、文件和通话记录保留。此操作不可撤销。`)) return;
-      pendingUserDeletes.add(id);
-      const button = document.querySelector(`[data-delete-user-id="${id}"]`);
-      if (button) { button.disabled = true; button.innerText = '正在删除…'; }
-      try {
-        const res = await fetch('/api/users/' + encodeURIComponent(id), {
-          method: 'DELETE', headers: {Authorization: 'Bearer ' + chatAdminToken}
-        });
-        const data = await res.json();
-        if (res.status === 401 || res.status === 403) setAdminSession(null);
-        if (!res.ok) throw new Error(data.error || '删除失败');
-        showToast('用户 ' + username + ' 已删除，客户端联系人将自动同步');
-      } catch (error) { showToast('删除失败: ' + error.message, true); }
-      finally { pendingUserDeletes.delete(id); await loadUsers(); }
-    }
-
-    function escapeHtml(s) {
-      return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
-    function chatStatusBadge(status) {
-      const s = String(status || '').toUpperCase();
-      if (s === 'DELIVERED') return '<span class="badge badge-success">DELIVERED</span>';
-      if (s === 'FAILED') return '<span class="badge" style="background:#7f1d1d;color:#fecaca;">FAILED</span>';
-      return '<span class="badge" style="background:#78350f;color:#fde68a;">PENDING</span>';
-    }
-
-    async function chatAdminLogin() {
-      const username = document.getElementById('chatAdminUser').value.trim();
-      const password = document.getElementById('chatAdminPass').value;
-      if (!username || !password) {
-        showToast('请输入 1001 的账号和密码', true);
-        return;
-      }
-      try {
-        await authenticateAdmin(username, password);
-        document.getElementById('chatAdminPass').value = '';
-        await loadUsers();
-        await loadChatMessages();
-        await loadRoomChatMessages();
-      } catch (err) {
-        showToast('登录失败: ' + err.message, true);
-      }
-    }
-
-    async function loadChatMessages() {
-      if (!chatAdminToken) {
-        showToast('请先用 1001 登录', true);
-        return;
-      }
-      const user = document.getElementById('chatUserFilter').value.trim();
-      const peer = document.getElementById('chatPeerFilter').value.trim();
-      const limit = document.getElementById('chatLimit').value;
-      const params = new URLSearchParams({limit});
-      if (user) params.set('user', user);
-      if (peer) params.set('peer', peer);
-      const tbody = document.getElementById('chatTableBody');
-      try {
-        const res = await fetch('/api/admin/messages?' + params.toString(), {
-          headers: {Authorization: 'Bearer ' + chatAdminToken}
-        });
-        if (res.status === 401 || res.status === 403) {
-          setAdminSession(null);
-          const message = res.status === 401
-            ? '登录已过期，请重新用 1001 登录'
-            : '只有管理员 1001 可以查看聊天记录';
-          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">' + message + '</td></tr>';
-          showToast(message, true);
-          return;
-        }
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '查询失败');
-        if (!Array.isArray(data) || data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无聊天记录</td></tr>';
-          return;
-        }
-        tbody.innerHTML = data.map(m => `
-          <tr>
-            <td><span class="badge badge-gray">#${m.id}</span></td>
-            <td><span class="badge badge-gray">${escapeHtml(m.sender)}</span></td>
-            <td><span class="badge badge-primary">${escapeHtml(m.receiver)}</span></td>
-            <td style="max-width: 420px; word-break: break-all;">${escapeHtml(m.content)}</td>
-            <td>${m.is_file || m.isFile ? '📎 文件' : '文字'}</td>
-            <td>${chatStatusBadge(m.status)}</td>
-            <td style="color:var(--text-muted)">${formatTime(m.created_at || m.createdAt)}</td>
-          </tr>
-        `).join('');
-      } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">' + escapeHtml(err.message) + '</td></tr>';
-        showToast('查询失败: ' + err.message, true);
-      }
-    }
-
-    async function loadRoomChatMessages() {
-      if (!chatAdminToken) {
-        return;
-      }
-      const room = document.getElementById('chatRoomFilter').value.trim();
-      const sender = document.getElementById('chatRoomSenderFilter').value.trim();
-      const limit = document.getElementById('chatLimit').value;
-      const params = new URLSearchParams({limit});
-      if (room) params.set('room', room);
-      if (sender) params.set('sender', sender);
-      const tbody = document.getElementById('roomChatTableBody');
-      const badge = document.getElementById('roomChatBadge');
-      try {
-        const res = await fetch('/api/admin/room-messages?' + params.toString(), {
-          headers: {Authorization: 'Bearer ' + chatAdminToken}
-        });
-        if (res.status === 401 || res.status === 403) {
-          setAdminSession(null);
-          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">登录已过期，请重新登录</td></tr>';
-          if (badge) badge.innerText = '0 条';
-          return;
-        }
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '查询失败');
-        const list = Array.isArray(data) ? data : [];
-        if (badge) badge.innerText = list.length + ' 条';
-        if (list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无聊天室记录</td></tr>';
-          return;
-        }
-        tbody.innerHTML = list.map(m => `
-          <tr>
-            <td><span class="badge badge-gray">#${m.id}</span></td>
-            <td><span class="badge badge-primary">${escapeHtml(m.room_uri || m.roomUri)}</span></td>
-            <td><span class="badge badge-gray">${escapeHtml(m.sender)}</span></td>
-            <td style="max-width: 420px; word-break: break-all;">${escapeHtml(m.content)}</td>
-            <td>${m.is_file || m.isFile ? '📎 文件' : '文字'}</td>
-            <td style="color:var(--text-muted)">${formatTime(m.created_at || m.createdAt)}</td>
-          </tr>
-        `).join('');
-      } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">' + escapeHtml(err.message) + '</td></tr>';
-        showToast('聊天室记录查询失败: ' + err.message, true);
-      }
-    }
-
-    async function checkHealth() {
-      try {
-        const res = await fetch('/api/health');
-        if (res.ok) {
-          const d = await res.json();
-          const esl = d.esl;
-          const eslBadge = document.getElementById('eslStatus');
-          if (eslBadge && esl) {
-            if (esl.connected) {
-              eslBadge.className = 'badge badge-success';
-              eslBadge.innerText = '● FreeSWITCH ESL 在线';
-            } else {
-              eslBadge.className = 'badge badge-gray';
-              eslBadge.innerText = '● ESL 监听中 (' + esl.target + ')';
-            }
-          }
-        }
-      } catch (err) {
-      }
-    }
-
-    function loadAllData() {
-      checkHealth();
-      loadStats();
-      loadCdrList();
-      loadRooms();
-      loadUsers();
-      loadFiles();
-      if (chatAdminToken) {
-        loadChatMessages();
-        loadRoomChatMessages();
-      }
-    }
-
-    function toggleAutoRefresh(enable) {
-      if (autoRefreshTimer) {
-        clearInterval(autoRefreshTimer);
-        autoRefreshTimer = null;
-      }
-      if (enable) {
-        autoRefreshTimer = setInterval(loadAllData, 5000);
-      }
-    }
-
-    window.onload = async function() {
-      await restoreAdminSession();
-      loadAllData();
-      toggleAutoRefresh(true);
-    };
-  </script>
+  <script src="/admin.js" defer></script>
 </body>
 </html>

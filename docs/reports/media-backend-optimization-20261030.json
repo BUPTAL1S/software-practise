@@ -1,0 +1,466 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "base": "ca65897c34aa074c34fb9630e28dbf67ef929ca1",
+  "mediaCore": "00487de",
+  "backend": {
+    "total": 93,
+    "passed": 92,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "client": {
+    "total": 92,
+    "passed": 83,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 9
+  },
+  "browser": {
+    "total": 10,
+    "passed": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "includesParent": true
+  },
+  "nativePolicy": {
+    "total": 1,
+    "passed": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "evidence": {
+    "backend-optimization-final.log": {
+      "path": "D:\\work\\.codex-execution\\backend-optimization-final.log",
+      "sha256": "dd51f5d79e1f8755c1400f724b8205784cb81ac67f89b39c602da5d6ce09610f"
+    },
+    "admin-browser-optimization.log": {
+      "path": "D:\\work\\.codex-execution\\admin-browser-optimization.log",
+      "sha256": "ebedb52705032211158f28a3cf64487fc78c2cf1c10cefa5d31e2df1d2ee9a8f"
+    },
+    "windows-portable-verification.log": {
+      "path": "D:\\work\\.codex-execution\\windows-portable-verification.log",
+      "sha256": "a4d3991b74956e27bc8b8c250acfaa2a64c8c964f750f4d6b7152f6bf85d93cf"
+    },
+    "client-latency-final.log": {
+      "path": "D:\\work\\.codex-execution\\client-latency-final.log",
+      "sha256": "95875f7c166313453e5e0db0691b3c93571c1b7b33aa2d45b2da00a7cbace482"
+    },
+    "latency-native-final-policy.log": {
+      "path": "D:\\work\\.codex-execution\\latency-native-final-policy.log",
+      "sha256": "8ea8477335a35b50275e3ea92788716918f04777341d065b3b78ac643e515d9b"
+    },
+    "video-latency-probe.log": {
+      "path": "D:\\work\\.codex-execution\\video-latency-probe.log",
+      "sha256": "db3994219e3c33dc0898fa113e4915cf6bf6f0c1b10cd1afd0745b6956b6221d"
+    },
+    "native-latency-script-verification.log": {
+      "path": "D:\\work\\.codex-execution\\native-latency-script-verification.log",
+      "sha256": "9f38210cb0b3e46e538510bc3f6cf1dc05b5e0314c3a0b05c9b9c43583089519"
+    },
+    "native-latency-final-link.log": {
+      "path": "D:\\work\\.codex-execution\\native-latency-final-link.log",
+      "sha256": "8d5173e464a09a0234abc4d8d73305e423d27a6751382e984e023b035fbdbb83"
+    },
+    "windows-latency-final-build.log": {
+      "path": "D:\\work\\.codex-execution\\windows-latency-final-build.log",
+      "sha256": "c7daeca52a70111a2caa4f45e49a47e4d7343a15cf5fe5a2bf2028167974de45"
+    },
+    "windows-latency-final-verification.log": {
+      "path": "D:\\work\\.codex-execution\\windows-latency-final-verification.log",
+      "sha256": "8f93e2443829820fa23b3eea00c3980f97c781619cbdca217efdf08c8dc413f2"
+    }
+  },
+  "benchmark": [
+    {
+      "profile": "legacy",
+      "width": "640",
+      "height": "360",
+      "target_fps": "15",
+      "threads": "1",
+      "encoded": "165",
+      "skipped": "15",
+      "mean_encode_ms": "1.965",
+      "p95_encode_ms": "3.544",
+      "output_kbps": "481.589"
+    },
+    {
+      "profile": "balanced",
+      "width": "848",
+      "height": "480",
+      "target_fps": "25",
+      "threads": "1",
+      "encoded": "157",
+      "skipped": "23",
+      "mean_encode_ms": "3.311",
+      "p95_encode_ms": "6.446",
+      "output_kbps": "1162.618"
+    },
+    {
+      "profile": "motion",
+      "width": "640",
+      "height": "360",
+      "target_fps": "30",
+      "threads": "1",
+      "encoded": "165",
+      "skipped": "15",
+      "mean_encode_ms": "2.015",
+      "p95_encode_ms": "3.565",
+      "output_kbps": "877.181"
+    }
+  ],
+  "boundaries": [
+    "No dual-machine call or conference-entry acceptance",
+    "No real MCU or teammate Docker changes",
+    "No measured camera/display FPS or end-to-end audio/video latency",
+    "No macOS runtime validation"
+  ],
+  "mediaIndexFix": "ddb00f0",
+  "latency": {
+    "cases": 24,
+    "framesPerCase": 1000,
+    "inputFps": [
+      15,
+      25
+    ],
+    "renderEveryFrames": [
+      1,
+      5,
+      25
+    ],
+    "intraFrameReordering": true,
+    "nativeDllSha256": "060e37ee39066a02de62185f81e1779ea9332abac0f9a1291f25abb084b9ea7d",
+    "nativeDllBytes": 25418163,
+    "unchangedJniExports": 3065,
+    "sourceCommit": "5a457451fa2712ba18e12b01738e8ff3af2b26fd",
+    "patchSha256": "7b0a248049a8cce18f284825a53299e490b2af8a7753f2c56940e8f79c8b5cf6",
+    "realCallLatencyMeasured": false,
+    "results": [
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "160.000",
+        "max_rtp_lag_ms": "160.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "160.000",
+        "max_rtp_lag_ms": "160.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "legacy",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "200.000",
+        "max_rtp_lag_ms": "200.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "15",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "66.667",
+        "max_rtp_lag_ms": "66.667",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "0",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "1",
+        "reordered": "1",
+        "decoded_outputs": "989",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "0",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "5",
+        "reordered": "1",
+        "decoded_outputs": "197",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "0",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "0",
+        "duplicate_outputs": "0"
+      },
+      {
+        "mode": "interactive",
+        "input_fps": "25",
+        "render_every_input_frames": "25",
+        "reordered": "1",
+        "decoded_outputs": "39",
+        "mean_rtp_lag_ms": "80.000",
+        "max_rtp_lag_ms": "80.000",
+        "nonmonotonic": "0",
+        "reordered_frames": "989",
+        "duplicate_outputs": "0"
+      }
+    ]
+  },
+  "delivery": {
+    "sourceCommit": "5d726c990a83b4fd6c06a806a9cf39010e541c7e",
+    "dirty": false,
+    "directory": "D:\\work\\.codex-execution\\software-practise-phase6-20261030\\dist\\windows-20261030-5d726c9",
+    "artifacts": [
+      {
+        "name": "JavaSIP-Backend-Windows-x64.zip",
+        "bytes": 97243412,
+        "sha256": "b6947fc2225c82795cf7d5a697871e7b5f70401db0596c1e129122b0bc3a0c57"
+      },
+      {
+        "name": "JavaSIP-Client-Windows-x64.zip",
+        "bytes": 63087095,
+        "sha256": "b90f587f18712c81594e179daf064498108581b33ca3153f0f1c4cb9386d0062"
+      }
+    ],
+    "zipRoundTripResultPath": "D:\\work\\.codex-execution\\portable-zip-roundtrip-5d726c9\\validation-aef3c9874d864e76bbf98eb1e58489ee\\result.json",
+    "verification": {
+      "status": "PASS",
+      "nativeLoader": "PASS",
+      "backendHealth": "PASS",
+      "login": "PASS",
+      "users": 8,
+      "rooms": 2,
+      "totalCalls": 0,
+      "eslEnabled": false,
+      "port": 56531,
+      "pid": 14228,
+      "started": "2026-10-30T19:45:38.9184545+08:00",
+      "externalServiceUsed": false,
+      "cameraOrMicrophoneOpened": false
+    },
+    "testProcessStopped": true
+  }
+}

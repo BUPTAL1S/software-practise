@@ -198,9 +198,11 @@ class RoomConferenceTest {
   @Test
   void testRoomVisualSnapshot() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
+    AtomicReference<Throwable> failure = new AtomicReference<>();
 
     Platform.runLater(
         () -> {
+          Stage stage = new Stage();
           try {
             ObservableList<HttpFileClient.RoomInfo> rooms = FXCollections.observableArrayList();
             rooms.add(new HttpFileClient.RoomInfo(1L, "公共研讨室 101", "sip:room-101@lab", 8, 1));
@@ -327,7 +329,6 @@ class RoomConferenceTest {
             Scene scene = new Scene(root, 820, 390);
             scene.getStylesheets().add(getClass().getResource("/modern-theme.css").toExternalForm());
 
-            Stage stage = new Stage();
             stage.setScene(scene);
             stage.show();
 
@@ -346,7 +347,7 @@ class RoomConferenceTest {
             }
             File out =
                 new File(
-                    "/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_room_exit_and_selection_fixed.png");
+                    "target/test-snapshots/snapshot_room_exit_and_selection_fixed.png");
             ImageIO.write(bi, "png", out);
             System.out.println("ROOM_FIXED_SNAPSHOT_SAVED: " + out.getAbsolutePath());
 
@@ -357,8 +358,14 @@ class RoomConferenceTest {
             double sumTextR = 0, sumTextG = 0, sumTextB = 0;
             double sumBgR = 0, sumBgG = 0, sumBgB = 0;
 
-            for (int y = 130; y <= 180 && y < h; y++) {
-              for (int x = 50; x <= 350 && x < w; x++) {
+            // Use the rendered name cell, not fixed screen coordinates that vary with font/DPI.
+            TableCell<?, ?> nameCell = tableView.lookupAll(".table-cell").stream()
+                .filter(node -> node instanceof TableCell<?, ?> cell && cell.getIndex() == 0
+                    && cell.getTableColumn() == colName)
+                .map(node -> (TableCell<?, ?>) node).findFirst().orElseThrow();
+            var bounds = nameCell.localToScene(nameCell.getBoundsInLocal());
+            for (int y = (int) Math.ceil(bounds.getMinY()) + 2; y < Math.min(h, bounds.getMaxY() - 2); y++) {
+              for (int x = (int) Math.ceil(bounds.getMinX()) + 4; x < Math.min(w, bounds.getMaxX() - 4); x++) {
                 int argb = bi.getRGB(x, y);
                 int r = (argb >> 16) & 0xFF;
                 int g = (argb >> 8) & 0xFF;
@@ -403,14 +410,16 @@ class RoomConferenceTest {
             assertTrue(ratio >= 7.0, "Selected room row contrast ratio must satisfy WCAG AAA >= 7.0:1, actual: " + ratio);
 
             stage.close();
-          } catch (Exception ex) {
-            ex.printStackTrace();
+          } catch (Throwable ex) {
+            failure.set(ex);
           } finally {
+            stage.close();
             latch.countDown();
           }
         });
 
     assertTrue(latch.await(5, TimeUnit.SECONDS), "Visual test timed out");
+    if (failure.get() != null) throw new AssertionError("Room snapshot failed", failure.get());
   }
 
   @Test

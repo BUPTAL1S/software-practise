@@ -28,6 +28,19 @@ import org.springframework.test.web.servlet.MvcResult;
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "SIPIM_DB=./target/test-file.db")
 class FileApiTest {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.web.context.WebApplicationContext testContext;
+
+    @org.junit.jupiter.api.BeforeEach
+    void authenticateManagementRequests() {
+        var tokenStore = testContext.getBean(com.lab.sipim.security.LoginTokens.class);
+        var userStore = testContext.getBean(com.lab.sipim.repo.UserRepository.class);
+        String adminToken = tokenStore.issue(userStore.findByUsername("1001").orElseThrow().getId());
+        // Explicit headers on individual requests override this default (invalid-token tests stay meaningful).
+        mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(testContext)
+                .defaultRequest(get("/").header("Authorization", "Bearer " + adminToken)).build();
+    }
+
 
     static {
         try {

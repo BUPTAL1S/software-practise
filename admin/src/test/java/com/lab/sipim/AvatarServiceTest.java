@@ -186,7 +186,9 @@ public class AvatarServiceTest {
     @DisplayName("Room vmute endpoint accepts command and FreeSWITCH MCU canvas mixes multi-participant avatars")
     void testRoomVmuteEndpointAndFreeSwitchCanvas() throws Exception {
         String testRoom = "room-avatar-test-" + System.nanoTime();
+        String memberToken = loginTokens.issue(userRepo.findByUsername("1001").orElseThrow().getId());
         mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
+                        .header("Authorization", "Bearer " + memberToken)
                         .param("sipId", "1001")
                         .param("mute", "true"))
                 .andExpect(status().isOk())
@@ -195,6 +197,7 @@ public class AvatarServiceTest {
                 .andExpect(jsonPath("$.muted").value(true));
 
         mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
+                        .header("Authorization", "Bearer " + memberToken)
                         .param("sipId", "1001")
                         .param("mute", "false"))
                 .andExpect(status().isOk())
@@ -243,6 +246,7 @@ public class AvatarServiceTest {
 
         // 4. Perform vmute through API for 1001 (camera muted, replaced by custom avatar)
         mockMvc.perform(post("/api/rooms/" + testRoom + "/vmute")
+                        .header("Authorization", "Bearer " + memberToken)
                         .param("sipId", "1001")
                         .param("mute", "true"))
                 .andExpect(status().isOk())

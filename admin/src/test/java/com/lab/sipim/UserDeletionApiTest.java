@@ -61,6 +61,13 @@ class UserDeletionApiTest {
         String ordinary = tokens.issue(users.findByUsername("1002").orElseThrow().getId());
         mvc.perform(delete("/api/users/" + target).header("Authorization", "Bearer " + ordinary))
                 .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/admin/workbench/users/" + target).header("Authorization", "Bearer " + ordinary))
+                .andExpect(status().isForbidden());
+        User promoted = users.findByUsername("1009").orElseThrow();
+        promoted.setRole("ADMIN");
+        users.saveAndFlush(promoted);
+        mvc.perform(delete("/api/users/" + target).header("Authorization", "Bearer " + tokens.issue(promoted.getId())))
+                .andExpect(status().isForbidden());
         assertThat(users.findById(target)).isPresent();
     }
 
@@ -113,7 +120,7 @@ class UserDeletionApiTest {
         mvc.perform(delete("/api/users/1009").header("Authorization", "Bearer " + admin))
                 .andExpect(status().isNotFound());
         User target = users.findByUsername("1009").orElseThrow();
-        mvc.perform(delete("/api/users/" + target.getId()).header("Authorization", "Bearer " + admin))
+        mvc.perform(delete("/api/admin/workbench/users/" + target.getId()).header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("1009"));
     }
 }

@@ -45,7 +45,7 @@ public class EslEventListener implements AutoCloseable {
     private volatile boolean running = true;
     private volatile boolean connected = false;
     private Thread workerThread;
-    private Socket activeSocket;
+    private volatile Socket activeSocket;
     private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceMemberMap = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, java.util.Map<String, Integer>> conferenceJoinTimes = new java.util.concurrent.ConcurrentHashMap<>();
@@ -90,9 +90,10 @@ public class EslEventListener implements AutoCloseable {
         connected = false;
         if (reconciliationWorker != null) reconciliationWorker.shutdownNow();
         commandExecutor.shutdownNow();
-        if (activeSocket != null) {
+        Socket socket = activeSocket;
+        if (socket != null) {
             try {
-                activeSocket.close();
+                socket.close();
             } catch (IOException ignored) {
             }
         }
@@ -114,103 +115,67 @@ public class EslEventListener implements AutoCloseable {
     }
 
     private void runLoop() {
-        log.info("Starting FreeSWITCH ESL background listener targeting {}:{}", host, port);
         while (running) {
             try (Socket socket = new Socket()) {
-                activeSocket = socket;
                 socket.connect(new InetSocketAddress(host, port), 3000);
-                socket.setSoTimeout(30000);
-                socket.setKeepAlive(true);
-
-                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
-
-                // 1. Initial Handshake: Wait for Content-Type: auth/request
-                Map<String, String> initialHeaders = readMimeHeaders(reader);
-                String contentType = initialHeaders.get("Content-Type");
-                if (contentType != null && contentType.contains("auth/request")) {
-                    writer.write("auth " + password + "\n\n");
-                    writer.flush();
-
-                    Map<String, String> authReplyHeaders = readMimeHeaders(reader);
-                    String replyText = authReplyHeaders.get("Reply-Text");
-                    if (replyText == null || !replyText.startsWith("+OK")) {
-                        log.warn("FreeSWITCH ESL auth failed at {}:{}: {}", host, port, replyText);
-                        continue;
-                    }
-                    log.info("FreeSWITCH ESL authenticated successfully at {}:{}", host, port);
-                }
-
-                // 2. Subscribe to conference maintenance events
-                writer.write("event plain CUSTOM conference::maintenance CHANNEL_CREATE CHANNEL_DESTROY\n\n");
+                socket.setSoTimeout(5000);
+                activeSocket = socket;
+                EslFrameReader reader = new EslFrameReader(new BufferedInputStream(socket.getInputStream()));
+                Writer writer = new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8);
+                authenticate(reader, writer);
+                // CHANNEL_CREATE/DESTROY are not used by this listener. Avoid receiving them for every call.
+                writer.write("event plain CUSTOM conference::maintenance\n\n");
                 writer.flush();
-                Map<String, String> subReplyHeaders = readMimeHeaders(reader);
-                log.info("FreeSWITCH ESL event subscription response: {}", subReplyHeaders.get("Reply-Text"));
-
+                requireOk(reader.read(), "event subscription");
+                if (!running) break;
                 connected = true;
-                // Event subscription does not replay existing members or prior room destruction.
+                log.info("FreeSWITCH ESL subscribed at {}:{}", host, port);
                 reconciliationWorker.execute(this::refreshConferenceState);
 
-                // 3. Main event processing loop
                 while (running && !socket.isClosed()) {
-                    Map<String, String> frameHeaders;
+                    EslFrameReader.Frame frame;
                     try {
-                        frameHeaders = readMimeHeaders(reader);
-                    } catch (java.net.SocketTimeoutException ste) {
-                        // Idle timeout on ESL socket is expected when no conference events occur; keep reading
+                        frame = reader.read();
+                    } catch (EslFrameReader.IdleTimeout idle) {
                         continue;
                     }
-                    if (frameHeaders.isEmpty()) {
-                        break; // EOF
-                    }
-                    String clStr = frameHeaders.get("Content-Length");
-                    if (clStr != null) {
-                        int length = Integer.parseInt(clStr.trim());
-                        char[] buf = new char[length];
-                        int totalRead = 0;
-                        while (totalRead < length) {
-                            int r = reader.read(buf, totalRead, length - totalRead);
-                            if (r < 0) break;
-                            totalRead += r;
-                        }
-                        String body = new String(buf, 0, totalRead);
-                        Map<String, String> eventData = parseEventBody(body);
-                        processEvent(eventData);
+                    if (frame == null) break;
+                    if ("text/event-plain".equalsIgnoreCase(frame.header("Content-Type"))) {
+                        processEvent(parseEventBody(frame.body()));
                     }
                 }
-            } catch (Exception e) {
+            } catch (Exception error) {
+                if (running) log.warn("FreeSWITCH ESL {}:{} disconnected: {}", host, port, error.getMessage());
+            } finally {
                 connected = false;
-                if (running) {
-                    log.warn("FreeSWITCH ESL connection to {}:{} closed/failed ({}). Retrying in {}s...",
-                            host, port, e.getMessage(), reconnectIntervalSec);
-                    try {
-                        Thread.sleep(Math.max(1, reconnectIntervalSec) * 1000L);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
+                activeSocket = null;
+            }
+            // EOF, rejected credentials and rejected subscriptions need the same backoff as connection failures.
+            if (running) {
+                try { Thread.sleep(Math.max(1, reconnectIntervalSec) * 1000L); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
         }
-        connected = false;
     }
 
-    private Map<String, String> readMimeHeaders(BufferedReader reader) throws IOException {
-        Map<String, String> headers = new LinkedHashMap<>();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            line = line.trim();
-            if (line.isEmpty()) {
-                break;
-            }
-            int colon = line.indexOf(':');
-            if (colon > 0) {
-                String key = line.substring(0, colon).trim();
-                String value = line.substring(colon + 1).trim();
-                headers.put(key, value);
-            }
+    private void authenticate(EslFrameReader reader, Writer writer) throws IOException {
+        EslFrameReader.Frame greeting = reader.read();
+        if (greeting == null || !"auth/request".equalsIgnoreCase(greeting.header("Content-Type"))) {
+            throw new IOException("Missing ESL authentication challenge");
         }
-        return headers;
+        writer.write("auth " + password + "\n\n");
+        writer.flush();
+        requireOk(reader.read(), "authentication");
+    }
+
+    private static void requireOk(EslFrameReader.Frame frame, String operation) throws IOException {
+        String reply = frame == null ? null : frame.header("Reply-Text");
+        if (reply == null || !reply.startsWith("+OK")) {
+            throw new IOException("ESL " + operation + " rejected");
+        }
     }
 
     /**
@@ -497,51 +462,26 @@ public class EslEventListener implements AutoCloseable {
     }
 
     public String executeApi(String command) {
-        if (!enabled) {
-            return "-ERR ESL disabled";
+        if (!enabled) return "-ERR ESL disabled";
+        if (command == null || command.indexOf('\r') >= 0 || command.indexOf('\n') >= 0) {
+            return "-ERR invalid ESL command";
         }
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(host, port), 3000);
-            s.setSoTimeout(3000);
-            InputStream in = s.getInputStream();
-            Writer out = new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8);
-            readMimeHeaders(in);
-            out.write("auth " + password + "\n\n");
-            out.flush();
-            readMimeHeaders(in);
-
-            out.write("api " + command + "\n\n");
-            out.flush();
-            java.util.Map<String, String> headers = readMimeHeaders(in);
-            String clStr = headers.get("Content-Length");
-            if (clStr != null) {
-                int len = Integer.parseInt(clStr.trim());
-                // ESL Content-Length counts UTF-8 bytes, not Java characters.
-                // Chinese caller names otherwise leave this read waiting forever.
-                byte[] body = in.readNBytes(len);
-                if (body.length != len) return "-ERR incomplete ESL response";
-                return new String(body, StandardCharsets.UTF_8).trim();
-            }
-            return headers.getOrDefault("Reply-Text", "+OK");
-        } catch (Exception e) {
-            log.warn("Failed to execute ESL api command '{}': {}", command, e.getMessage());
-            return "-ERR " + e.getMessage();
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 3000);
+            socket.setSoTimeout(3000);
+            EslFrameReader reader = new EslFrameReader(new BufferedInputStream(socket.getInputStream()));
+            Writer writer = new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8);
+            authenticate(reader, writer);
+            writer.write("api " + command + "\n\n");
+            writer.flush();
+            EslFrameReader.Frame reply = reader.read();
+            if (reply == null) return "-ERR missing ESL response";
+            return reply.header("Content-Length") != null ? reply.body().trim()
+                    : reply.headers().getOrDefault("Reply-Text", "-ERR missing ESL reply");
+        } catch (Exception error) {
+            log.warn("Failed to execute ESL api command '{}': {}", command, error.getMessage());
+            return "-ERR " + error.getMessage();
         }
-    }
-
-    private Map<String, String> readMimeHeaders(InputStream input) throws IOException {
-        Map<String, String> headers = new LinkedHashMap<>();
-        ByteArrayOutputStream line = new ByteArrayOutputStream();
-        int value;
-        while ((value = input.read()) != -1) {
-            if (value != '\n') { line.write(value); continue; }
-            String text = line.toString(StandardCharsets.UTF_8).trim();
-            line.reset();
-            if (text.isEmpty()) break;
-            int colon = text.indexOf(':');
-            if (colon > 0) headers.put(text.substring(0, colon).trim(), text.substring(colon + 1).trim());
-        }
-        return headers;
     }
 
     public Integer lookupMemberId(String confName, String sipId) {
