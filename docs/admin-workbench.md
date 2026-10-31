@@ -15,6 +15,7 @@
 - `/api/admin/workbench/**`、聊天审计 `/api/admin/messages` 和 `/api/admin/room-messages`
   都由统一的 `ApiAccessPolicy` 检查管理员身份，不能只靠页面隐藏功能。
 - 旧的全局文件列表、在线会话列表、话单详情、`POST /api/users` 同样要求管理员，防止绕过新页面。
+- 用户删除通过 `DELETE /api/admin/workbench/users/{id}`，兼容 `DELETE /api/users/{id}`；两条路径均按同一管理员规则鉴权。管理员账号不可删除；成功后撤销目标全部后台会话，客户端轮询通讯录移除联系人，历史记录保留。
 - 客户端通讯录 `GET /api/users`、用户详情、房间目录及 `GET /api/health` 继续公开；
   `POST /api/register` 保留客户端自助注册用途，不接受管理员角色设置。
 - 客户端房间创建、心跳、聊天、视频状态、文件上传及话单接口需要有效登录。
@@ -56,3 +57,4 @@ Windows 默认寻找 `C:/Program Files/Google/Chrome/Application/chrome.exe`；
 
 覆盖管理员/普通用户/未登录/过期会话、旧接口权限、桌面会话不被浏览器退出撤销、动态文本安全、
 表格复用、查询竞态、重复提交、断线与恢复、页面隐藏暂停、下载身份和复制失败。
+用户管理另覆盖管理员保护、删除取消、失败重试、重复点击只提交一次，以及删除后的列表更新。

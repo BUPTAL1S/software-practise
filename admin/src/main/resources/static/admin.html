@@ -70,6 +70,8 @@
     .btn-primary:hover { background: var(--primary-hover); }
     .btn-accent { background: var(--accent); color: #fff; }
     .btn-accent:hover { background: var(--accent-hover); }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
     .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
     .btn-outline:hover { background: #334155; }
     .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -440,6 +442,7 @@
   <!-- Tab 3: 用户列表 -->
   <div id="tab-users" class="tab-content">
     <p id="dataStatus-users" class="data-status" role="status">等待更新</p>
+    <p class="section-note">管理员可删除普通用户。删除后账号无法登录后台，客户端联系人自动同步移除；历史聊天、文件和通话记录保留。管理员账号受保护。</p>
     <div class="card">
       <div class="card-title">
         <span>快速注册 / 添加用户</span>
@@ -474,10 +477,11 @@
               <th>用户名</th>
               <th>SIP 分机号 (sip_id)</th>
               <th>后台会话状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody id="usersTableBody">
-            <tr><td colspan="4" class="empty-state">加载中...</td></tr>
+            <tr><td colspan="5" class="empty-state">加载中...</td></tr>
           </tbody>
         </table>
         <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">注：此处显示 HTTP 业务管理后台会话状态（2小时无操作自动过期）；SIP 语音与视频通话信令在线状态请以客户端 Kamailio 注册为准。</div>

@@ -34,6 +34,10 @@ public class AdminWorkbenchController {
     @PostMapping("/users") public ResponseEntity<?> createUser(@RequestBody(required = false) LoginController.RegisterRequest request) {
         return users.create(request);
     }
+    @DeleteMapping("/users/{id}") public ResponseEntity<?> deleteUser(@PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        return users.delete(id, authorization);
+    }
     @GetMapping("/files") public ResponseEntity<?> files(@RequestParam(defaultValue = "100") int limit) {
         return files.list(null, null, limit);
     }

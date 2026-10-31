@@ -55,6 +55,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         boolean read = method.equals("GET") || method.equals("HEAD");
         boolean adminOnly = path.startsWith("/api/admin/") && !path.equals("/api/admin/login")
                 || path.equals("/api/users/online")
+                || path.matches("/api/users/[0-9]+") && method.equals("DELETE")
                 || path.equals("/api/files") && read
                 || path.matches("/api/cdr/[0-9]+") && read
                 || path.equals("/api/users") && method.equals("POST");

@@ -121,3 +121,37 @@ mvn -o -f client/pom.xml -Dsip.nativeVideoTest=true -Dtest=CameraPreviewLifecycl
 已通过 9 项检查，包含真实摄像头嵌入预览启停 20 次、与本机模拟 SIP 对端建立视频会话后
 切换摄像头 20 次、接通/头像切换后的文案、接通通知和布局回归。
 模拟对端用于协商与应答，不发送实际远端视频，因此不代表双机收发视频画面或 MCU 已验收。
+
+## 会议摄像头重开卡死、人数残留修复（2026-10-28）
+
+用户再次报告会议中重开摄像头卡死后，捕获到真实客户端的 JavaFX 线程停在
+`VideoPreview.start()`。上面的旧硬件测试在后台线程启动预览，没有覆盖真实按钮的
+界面线程路径；仅解除嵌入不足以修复重开问题。
+
+- 新增 `CallPreviewLifecycle`，串行执行预览创建和推流启停，JavaFX 继续处理原生窗口消息。
+  切换前解除远端和 PiP 的嵌入，完成后重新获取句柄并嵌入；操作期间禁用重复摄像头操作。
+- 关闭时先 `STOP_TRANSMIT`，再释放预览。通话和预览共享采集设备，顺序相反仍会出现等待。
+- 界面状态刷新、PiP 定时器和会议表格渲染在原生操作期间跳过 SIP 查询，避免再次等待原生锁。
+  操作完成后统一刷新；挂断和退出可排到原生操作之后执行。
+- MCU 头像请求在独立串行任务中执行，等待后台实际结果，保持关闭/开启请求顺序，失败明确记录。
+- 人数原来只靠 ESL 增量事件更新；后台断开、重启或漏收离会通知后，数据库可能保留旧人数。
+  现在 ESL 连接成功时、以及连接期间每 5 秒读取 `conference xml_list`，按真实会议快照校正人数。
+  仅应用完整有效快照，连接失败或数据不完整时保留原数，不会误清仍在开会的人数。
+- ESL API 响应按 UTF-8 字节数读取，避免中文昵称使快照读取超时。
+
+人数回归涵盖旧人数 5 自动恢复到 0、漏收离会通知恢复、中文昵称，以及错误响应不误清人数：
+
+```text
+mvn -o -f admin/pom.xml -Dtest=EslRoomCountRecoveryTest,EslEventListenerTest test
+```
+
+完整客户端的硬件回归使用专用 1098 账号及唯一 `room-camera-app-*` 房间，
+通过实际摄像头按钮切换，保持会议列表刷新，并检查界面响应、预览句柄和接通状态。
+需本机摄像头、Kamailio/FreeSWITCH、后台 8088 已运行，单次约两分钟：
+
+```text
+mvn -o -f client/pom.xml -Dsip.nativeVideoTest=true -Dsip.liveMcuTest=true -Dtest=CameraPreviewLifecycleTest#mainApplicationCanToggleCameraWithConferenceDirectoryRefreshing test
+```
+
+另有 `cameraCanToggleTwentyTimesInsideRealConference` 覆盖独立通话窗口接入实际 MCU 后，
+反复切换摄像头和服务端头像。两者均使用真实摄像头，不等同于多台电脑画面流畅度验收。

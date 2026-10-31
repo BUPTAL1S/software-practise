@@ -74,6 +74,31 @@ public class UserController {
         return loginController.register(request);
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> delete(
+            @PathVariable("id") Long id,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Optional<User> caller = tokens.userIdOf(MeController.bearerToken(authorization)).flatMap(users::findById);
+        if (caller.isEmpty()) {
+            return ResponseEntity.status(401).body(Map.of("error", LoginController.UNAUTHORIZED));
+        }
+        if (!com.lab.sipim.security.ApiAccessPolicy.isAdmin(caller.get())) {
+            return ResponseEntity.status(403).body(Map.of("error", "仅管理员可以删除用户"));
+        }
+        Optional<User> found = users.findById(id);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "用户不存在或已被删除"));
+        }
+        User target = found.get();
+        if (id.equals(caller.get().getId()) || "ADMIN".equalsIgnoreCase(target.getRole())) {
+            return ResponseEntity.status(409).body(Map.of("error", "不能删除当前账号或管理员账号"));
+        }
+        // Message, file and CDR records use account names and remain available for history/audit.
+        users.delete(target);
+        tokens.revokeUser(id);
+        return ResponseEntity.ok(Map.of("success", true, "id", id, "username", target.getUsername()));
+    }
+
     @PostMapping(value = "/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> uploadAvatar(
             @RequestParam("file") MultipartFile file,
@@ -156,9 +181,9 @@ public class UserController {
         ));
     }
 
-    public record UserView(Long id, String username, String sipId, String avatarUrl, String nickname) {
+    public record UserView(Long id, String username, String sipId, String avatarUrl, String nickname, String role) {
         static UserView from(User user) {
-            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl(), user.getNickname());
+            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl(), user.getNickname(), user.getRole());
         }
     }
 }

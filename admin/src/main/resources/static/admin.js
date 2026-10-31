@@ -6,6 +6,7 @@
   let refreshing = false, refreshQueued = false;
   let sessionAbort = new AbortController();
   const resources = new Map(), tables = new Map(), failures = new Map();
+  const deletingUsers = new Set();
   const base = '/api/admin/workbench';
 
   function text(id, value) {
@@ -52,6 +53,7 @@
     resources.forEach((_, key) => abortResource(key));
     resources.clear(); tables.clear(); failures.clear();
     onlineNames = null; userRows = null;
+    deletingUsers.clear();
     clearTimeout(refreshTimer);
     clearTimeout(toastTimer);
     text('toast', ''); $('toast').style.display = 'none';
@@ -213,11 +215,41 @@
   let onlineNames = null, userRows = null;
   function renderUsers() {
     if (!userRows || !token) return;
-    const rows = userRows.map(user => ({ ...user, sessionStatus: onlineNames === null ? '状态未知'
+    const rows = userRows.map(user => ({ ...user, deleting: deletingUsers.has(user.id), sessionStatus: onlineNames === null ? '状态未知'
       : onlineNames.has(user.username) || onlineNames.has(user.sipId) ? '后台已登录' : '未登录后台' }));
-    renderTable('usersTableBody', rows, 4, user => row(badge('#' + user.id), user.username,
-      badge(user.sipId || user.sip_id || user.username, 'primary'),
-      badge(user.sessionStatus, user.sessionStatus === '后台已登录' ? 'success' : 'gray')));
+    renderTable('usersTableBody', rows, 5, user => {
+      const protectedUser = user.username === '1001' || String(user.role || '').toUpperCase() === 'ADMIN';
+      const remove = button(protectedUser ? '管理员受保护' : user.deleting ? '正在删除…' : '删除用户', () => deleteUser(user));
+      remove.className = 'btn btn-danger btn-sm';
+      remove.dataset.deleteUserId = String(user.id);
+      remove.disabled = protectedUser || user.deleting;
+      remove.title = protectedUser ? '管理员账号受保护' : '删除此用户';
+      return row(badge('#' + user.id), user.username,
+        badge(user.sipId || user.sip_id || user.username, 'primary'),
+        badge(user.sessionStatus, user.sessionStatus === '后台已登录' ? 'success' : 'gray'), remove);
+    });
+  }
+  async function deleteUser(user) {
+    if (!token || deletingUsers.has(user.id)) return;
+    if (!confirm(`确定删除用户 ${user.username} 吗？\n账号将无法登录后台，客户端联系人自动移除。\n历史聊天、文件和通话记录保留。此操作不可撤销。`)) return;
+    const currentEpoch = epoch;
+    deletingUsers.add(user.id);
+    renderUsers();
+    try {
+      await api(base + '/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
+      if (currentEpoch !== epoch || !token) return;
+      // A list requested before deletion must not resurrect the removed row.
+      abortResource('users');
+      userRows = userRows.filter(item => item.id !== user.id);
+      renderUsers();
+      text('userCountBadge', userRows.length + ' 人');
+      showToast('用户 ' + user.username + ' 已删除，客户端联系人将自动同步');
+      await refresh(true);
+    } catch (error) {
+      if (currentEpoch === epoch && token) showToast('删除失败：' + error.message, true);
+    } finally {
+      if (currentEpoch === epoch) { deletingUsers.delete(user.id); renderUsers(); }
+    }
   }
   function baseLoads(force) {
     return [

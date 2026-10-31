@@ -42,6 +42,7 @@ final class MainViewAssembler {
   private LogView signalingDrawer;
   private boolean drawerExpanded = false;
   private Stage settingsModalStage;
+  private Runnable onLogout;
   private Button consoleBtn;
   private Button oneClickOnlineBtn;
   private VBox quickList;
@@ -57,6 +58,10 @@ final class MainViewAssembler {
 
   public void setOnAvatarClicked(Runnable onAvatarClicked) {
     this.onAvatarClicked = onAvatarClicked;
+  }
+
+  void setOnLogout(Runnable onLogout) {
+    this.onLogout = onLogout;
   }
 
   /**
@@ -557,6 +562,7 @@ final class MainViewAssembler {
     Runnable rebuild = () -> {
       quickList.getChildren().clear();
       contactCardMap.clear();
+      contactAvatarMap.clear();
 
       quickList.getChildren().add(directorySectionLabel("联系人"));
       java.util.Set<String> seen = new java.util.HashSet<>();
@@ -856,13 +862,32 @@ final class MainViewAssembler {
     loginBackendBtn.getStyleClass().setAll("btn-primary");
     actionRow.getChildren().addAll(startEngineBtn, registerSipBtn, loginBackendBtn);
 
-    root.getChildren().addAll(grid, new Separator(), actionRow);
-    Scene modalScene = new Scene(root, 480, 380);
+    Button logout = new Button("退出登录");
+    logout.setId("settings-logout");
+    logout.getStyleClass().add("btn-danger");
+    logout.setMaxWidth(Double.MAX_VALUE);
+    logout.setTooltip(new Tooltip("结束当前通话或会议，退出账号并返回登录界面"));
+    logout.setOnAction(e -> {
+      if (onLogout != null) {
+        settingsModalStage.hide();
+        onLogout.run();
+      }
+    });
+    VBox footer = new VBox(14, new Separator(), actionRow, new Separator(), logout);
+    ScrollPane form = new ScrollPane(grid);
+    form.setFitToWidth(true);
+    form.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    form.setStyle("-fx-background-color: transparent; -fx-background: white;");
+    VBox.setVgrow(form, Priority.ALWAYS);
+    root.getChildren().addAll(form, footer);
+    Scene modalScene = new Scene(root, 520, 500);
     try {
       modalScene.getStylesheets().add(getClass().getResource("/modern-theme.css").toExternalForm());
     } catch (Exception ignored) {
     }
     settingsModalStage.setScene(modalScene);
+    settingsModalStage.setMinWidth(500);
+    settingsModalStage.setMinHeight(420);
   }
 
   void updateOnlineButton(boolean engineStarted, boolean sipRegistered) {

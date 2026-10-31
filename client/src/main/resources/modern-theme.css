@@ -321,6 +321,18 @@
     -fx-background-color: transparent;
 }
 
+.chat-date-divider {
+    -fx-padding: 10 0 8 0;
+}
+
+.chat-date-label {
+    -fx-background-color: #E9EEF3;
+    -fx-background-radius: 10;
+    -fx-padding: 4 12;
+    -fx-text-fill: #64748B;
+    -fx-font-size: 11px;
+}
+
 /* 消息气泡样式 (我方 vs 对方) */
 .bubble-outgoing {
     -fx-background-color: #E1F2FB;

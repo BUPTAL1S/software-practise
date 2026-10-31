@@ -75,7 +75,8 @@ class Browser {
 
 test('management workbench browser contract', { timeout: 60000 }, async t => {
   const state = { requests: [], health: 'ok', online: true, expired: false, cdrDelay: 0,
-    activeCdr: 0, maxCdr: 0, roomPosts: 0, userPosts: 0, roomsFail: false };
+    activeCdr: 0, maxCdr: 0, roomPosts: 0, userPosts: 0, roomsFail: false,
+    userDeleted: false, userDeleteFail: false, userDeletes: 0 };
   const hostile = `<img src=x onerror="window.injected=true"> O'Reilly & <svg onload="window.injected=true">`;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
@@ -119,7 +120,14 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
     }
     if (url.pathname.endsWith('/users')) {
       if (request.method === 'POST') { state.userPosts++; await sleep(250); send({ username: JSON.parse(body).username }); }
-      else send([{ id: 1, username: '1001', sipId: hostile }, { id: 2, username: hostile, sipId: '1002' }]);
+      else send([{ id: 1, username: '1001', sipId: hostile },
+        ...state.userDeleted ? [] : [{ id: 2, username: hostile, sipId: '1002' }]]);
+      return;
+    }
+    if (url.pathname.endsWith('/users/2') && request.method === 'DELETE') {
+      state.userDeletes++; await sleep(250);
+      if (state.userDeleteFail) send({ error: 'delete unavailable' }, 503);
+      else { state.userDeleted = true; send({ success: true, username: hostile }); }
       return;
     }
     if (url.pathname.endsWith('/files')) { send([{ id: 1, name: hostile, size: 1024, from: hostile, to: '1001', created_at: 'invalid-date', url: 'javascript:window.injected=true' }]); return; }
@@ -219,6 +227,23 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       await browser.wait('document.querySelector("#roomChatTableBody td") !== null');
       assert.equal(await browser.evaluate('document.querySelectorAll("tbody img,tbody svg,tbody script").length'), 0);
       assert.equal(await browser.evaluate('window.injected === undefined'), true);
+    });
+    await t.test('protected admin, delete cancellation, failure retry and duplicate suppression', async () => {
+      await clickTab('users');
+      assert.equal(await browser.evaluate(`document.querySelector('[data-delete-user-id="1"]').disabled`), true);
+      await browser.evaluate(`window.confirm=()=>false; document.querySelector('[data-delete-user-id="2"]').click()`);
+      assert.equal(state.userDeletes, 0);
+      state.userDeleteFail = true;
+      await browser.evaluate(`window.confirm=()=>true; document.querySelector('[data-delete-user-id="2"]').click()`);
+      await browser.wait('document.getElementById("toast").textContent.includes("delete unavailable")');
+      await browser.wait(`!document.querySelector('[data-delete-user-id="2"]').disabled`);
+      state.userDeleteFail = false;
+      await browser.evaluate(`var remove=document.querySelector('[data-delete-user-id="2"]'); remove.click(); remove.click()`);
+      await browser.wait(`document.querySelector('[data-delete-user-id="2"]') === null`);
+      assert.equal(state.userDeletes, 2, 'one failed request and one successful request');
+      assert.equal(await browser.evaluate('document.getElementById("userCountBadge").textContent'), '1 人');
+      assert.equal(await browser.evaluate('document.querySelectorAll("tbody img,tbody svg,tbody script").length'), 0);
+      await browser.screenshot('workbench-user-deletion.png');
     });
     await t.test('hidden page pauses polling and resumes when visible; nested tab click works', async () => {
       await browser.wait('!document.getElementById("refreshAll").disabled');

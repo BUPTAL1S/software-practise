@@ -119,7 +119,8 @@ class AvatarFeatureTest {
         "/api/rooms/room-101/vmute",
         exchange -> {
           String q = exchange.getRequestURI().getQuery();
-          String json = "{\"success\":true,\"query\":\"" + (q != null ? q : "") + "\"}";
+          String json = "{\"success\":" + (q == null || !q.contains("sipId=1099"))
+              + ",\"query\":\"" + (q != null ? q : "") + "\"}";
           byte[] resp = json.getBytes(StandardCharsets.UTF_8);
           exchange.getResponseHeaders().set("Content-Type", "application/json");
           exchange.sendResponseHeaders(200, resp.length);
@@ -179,6 +180,8 @@ class AvatarFeatureTest {
 
     boolean unmuteRes = client.toggleRoomVmute("sip:room-101@lab", "1001", false);
     assertTrue(unmuteRes);
+    assertFalse(client.toggleRoomVmute("room-101", "1099", true),
+        "A backend rejection must not be reported as a successful camera synchronization");
   }
 
   @Test
