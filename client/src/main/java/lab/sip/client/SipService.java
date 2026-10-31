@@ -347,6 +347,7 @@ final class SipService {
 
   public synchronized String getActiveCallRemoteUri() {
     if (activeCall != null) {
+      ensureThreadRegistered();
       try {
         CallInfo ci = activeCall.getInfo();
         return ci.getRemoteUri();
@@ -552,6 +553,7 @@ final class SipService {
     if (call == null || call.isOutgoing) {
       return false;
     }
+    ensureThreadRegistered();
     try {
       int state = call.getInfo().getState();
       return state == pjsip_inv_state.PJSIP_INV_STATE_INCOMING
@@ -623,6 +625,7 @@ final class SipService {
       return dst.trim();
     }
     try {
+      ensureThreadRegistered();
       CallInfo info = activeCall.getInfo();
       String remote = info.getRemoteUri();
       return remote != null ? remote.trim() : "";
@@ -735,6 +738,7 @@ final class SipService {
     }
     if (call != null) {
       try {
+        ensureThreadRegistered();
         CallInfo info = call.getInfo();
         String remote = info.getRemoteUri();
         if (remote == null || remote.isBlank()) {
@@ -832,6 +836,7 @@ final class SipService {
     if (!isStarted()) {
       throw new IllegalStateException("先启动引擎");
     }
+    ensureThreadRegistered();
     CampusLan.Target target = CampusLan.parseServer(server);
     if (target.host.isEmpty()) {
       throw new IllegalStateException("SIP 服务器为空");
@@ -944,6 +949,7 @@ final class SipService {
     if (!isRegistered()) {
       throw new IllegalStateException("尚未注册成功");
     }
+    ensureThreadRegistered();
     if (video && !hasVideoSupport()) {
       throw new IllegalStateException("当前底层库未启用视频支持（阶段 1 纯音频库）");
     }
@@ -1036,6 +1042,7 @@ final class SipService {
   }
 
   void answer(boolean video) throws Exception {
+    ensureThreadRegistered();
     ClientCall call;
     synchronized (this) {
       call = activeCall;
@@ -1636,6 +1643,7 @@ final class SipService {
         return true;
       }
       try {
+        ensureThreadRegistered();
         CallInfo ci = getInfo();
         for (int i = 0; i < ci.getMedia().size(); i++) {
           CallMediaInfo media = ci.getMedia().get(i);
@@ -1655,6 +1663,7 @@ final class SipService {
         return true;
       }
       try {
+        ensureThreadRegistered();
         CallInfo ci = getInfo();
         if (ci.getRemVideoCount() > 0) {
           return true;
@@ -1723,7 +1732,10 @@ final class SipService {
     }
 
     synchronized void setTransmitVideo(boolean transmit) {
-      if (!videoStreamActive) return;
+      if (!videoStreamActive) {
+        if (transmit) throw new IllegalStateException("当前未建立视频媒体，请以视频方式呼叫或参会，并等待接通后开启摄像头");
+        return;
+      }
       try {
         ensureThreadRegistered();
         CallVidSetStreamParam vParam = new CallVidSetStreamParam();
@@ -1743,8 +1755,8 @@ final class SipService {
         } finally {
           vParam.delete();
         }
-      } catch (Throwable t) {
-        events.log("警告", "设置视频推流状态失败: " + t.getMessage());
+      } catch (Exception t) {
+        throw new IllegalStateException("设置视频推流状态失败: " + t.getMessage(), t);
       }
     }
 
