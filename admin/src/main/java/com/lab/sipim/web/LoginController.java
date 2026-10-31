@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonAlias;
 import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
+import com.lab.sipim.security.IdentityRules;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -42,7 +43,8 @@ public class LoginController {
         if (found.isEmpty()) {
             found = users.findBySipId(trimmedUser);
         }
-        if (found.isEmpty() || !passwordEncoder.matches(request.password(), found.get().getPasswordHash())) {
+        if (found.isEmpty() || !IdentityRules.passwordFits(request.password())
+                || !passwordEncoder.matches(request.password(), found.get().getPasswordHash())) {
             return ResponseEntity.status(401).body(Map.of("error", UNAUTHORIZED));
         }
         User user = found.get();
@@ -84,17 +86,24 @@ public class LoginController {
             return ResponseEntity.badRequest().body(Map.of("error", MISSING));
         }
         String username = request.username().trim();
-        String password = request.password().trim();
+        String password = request.password();
         String sipId = (request.sipId() != null && !request.sipId().isBlank())
                 ? request.sipId().trim()
                 : username;
 
+        if (!IdentityRules.valid(username) || !IdentityRules.valid(sipId)) {
+            return ResponseEntity.badRequest().body(Map.of("error",
+                    "账号和分机号须为 1–64 个字母、数字、下划线或连字符，以字母或数字开头，不能使用系统保留名"));
+        }
+        if (!IdentityRules.passwordFits(password)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "密码不能为空，UTF-8 长度不超过 72 字节"));
+        }
         // Usernames and extensions are both accepted as identities. Reserve the
         // entire alias namespace so a new account cannot claim another user's extension/name.
-        if (users.findByUsername(username).isPresent() || users.findBySipId(username).isPresent()) {
+        if (users.existsByUsernameIgnoreCase(username) || users.existsBySipIdIgnoreCase(username)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "username already exists"));
         }
-        if (users.findBySipId(sipId).isPresent() || users.findByUsername(sipId).isPresent()) {
+        if (users.existsBySipIdIgnoreCase(sipId) || users.existsByUsernameIgnoreCase(sipId)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "sipId already exists"));
         }
 
