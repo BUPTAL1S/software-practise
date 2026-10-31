@@ -95,10 +95,11 @@ public class PrivateMessageController {
             return ResponseEntity.badRequest().body(Map.of("error", "peer is required"));
         }
         List<PrivateMessage> list = messages.findConversation(
-                current.get().getUsername(), peerName, Math.max(0, afterId));
-        if (limit > 0 && list.size() > limit) {
-            list = new ArrayList<>(list.subList(list.size() - limit, list.size()));
-        }
+                current.get().getUsername(), peerName, Math.max(0, afterId),
+                org.springframework.data.domain.PageRequest.of(0, Math.max(1, Math.min(limit, 500)),
+                        org.springframework.data.domain.Sort.by(afterId > 0 ? org.springframework.data.domain.Sort.Direction.ASC
+                                : org.springframework.data.domain.Sort.Direction.DESC, "id")));
+        if (afterId <= 0) java.util.Collections.reverse(list);
         return ResponseEntity.ok(list.stream().map(this::view).toList());
     }
 
@@ -111,7 +112,7 @@ public class PrivateMessageController {
             return unauthorized();
         }
         List<PrivateMessage> list = messages.findByReceiverIgnoreCaseAndStatusOrderByIdAsc(
-                current.get().getUsername(), PrivateMessage.PENDING);
+                current.get().getUsername(), PrivateMessage.PENDING, org.springframework.data.domain.PageRequest.of(0, 200));
         return ResponseEntity.ok(list.stream().map(this::view).toList());
     }
 
