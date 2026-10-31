@@ -423,7 +423,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                 Platform.runLater(
                     () -> {
                       for (HttpFileClient.PrivateMessageInfo info : list) {
-                        if (info.id() <= 0 || !seenPrivateMessageIds.add(info.id())) {
+                        if (info.id() <= 0) continue;
+                        if (!seenPrivateMessageIds.add(info.id())) {
+                          // A previous delivery acknowledgement may have failed. Retry
+                          // without inserting the already rendered message a second time.
+                          acknowledgePrivateMessage(info.id());
                           continue;
                         }
                         // Give the online SIP MESSAGE a few seconds to arrive first.
@@ -469,17 +473,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                             }
                           }
                         }
-                        pollExecutor.execute(
-                                () -> {
-                                  try {
-                                    httpFileClient.updatePrivateMessageStatus(
-                                        info.id(), "DELIVERED");
-                                  } catch (Exception ex) {
-                                    if (isHttpUnauthorized(ex)) {
-                                      reloginHttp();
-                                    }
-                                  }
-                                });
+                        acknowledgePrivateMessage(info.id());
                       }
                     });
               } catch (Exception ex) {
@@ -491,6 +485,13 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   /** Refresh delivery states for the currently open private conversation. */
+  private void acknowledgePrivateMessage(long id) {
+    pollExecutor.execute(() -> {
+      try { httpFileClient.updatePrivateMessageStatus(id, "DELIVERED"); }
+      catch (Exception ex) { if (isHttpUnauthorized(ex)) reloginHttp(); }
+    });
+  }
+
   private void refreshActivePrivateStatuses() {
     String target = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
     if (target.isBlank() || target.startsWith("room-") || myUsername().isBlank()
@@ -822,6 +823,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       });
   private final java.util.concurrent.atomic.AtomicBoolean pollInFlight =
       new java.util.concurrent.atomic.AtomicBoolean();
+  private volatile String heartbeatRoom = "";
+  private final java.util.concurrent.ScheduledExecutorService heartbeatExecutor =
+      java.util.concurrent.Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "room-heartbeat"); thread.setDaemon(true); return thread;
+      });
   private final CallUiCoordinator calls = new CallUiCoordinator(this);
 
   private String campusIp = "";
@@ -1232,6 +1238,13 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     Timeline probeAndPollTimeline =
         new Timeline(new KeyFrame(Duration.millis(2500), e -> pollOnlineStatusesAndRoomMessages()));
     probeAndPollTimeline.setCycleCount(Animation.INDEFINITE);
+    heartbeatExecutor.scheduleWithFixedDelay(() -> {
+      String room = heartbeatRoom;
+      if (!room.isBlank()) {
+        try { httpFileClient.sendRoomHeartbeat(room); }
+        catch (Exception failure) { /* Next independent heartbeat retries; never wait for contact probes. */ }
+      }
+    }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
 
     stage.setOnCloseRequest(
         e -> {
@@ -1441,6 +1454,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void pollOnlineStatusesAndRoomMessages() {
+    heartbeatRoom = sip.isInRoomCall() && sip.isCallConnected() ? extractUser(sip.currentCallTarget()) : "";
     if (!pollInFlight.compareAndSet(false, true)) {
       return;
     }
@@ -1452,17 +1466,6 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     pollExecutor.execute(
         () -> {
           try {
-          // Keep the ESL stale-member cleaner informed while this client is in a room.
-          if (inRoom && !activeRoom.isBlank()) {
-            try {
-              httpFileClient.setBaseUrl(httpServerField.getText().trim());
-              httpFileClient.sendRoomHeartbeat(activeRoom);
-            } catch (Exception ex) {
-              if (isHttpUnauthorized(ex)) {
-                reloginHttp();
-              }
-            }
-          }
           // 1. 探活联系人真实在线状态 (1001, 1002, 1003)
           String sipHost = (server != null && server.getText() != null) ? server.getText().trim() : "127.0.0.1";
           int sipPortNum = 5060;
@@ -3150,6 +3153,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   @Override
   public void stop() throws Exception {
+    heartbeatRoom = "";
+    heartbeatExecutor.shutdownNow();
     attachmentPreviews.close();
     roomCameraUpdates.shutdownNow();
     pollExecutor.shutdownNow();

@@ -12,11 +12,12 @@ public interface PrivateMessageRepository extends JpaRepository<PrivateMessage, 
             "select m from PrivateMessage m "
                     + "where ((lower(m.sender) = lower(:user) and lower(m.receiver) = lower(:peer)) "
                     + "   or (lower(m.sender) = lower(:peer) and lower(m.receiver) = lower(:user))) "
-                    + "and m.id > :afterId order by m.id asc")
+                    + "and m.id > :afterId")
     List<PrivateMessage> findConversation(
-            @Param("user") String user, @Param("peer") String peer, @Param("afterId") long afterId);
+            @Param("user") String user, @Param("peer") String peer, @Param("afterId") long afterId,
+            org.springframework.data.domain.Pageable page);
 
-    List<PrivateMessage> findByReceiverIgnoreCaseAndStatusOrderByIdAsc(String receiver, String status);
+    List<PrivateMessage> findByReceiverIgnoreCaseAndStatusOrderByIdAsc(String receiver, String status, org.springframework.data.domain.Pageable page);
 
     List<PrivateMessage> findAllByOrderByIdDesc();
 }

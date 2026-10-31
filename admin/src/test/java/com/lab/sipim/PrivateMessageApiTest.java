@@ -52,6 +52,32 @@ class PrivateMessageApiTest {
     @Autowired
     private ObjectMapper mapper;
 
+    @Autowired private com.lab.sipim.repo.RoomMessageRepository roomMessages;
+
+    @Test void incrementalPagesNeverSkipMessagesWhileInitialPageShowsRecentHistory() throws Exception {
+        String token = tokens.issue(users.findByUsername("1002").orElseThrow().getId());
+        String peer = "cursor-" + java.util.UUID.randomUUID();
+        var ids = new java.util.ArrayList<Long>();
+        var roomIds = new java.util.ArrayList<Long>();
+        for (int i = 0; i < 5; i++) {
+            ids.add(messages.saveAndFlush(new com.lab.sipim.domain.PrivateMessage("1002", peer, "page" + i, false, "PENDING")).getId());
+            roomIds.add(roomMessages.saveAndFlush(new com.lab.sipim.domain.RoomMessage("room-101", "1002", "page" + i, false)).getId());
+        }
+        for (int page = 0; page < 2; page++) {
+            long cursor = ids.get(page * 2), roomCursor = roomIds.get(page * 2);
+            mvc.perform(get("/api/messages").param("peer", peer).param("afterId", Long.toString(cursor)).param("limit", "2")
+                .header("Authorization", "Bearer " + token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(ids.get(page * 2 + 1)))
+                .andExpect(jsonPath("$[1].id").value(ids.get(page * 2 + 2)));
+            mvc.perform(get("/api/rooms/room-101/messages").param("afterId", Long.toString(roomCursor)).param("limit", "2")
+                .header("Authorization", "Bearer " + token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(roomIds.get(page * 2 + 1)))
+                .andExpect(jsonPath("$[1].id").value(roomIds.get(page * 2 + 2)));
+        }
+        mvc.perform(get("/api/messages").param("peer", peer).param("limit", "2").header("Authorization", "Bearer " + token))
+            .andExpect(jsonPath("$[0].id").value(ids.get(3))).andExpect(jsonPath("$[1].id").value(ids.get(4)));
+    }
+
     @Test
     void adminIsOnly1001() {
         assertThat(users.findByUsername("1001").orElseThrow().getRole()).isEqualTo("ADMIN");

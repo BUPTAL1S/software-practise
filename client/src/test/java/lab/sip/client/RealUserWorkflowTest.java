@@ -506,20 +506,34 @@ class RealUserWorkflowTest {
       assertEquals(16, Files.size(downloaded2), "TRUNCATE_EXISTING 必须截断旧文件，长度必须为新内容的 16 字节");
       assertEquals("B".repeat(16), Files.readString(downloaded2), "文件内容必须完整替换为新内容，无残留脏数据");
 
-      // 3. 验证图片消息 UI 气泡缩略图渲染
+      // 3. Render real PNG bytes asynchronously, with failures propagated to JUnit.
+      var png = new java.io.ByteArrayOutputStream();
+      javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(4, 4, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", png);
+      server.createContext("/api/files/preview.png", exchange -> {
+        exchange.sendResponseHeaders(200, png.size());
+        try (var out = exchange.getResponseBody()) { out.write(png.toByteArray()); }
+      });
       CountDownLatch uiLatch = new CountDownLatch(1);
+      AtomicReference<Throwable> previewFailure = new AtomicReference<>();
       Platform.runLater(() -> {
+        try {
         MainApp app = new MainApp();
         app.getHttpFileClient().setBaseUrl("http://127.0.0.1:" + port);
         MainApp.ChatMessageCell cell = app.new ChatMessageCell();
-        ChatMessage msg = ChatMessage.file("1002", "1001", false, new FileMessage("avatar.png", 16, normUrl), null);
+        cell.getPreviewImageView().imageProperty().addListener((obs, old, image) -> {
+          if (image != null) {
+            try { assertFalse(image.isError()); assertEquals(180, image.getWidth()); assertEquals(180, image.getHeight()); }
+            catch (Throwable failure) { previewFailure.set(failure); }
+            finally { uiLatch.countDown(); }
+          }
+        });
+        ChatMessage msg = ChatMessage.file("1002", "1001", false, new FileMessage("avatar.png", png.size(), "/api/files/preview.png"), null);
         cell.updateItem(msg, false);
         assertTrue(cell.getPreviewImageView().isVisible(), "图片文件气泡必须展示缩略图预览");
-        assertNotNull(cell.getPreviewImageView().getImage(), "图片预览必须加载有效 Image 对象");
-        assertEquals(normUrl, cell.getPreviewImageView().getImage().getUrl(), "预览图片 URL 必须为规范化后的本机后台地址");
-        uiLatch.countDown();
+        } catch (Throwable failure) { previewFailure.set(failure); uiLatch.countDown(); }
       });
       assertTrue(uiLatch.await(3, TimeUnit.SECONDS));
+      if (previewFailure.get() != null) throw new AssertionError(previewFailure.get());
     } finally {
       server.stop(0);
     }
