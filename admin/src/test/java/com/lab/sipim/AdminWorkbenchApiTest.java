@@ -115,13 +115,14 @@ class AdminWorkbenchApiTest {
                 .andExpect(status().isCreated());
     }
 
-    @Test void clientImageUrlsRemainCompatibleAndManagementDownloadsRequireAdmin() throws Exception {
+    @Test void privateDownloadsRequireOwnerRecipientOrAdmin() throws Exception {
         var result = mvc.perform(multipart("/api/files").file(new MockMultipartFile("file", "test.txt", "text/plain", new byte[]{1}))
                 .param("from", "1002").param("to", "1003").header("Authorization", "Bearer " + token("1002")))
                 .andExpect(status().isOk()).andReturn();
         long id = json.readTree(result.getResponse().getContentAsString()).get("id").asLong();
-        mvc.perform(get("/api/files/" + id)).andExpect(status().isOk());
-        mvc.perform(head("/api/files/" + id)).andExpect(status().isOk());
+        mvc.perform(get("/api/files/" + id)).andExpect(status().isUnauthorized());
+        mvc.perform(head("/api/files/" + id)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/files/" + id).header("Authorization", "Bearer " + token("1004"))).andExpect(status().isForbidden());
         mvc.perform(get("/api/files/" + id).header("Authorization", "Bearer " + token("1003"))).andExpect(status().isOk());
         mvc.perform(get("/api/admin/workbench/files/" + id)).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/admin/workbench/files/" + id).header("Authorization", "Bearer " + token("1003")))
@@ -137,6 +138,17 @@ class AdminWorkbenchApiTest {
         mvc.perform(post("/api/cdr").header("Authorization", "Bearer " + regular).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"caller\":\"1003\",\"callee_or_room\":\"1004\",\"duration_sec\":1}"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test void onlyPublishedProfileAvatarIsPublic() throws Exception {
+        var png = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(8, 8, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", png);
+        var user = users.findByUsername("1002").orElseThrow();
+        String url = mvc.getDispatcherServlet().getWebApplicationContext()
+            .getBean(com.lab.sipim.service.AvatarService.class).saveUploadedAvatar(user,
+                new MockMultipartFile("file", "avatar.png", "image/png", png.toByteArray()));
+        mvc.perform(get(url)).andExpect(status().isOk());
+        mvc.perform(head(url)).andExpect(status().isOk());
     }
 
     @Test void customExtensionAndFullSipRecipientsStillWork() throws Exception {
