@@ -1,6 +1,6 @@
 # UML 视图
 
-图用 Mermaid 画出 UML 里常用的几种视图：用例、活动、时序、状态、类、组件、部署。范围与 [需求分析.md](需求分析.md) 一致。阶段 1–5 的交互都已接到现有代码。房间没有群聊这条路径。
+图用 Mermaid 画出用例、活动、时序、状态、类、组件、部署视图。范围与 [需求分析.md](需求分析.md) 一致。房间 SIP MESSAGE 不支持，当前 HTTP 房间消息与私聊持久化已有实现；旧 SIP 时序只描述信令路径。
 
 ## 用例
 
@@ -28,7 +28,26 @@ flowchart LR
   user --> ucRoom
 ```
 
-`加入房间` 与一对一呼叫都已可演示。向房间发文字不是用例，Kamailio 对 `room-*` 的 MESSAGE 回 405。
+加入房间与一对一的代码路径均已有实现，真实媒体效果另行验收。Kamailio 对 `room-*` 的 MESSAGE 回 405，客户端房间文字/文件使用 HTTP；不经过 MCU 媒体路径。
+
+## 本轮离线性能模块（2026-10-30）
+
+```mermaid
+flowchart LR
+  UI[既有客户端] --> SIP[SipService]
+  SIP --> Profiles[MediaTuning 参数检查]
+  SIP --> Caps[5 秒能力快照]
+  SIP --> RTCP[独立媒体统计线程]
+  SIP --> Logs[有界文件日志队列]
+  Logs --> Disk[诊断文件]
+  Rooms[房间与统计接口] --> Peaks[RoomCallStatistics]
+  Peaks --> CDR[一次批量读取会议话单]
+  Socket[ESL 字节流] --> Frame[EslFrameReader]
+  Frame --> Listener[EslEventListener]
+  Listener --> RoomDB[房间人数]
+```
+
+该图不新增网络服务。RTCP 流统计不是显示帧率；完整回归、合成基准和 Windows 运行验证见 [本轮报告](reports/media-backend-optimization-20261030.md)。本轮明确不执行双机通话与入会验收。
 
 ## 活动：发起一次视频呼叫
 

@@ -1,0 +1,76 @@
+diff --git a/pjmedia/src/pjmedia/vid_stream.c b/pjmedia/src/pjmedia/vid_stream.c
+index bef30bd..b09c129 100644
+--- a/pjmedia/src/pjmedia/vid_stream.c
++++ b/pjmedia/src/pjmedia/vid_stream.c
+@@ -34,6 +34,7 @@
+ #include <pj/rand.h>
+ #include <pj/sock_select.h>
+ #include <pj/string.h>      /* memcpy() */
++#include <stdlib.h>         /* getenv() */
+ 
+ 
+ #if defined(PJMEDIA_HAS_VIDEO) && (PJMEDIA_HAS_VIDEO != 0)
+@@ -94,6 +95,8 @@ struct pjmedia_vid_stream
+ 
+     pjmedia_vid_codec_mgr   *codec_mgr;     /**< Codec manager.             */
+     pjmedia_vid_stream_info  info;          /**< Stream info.               */
++    unsigned                decode_min_delay_msec;
++    pj_bool_t               prefer_latest_picture;
+ 
+     pj_timestamp             rtcp_last_tx;  /**< Last RTCP tx time.         */
+ 
+@@ -630,7 +633,7 @@ static pj_status_t on_stream_rx_rtp(pjmedia_stream_common *c_strm,
+      */
+     ts_diff = pj_ntohl(hdr->ts) - stream->dec_frame.timestamp.u32.lo;
+     if (ts_diff != 0 || hdr->m) {
+-        if (PJMEDIA_VID_STREAM_SKIP_PACKETS_TO_REDUCE_LATENCY) {
++        if (stream->prefer_latest_picture) {
+             /* Always decode whenever we have picture in jb and
+              * overwrite already decoded picture if necessary
+              */
+@@ -1093,7 +1096,7 @@ static pj_status_t decode_frame(pjmedia_vid_stream *stream,
+          */
+         for (; frm_pkt_cnt > 1; --frm_pkt_cnt) {
+             char ptype;
+-            pjmedia_jbuf_peek_frame(c_strm->jb, frm_pkt_cnt, NULL, NULL, &ptype,
++            pjmedia_jbuf_peek_frame(c_strm->jb, frm_pkt_cnt - 1, NULL, NULL, &ptype,
+                                     NULL, NULL, NULL);
+             if (ptype == PJMEDIA_JB_NORMAL_FRAME)
+                 break;
+@@ -1191,7 +1194,7 @@ static pj_status_t decode_frame(pjmedia_vid_stream *stream,
+                     pjmedia_jbuf_get_state(c_strm->jb, &jb_state);
+ 
+                     stream->dec_delay_cnt =
+-                                    ((PJMEDIA_VID_STREAM_DECODE_MIN_DELAY_MSEC *
++                                    ((stream->decode_min_delay_msec *
+                                       vfd->fps.num) +
+                                      (1000 * vfd->fps.denum) - 1) /
+                                     (1000 * vfd->fps.denum);
+@@ -1535,6 +1538,18 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
+     /* Allocate stream */
+     stream = PJ_POOL_ZALLOC_T(pool, pjmedia_vid_stream);
+     PJ_ASSERT_RETURN(stream != NULL, PJ_ENOMEM);
++    {
++        const char *mode = getenv("SIP_VIDEO_LATENCY_MODE");
++        pj_bool_t legacy = mode && pj_ansi_strcmp(mode, "legacy") == 0;
++        stream->decode_min_delay_msec = legacy ?
++            PJMEDIA_VID_STREAM_DECODE_MIN_DELAY_MSEC : 40;
++        stream->prefer_latest_picture = legacy ?
++            PJMEDIA_VID_STREAM_SKIP_PACKETS_TO_REDUCE_LATENCY : PJ_TRUE;
++        PJ_LOG(4, (THIS_FILE,
++                   "Video latency policy: decode-floor=%u ms, prefer-latest=%d",
++                   stream->decode_min_delay_msec,
++                   stream->prefer_latest_picture));
++    }
+     c_strm = &stream->base;
+     c_strm->own_pool = own_pool;
+ 
+@@ -1740,7 +1755,7 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
+         jb_init  = 0;
+ 
+     /* Calculate the decoding delay (in number of frames) based on FPS */
+-    stream->dec_delay_cnt = ((PJMEDIA_VID_STREAM_DECODE_MIN_DELAY_MSEC *
++    stream->dec_delay_cnt = ((stream->decode_min_delay_msec *
+                               vfd_dec->fps.num) +
+                              (1000 * vfd_dec->fps.denum) - 1) /
+                             (1000 * vfd_dec->fps.denum);

@@ -233,7 +233,14 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       await browser.wait('document.getElementById("tab-rooms").classList.contains("active")');
     });
     await t.test('slow polling never overlaps requests; logout and expiration clear private rows', async () => {
+      const previous = state.requests.filter(item => item.path.endsWith('/cdr')).length;
       await clickTab('cdr');
+      // Cached rows and the global refresh button do not describe the tab's separate load.
+      // Settle that load before measuring the polling cycle, including its server-side close.
+      for (let attempt = 0; attempt < 200 && (state.activeCdr !== 0 ||
+          state.requests.filter(item => item.path.endsWith('/cdr')).length === previous); attempt++) await sleep(10);
+      assert.equal(state.activeCdr, 0);
+      assert.ok(state.requests.filter(item => item.path.endsWith('/cdr')).length > previous);
       await browser.wait('!document.getElementById("refreshAll").disabled');
       state.cdrDelay = 5800; state.maxCdr = 0;
       await browser.evaluate('document.getElementById("refreshAll").click(); document.getElementById("autoRefreshToggle").click()');

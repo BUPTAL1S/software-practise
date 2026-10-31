@@ -9,6 +9,7 @@ import com.lab.sipim.repo.RoomRepository;
 import com.lab.sipim.repo.UserRepository;
 import com.lab.sipim.security.LoginTokens;
 import com.lab.sipim.service.RoomPresenceRegistry;
+import com.lab.sipim.service.RoomCallStatistics;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +26,7 @@ public class RoomController {
     private final RoomMessageRepository messageRepo;
     private final UserRepository userRepo;
     private final LoginTokens tokens;
-    private final CdrRepository cdrRepo;
+    private final RoomCallStatistics roomStatistics;
     private final RoomPresenceRegistry presence;
     @Autowired(required = false)
     private com.lab.sipim.esl.EslEventListener eslEventListener;
@@ -35,13 +36,13 @@ public class RoomController {
             RoomMessageRepository messageRepo,
             UserRepository userRepo,
             LoginTokens tokens,
-            @Autowired(required = false) CdrRepository cdrRepo,
+            RoomCallStatistics roomStatistics,
             RoomPresenceRegistry presence) {
         this.roomRepo = roomRepo;
         this.messageRepo = messageRepo;
         this.userRepo = userRepo;
         this.tokens = tokens;
-        this.cdrRepo = cdrRepo;
+        this.roomStatistics = roomStatistics;
         this.presence = presence;
     }
 
@@ -49,8 +50,9 @@ public class RoomController {
     public ResponseEntity<List<Map<String, Object>>> listRooms() {
         List<Room> rooms = roomRepo.findAllByOrderByIdAsc();
         List<Map<String, Object>> resp = new ArrayList<>();
+        Map<String, Integer> peaks = rooms.isEmpty() ? Map.of() : roomStatistics.peaksByRoom();
         for (Room r : rooms) {
-            resp.add(formatRoom(r));
+            resp.add(formatRoom(r, peaks.getOrDefault(RoomCallStatistics.roomKey(r.getSipUri()), 0)));
         }
         return ResponseEntity.ok(resp);
     }
@@ -273,6 +275,10 @@ public class RoomController {
     }
 
     private Map<String, Object> formatRoom(Room r) {
+        return formatRoom(r, roomStatistics.peakForRoom(r.getSipUri()));
+    }
+
+    private Map<String, Object> formatRoom(Room r, int peak) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", r.getId());
         m.put("name", r.getName());
@@ -283,9 +289,6 @@ public class RoomController {
         m.put("member_count", r.getMemberCount());
         m.put("memberCount", r.getMemberCount());
 
-        int peak = (cdrRepo != null && r.getSipUri() != null)
-                ? CdrController.calculatePeakConcurrentMembersForRoom(cdrRepo, r.getSipUri())
-                : 0;
         m.put("peak_members", peak);
         m.put("peakMembers", peak);
         return m;

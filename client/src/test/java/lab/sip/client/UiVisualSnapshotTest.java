@@ -67,16 +67,7 @@ class UiVisualSnapshotTest {
         bi.setRGB(x, y, pr.getArgb(x, y));
       }
     }
-    File out = new File("/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/" + filename);
-    if (out.getParentFile() != null) {
-      out.getParentFile().mkdirs();
-    }
-    ImageIO.write(bi, "png", out);
-
-    File repoOut = new File("../docs/snapshots/" + filename);
-    if (!repoOut.getParentFile().exists()) {
-      repoOut = new File("docs/snapshots/" + filename);
-    }
+    File repoOut = new File("target/test-snapshots/" + filename);
     if (repoOut.getParentFile() != null) {
       repoOut.getParentFile().mkdirs();
     }
@@ -261,7 +252,7 @@ class UiVisualSnapshotTest {
                 bi.setRGB(x, y, pr.getArgb(x, y));
               }
             }
-            File out = new File("/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_full_client_in_room.png");
+            File out = new File("target/test-snapshots/snapshot_full_client_in_room.png");
             if (out.getParentFile() != null) {
               out.getParentFile().mkdirs();
             }

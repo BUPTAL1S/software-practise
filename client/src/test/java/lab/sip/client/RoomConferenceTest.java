@@ -346,7 +346,7 @@ class RoomConferenceTest {
             }
             File out =
                 new File(
-                    "/Users/developing/.gemini/antigravity-cli/brain/194ae225-4b5f-42bc-aa49-055e7cc3fb8c/snapshot_room_exit_and_selection_fixed.png");
+                    "target/test-snapshots/snapshot_room_exit_and_selection_fixed.png");
             ImageIO.write(bi, "png", out);
             System.out.println("ROOM_FIXED_SNAPSHOT_SAVED: " + out.getAbsolutePath());
 

@@ -188,9 +188,13 @@ class RealUserWorkflowTest {
   @Test
   void testRoomJoinPrimaryButtonAndIntelligentDeviceSelection() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    AtomicReference<MainApp> appRef = new AtomicReference<>();
 
     Platform.runLater(() -> {
+      try {
       MainApp app = new MainApp();
+      appRef.set(app);
       TableView<HttpFileClient.RoomInfo> tableView = app.getRoomTableView();
       assertNotNull(tableView, "MainApp 必须初始化 roomTableView");
 
@@ -251,17 +255,33 @@ class RealUserWorkflowTest {
       // 禁用摄像头状态下如果尝试拉起预览，必须安全抛出 IllegalStateException 阻止，杜绝底层崩溃
       assertThrows(IllegalStateException.class, sip::startPreview, "摄像头禁用时拉起预览必须抛出明确异常");
 
-      // 用户再次点击界面上的【开启摄像头】复选框，重新勾选启用
-      cameraToggle.fire(); // 再次触发点击事件，将 false 切换回 true
-      assertTrue(cameraToggle.isSelected());
-      assertTrue(sip.isCameraEnabled(), "重新勾选复选框必须联动将底层 cameraEnabled 设为 true");
-      boolean expectedVideo = sip.hasVideoSupport() && sip.hasCaptureDevice();
-      assertEquals(expectedVideo, sip.isVideoCallAllowed(), "重新开启摄像头后根据硬件实际采集能力决策");
-
-      latch.countDown();
+      } catch (Throwable error) { failure.set(error); }
+      finally { latch.countDown(); }
     });
 
     assertTrue(latch.await(3, TimeUnit.SECONDS));
+    if (failure.get() != null) throw new AssertionError("Camera state failed", failure.get());
+    var field = MainApp.class.getDeclaredField("calls"); field.setAccessible(true);
+    CallUiCoordinator calls = (CallUiCoordinator) field.get(appRef.get());
+    // The native worker must finish the first change before a second click is accepted.
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (calls.isBusy() && System.nanoTime() < deadline) Thread.sleep(10);
+    assertFalse(calls.isBusy());
+    CountDownLatch enabled = new CountDownLatch(1);
+    Platform.runLater(() -> {
+      try {
+        MainApp app = appRef.get(); SipService sip = app.getSipService();
+        app.getCameraToggleBox().fire();
+        assertTrue(app.getCameraToggleBox().isSelected()); assertTrue(sip.isCameraEnabled());
+        assertEquals(sip.hasVideoSupport() && sip.hasCaptureDevice(), sip.isVideoCallAllowed());
+        assertNotEquals("摄像头已禁用", app.getPreviewBtn().getText());
+      } catch (Throwable error) { failure.set(error); }
+      finally { enabled.countDown(); }
+    });
+    try {
+      assertTrue(enabled.await(3, TimeUnit.SECONDS));
+      if (failure.get() != null) throw new AssertionError("Camera restore failed", failure.get());
+    } finally { calls.close(); }
   }
 
   @Test
