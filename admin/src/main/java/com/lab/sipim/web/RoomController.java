@@ -93,7 +93,7 @@ public class RoomController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", LoginController.UNAUTHORIZED));
         }
-        presence.heartbeat(found.get().getSipUri(), user.get().getUsername());
+        presence.heartbeat(found.get().getSipUri(), user.get().getSipId());
         return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
@@ -168,10 +168,12 @@ public class RoomController {
         String roomKey = r.getSipUri().toLowerCase();
 
         List<com.lab.sipim.domain.RoomMessage> entities;
+        var page = org.springframework.data.domain.PageRequest.of(0, Math.max(1, Math.min(limit, 500)));
         if (afterId > 0) {
-            entities = messageRepo.findByRoomUriIgnoreCaseAndIdGreaterThanOrderByIdAsc(roomKey, afterId);
+            entities = messageRepo.findByRoomUriIgnoreCaseAndIdGreaterThanOrderByIdAsc(roomKey, afterId, page);
         } else {
-            entities = messageRepo.findByRoomUriIgnoreCaseOrderByIdAsc(roomKey);
+            entities = messageRepo.findByRoomUriIgnoreCaseOrderByIdDesc(roomKey, page);
+            java.util.Collections.reverse(entities);
         }
 
         List<RoomMessage> result = new ArrayList<>();
@@ -184,9 +186,6 @@ public class RoomController {
                     m.isFile(),
                     m.getCreatedAt()
             ));
-        }
-        if (limit > 0 && result.size() > limit) {
-            result = result.subList(result.size() - limit, result.size());
         }
         return ResponseEntity.ok(result);
     }

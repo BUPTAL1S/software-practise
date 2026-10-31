@@ -356,7 +356,7 @@ public class EslEventListener implements AutoCloseable {
         if (presence == null || presence.startupAgeMillis() < 20_000) {
             return;
         }
-        final long heartbeatTtlMs = 15_000;
+        final long heartbeatTtlMs = 60_000;
         final int minimumJoinSeconds = 30;
         java.util.List<String[]> stale = new ArrayList<>();
         synchronized (memberLock) {
@@ -369,7 +369,9 @@ public class EslEventListener implements AutoCloseable {
                     if (joinTime == null || joinTime < minimumJoinSeconds) {
                         continue;
                     }
-                    if (!presence.isFresh(roomKey, caller, heartbeatTtlMs)) {
+                    // Older clients have no HTTP heartbeat. Do not kick a live SIP member
+                    // merely because the backend has never seen a heartbeat from it.
+                    if (presence.hasHeartbeat(roomKey, caller) && !presence.isFresh(roomKey, caller, heartbeatTtlMs)) {
                         stale.add(new String[] {roomKey, caller, String.valueOf(member.getValue())});
                     }
                 }
