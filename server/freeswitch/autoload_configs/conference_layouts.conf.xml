@@ -1,0 +1,38 @@
+<configuration name="conference_layouts.conf" description="SIP adaptive video layouts">
+  <layout-settings>
+    <layouts>
+      <layout name="sip-single">
+        <image x="0" y="0" scale="360" floor="true"/>
+      </layout>
+      <layout name="sip-pair">
+        <image x="0" y="90" scale="180"/>
+        <image x="180" y="90" scale="180"/>
+      </layout>
+      <layout name="sip-four">
+        <image x="0" y="0" scale="180"/>
+        <image x="180" y="0" scale="180"/>
+        <image x="0" y="180" scale="180"/>
+        <image x="180" y="180" scale="180"/>
+      </layout>
+      <layout name="sip-nine">
+        <image x="0" y="0" scale="120"/>
+        <image x="120" y="0" scale="120"/>
+        <image x="240" y="0" scale="120"/>
+        <image x="0" y="120" scale="120"/>
+        <image x="120" y="120" scale="120"/>
+        <image x="240" y="120" scale="120"/>
+        <image x="0" y="240" scale="120"/>
+        <image x="120" y="240" scale="120"/>
+        <image x="240" y="240" scale="120"/>
+      </layout>
+    </layouts>
+    <groups>
+      <group name="sip-adaptive">
+        <layout>sip-single</layout>
+        <layout>sip-pair</layout>
+        <layout>sip-four</layout>
+        <layout>sip-nine</layout>
+      </group>
+    </groups>
+  </layout-settings>
+</configuration>
