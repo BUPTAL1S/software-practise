@@ -141,6 +141,12 @@ final class VideoCallWindow {
     }
   }
 
+  void syncElapsed(long elapsedNanos) {
+    if (!connected) return;
+    startedAt = System.nanoTime() - Math.max(0, elapsedNanos);
+    if (timerLabel != null) timerLabel.setText(CallUi.duration(elapsedNanos));
+  }
+
   void setMuted(boolean muted) {
     this.muted = muted;
     if (muteBtn != null) CallUi.state(muteBtn, muted ? "取消静音" : "静音", muted);
@@ -177,51 +183,55 @@ final class VideoCallWindow {
   }
 
   /** Reparent the PJSIP windows into this stage. Safe to call repeatedly. */
+  private volatile NativeVideoPlacement.Bounds requestedBounds;
+  private volatile long nativeParent;
+  private final java.util.concurrent.atomic.AtomicBoolean layoutPending = new java.util.concurrent.atomic.AtomicBoolean();
+
   boolean attachNative(long remote, long pip) {
-    if (disposed || stage == null || !stage.isShowing() || remote == 0 || remoteAvatarOff) {
-      return false;
-    }
-    if (!WindowLayout.isAvailable()) {
-      if (placeholder != null) {
-        showWaiting(true);
-        placeholder.setText("视频画面已在独立窗口中打开");
+    if (disposed || stage == null || !stage.isShowing()) return false;
+    if (remoteAvatarOff) remote = 0;
+    if (remote == 0 && pip == 0) return false;
+    long oldPip = pipHandle;
+    if (pip == 0 && oldPip != 0) runNative(() -> WindowLayout.detach(0, oldPip));
+    remoteHandle = remote; pipHandle = pip;
+    // Child avatar/waiting panes may still have stale or overflowing visual bounds
+    // during a managed-state transition. Only the allocated viewport owns video.
+    var area = videoArea.localToScene(videoArea.getLayoutBounds());
+    requestedBounds = new NativeVideoPlacement.Bounds(0, remote, pip,
+        (int)Math.round(area.getMinX()), (int)Math.round(area.getMinY()),
+        Math.max(2, (int)Math.round(area.getWidth())), Math.max(2, (int)Math.round(area.getHeight())),
+        stage.getOutputScaleX(), stage.getOutputScaleY());
+    if (!layoutPending.compareAndSet(false, true)) return true;
+    final String title = stage.getTitle();
+    runNative(() -> {
+      NativeVideoPlacement.Bounds bounds = null;
+      try {
+        do {
+          bounds = requestedBounds;
+          if (disposed || bounds == null) break;
+          if (nativeParent == 0) nativeParent = WindowLayout.findWindow(title);
+          final var requested = bounds;
+          boolean applied = placement.apply(bounds, () -> WindowLayout.attach(nativeParent,
+              requested.remote(), requested.pip(), requested.x(), requested.y(), requested.w(), requested.h(),
+              requested.scaleX(), requested.scaleY()));
+          if (applied) Platform.runLater(() -> {
+            if (!disposed && requestedBounds == requested && requested.remote() != 0 && !remoteAvatarOff) showWaiting(false);
+          });
+          // Coalesce resize events while native parenting is busy; never build an unbounded queue.
+        } while (bounds != requestedBounds && !disposed);
+      } finally {
+        layoutPending.set(false);
+        // A new request can arrive between the loop condition and clearing the flag.
+        if (!disposed && requestedBounds != null && requestedBounds != bounds) {
+          Platform.runLater(this::layoutNative);
+        }
       }
-      return false;
-    }
-    long parent = WindowLayout.findWindow(stage.getTitle());
-    if (parent == 0) {
-      return false;
-    }
-    if (pip == 0 && pipHandle != 0) {
-      long oldPip = pipHandle;
-      pipHandle = 0;
-      runNative(() -> WindowLayout.detach(0, oldPip));
-    }
-    javafx.geometry.Bounds bounds = videoArea.localToScene(videoArea.getBoundsInLocal());
-    int x = (int) Math.round(bounds.getMinX());
-    int y = (int) Math.round(bounds.getMinY());
-    int w = Math.max(2, (int) Math.round(bounds.getWidth()));
-    int h = Math.max(2, (int) Math.round(bounds.getHeight()));
-    NativeVideoPlacement.Bounds requested = new NativeVideoPlacement.Bounds(
-        parent, remote, pip, x, y, w, h, stage.getOutputScaleX(), stage.getOutputScaleY());
-    if (!placement.apply(requested,
-        () -> {
-          runNative(() -> WindowLayout.attach(parent, remote, pip, x, y, w, h));
-          return true;
-        })) {
-      return false;
-    }
-    remoteHandle = remote;
-    if (pip != 0) {
-      pipHandle = pip;
-    }
-    if (placeholder != null) {
-      showWaiting(false);
-    }
+    });
     return true;
   }
 
   void detachPip() {
+    requestedBounds = null;
     placement.invalidate();
     if (pipHandle != 0) {
       long oldPip = pipHandle;
@@ -232,6 +242,7 @@ final class VideoCallWindow {
 
   /** Release SDL/JavaFX parenting before creating or restarting a native renderer. */
   void detachNative() {
+    requestedBounds = null;
     placement.invalidate();
     long remote = remoteHandle;
     long pip = pipHandle;
@@ -283,6 +294,7 @@ final class VideoCallWindow {
   void setRemoteAvatarOff(boolean off, String peerName) {
     this.remoteAvatarOff = off;
     if (off) {
+      requestedBounds = null;
       if (remoteHandle != 0) {
         placement.invalidate();
         long oldRemote = remoteHandle;
@@ -309,6 +321,7 @@ final class VideoCallWindow {
    */
   void hideForHangup() {
     hangupRequested = true;
+    requestedBounds = null;
     placement.invalidate();
     stopTimer();
     if (stage != null) {
@@ -454,14 +467,9 @@ final class VideoCallWindow {
     root.getStyleClass().addAll("call-root", "video-root");
 
     stage.setScene(CallUi.scene(root, 1000, 740));
-    if (room) {
-      // Meeting-room MCU canvas has a fixed 16:9 layout; resizing the JavaFX
-      // window only creates a large unused background around the native child.
-      stage.setResizable(false);
-      stage.setMaximized(false);
-      stage.setWidth(1000);
-      stage.setHeight(740);
-    }
+    stage.setResizable(true);
+    stage.outputScaleXProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
+    stage.outputScaleYProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
     stage.setOnCloseRequest(
         e -> {
           e.consume();
@@ -478,15 +486,19 @@ final class VideoCallWindow {
     stage.maximizedProperty().addListener((obs, oldV, newV) -> requestLayoutNative());
   }
 
+  private boolean layoutScheduled;
   private void requestLayoutNative() {
     // Wait for BorderPane to finish the resize pass before measuring videoArea.
-    Platform.runLater(() -> Platform.runLater(this::layoutNative));
+    if (layoutScheduled || disposed || hangupRequested) return;
+    layoutScheduled = true;
+    Platform.runLater(() -> Platform.runLater(() -> {
+      layoutScheduled = false;
+      layoutNative();
+    }));
   }
 
   private void layoutNative() {
-    if (remoteHandle != 0) {
-      attachNative(remoteHandle, pipHandle);
-    }
+    if (!hangupRequested && (remoteHandle != 0 || pipHandle != 0)) attachNative(remoteHandle, pipHandle);
   }
 
   private void startTimer() {
@@ -510,12 +522,6 @@ final class VideoCallWindow {
       timer.stop();
       timer = null;
     }
-  }
-
-  void syncElapsed(long elapsedNanos) {
-    if (!connected || timerLabel == null) return;
-    startedAt = System.nanoTime() - Math.max(0, elapsedNanos);
-    timerLabel.setText(CallUi.duration(elapsedNanos));
   }
 
 }

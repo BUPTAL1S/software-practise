@@ -4,7 +4,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * 跨平台原生渲染层镜像控制器（macOS Cocoa / CALayer 与 Windows Win32 / WS_EX_LAYOUTRTL 硬件级水平翻转）。
+ * 跨平台原生渲染层镜像控制器（macOS Cocoa / CALayer 与 Windows SDL 纹理水平翻转）。
  * 针对本地摄像头预览应用水平翻转，满足用户自视的“照镜子”生理直觉；
  * 保持远端 RTP 视频传输流为光学真实视角，互不干扰。
  */
@@ -99,35 +99,13 @@ public final class NativeMirror {
       return;
     }
     try {
-      Path root = NativeLoader.findRepoRoot();
-      if (os.contains("mac")) {
-        Path dylib = root.resolve("native/macos-arm64/libmacmirror.dylib");
-        if (!Files.isRegularFile(dylib)) {
-          dylib = root.resolve("native/macos-x64/libmacmirror.dylib");
-        }
-        if (!Files.isRegularFile(dylib)) {
-          dylib = root.resolve("native/libmacmirror.dylib");
-        }
-        if (Files.isRegularFile(dylib)) {
-          System.load(dylib.toAbsolutePath().toString());
-          loaded = true;
-        }
-      } else if (os.contains("win")) {
-        Path dll = root.resolve("native/windows-x64/winmirror.dll");
-        if (!Files.isRegularFile(dll)) {
-          dll = root.resolve("native/winmirror.dll");
-        }
-        if (Files.isRegularFile(dll)) {
-          System.load(dll.toAbsolutePath().toString());
-          loaded = true;
-        }
+      Path lib = NativeLoader.helperFile("winmirror.dll", "libmacmirror.dylib");
+      if (Files.isRegularFile(lib)) {
+        System.load(lib.toAbsolutePath().toString());
+        loaded = !os.contains("win") || mirrorApiVersionNative() == 2;
       }
     } catch (UnsatisfiedLinkError e) {
-      if (e.getMessage() != null && e.getMessage().contains("already loaded")) {
-        loaded = true;
-      } else {
-        loaded = false;
-      }
+      loaded = false;
     } catch (Throwable t) {
       loaded = false;
     }
@@ -135,6 +113,7 @@ public final class NativeMirror {
 
   // JNI native exports (implemented in native/macos-arm64/NativeMirror.m and native/windows-x64/NativeMirrorWin.c)
   private static native void applyMirror(long hwnd, String title);
+  private static native int mirrorApiVersionNative();
   private static native void restoreNormalNative(long hwnd, String title);
   private static native boolean isMirroredNative(long hwnd);
 }

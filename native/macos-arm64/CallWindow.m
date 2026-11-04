@@ -35,36 +35,43 @@ Java_lab_sip_client_WindowLayout_findWindowNative(JNIEnv *env, jclass cls,
     return 0;
 }
 
-JNIEXPORT void JNICALL
-Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
+JNIEXPORT jint JNICALL Java_lab_sip_client_WindowLayout_layoutApiVersionNative(JNIEnv *env, jclass cls) {
+    (void)env; (void)cls; return 2;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_lab_sip_client_WindowLayout_attachScaledNative(JNIEnv *env, jclass cls,
                                               jlong parentHandle,
                                               jlong remoteHandle,
                                               jlong pipHandle,
-                                              jint x, jint y, jint w, jint h) {
+                                              jint x, jint y, jint w, jint h, jdouble scaleX, jdouble scaleY) {
     (void)env;
     (void)cls;
     NSWindow *parent = as_window(parentHandle);
+    (void)scaleX; (void)scaleY;
     NSWindow *remote = as_window(remoteHandle);
     NSWindow *pip = as_window(pipHandle);
-    if (parent == nil || remote == nil) return;
+    if (parent == nil || (remote == nil && pip == nil) || w < 2 || h < 2) return JNI_FALSE;
 
-    NSRect content = [parent contentRectForFrameRect:[parent frame]];
+    NSRect content = [[parent contentView] bounds];
     NSRect contentOnScreen = [parent convertRectToScreen:content];
     CGFloat baseX = contentOnScreen.origin.x;
     CGFloat baseY = contentOnScreen.origin.y;
     CGFloat contentH = contentOnScreen.size.height;
 
+    if (remote != nil) {
     [remote setStyleMask:NSWindowStyleMaskBorderless];
     if ([remote parentWindow] != parent) {
         [parent addChildWindow:remote ordered:NSWindowAbove];
     }
     [remote setFrame:NSMakeRect(baseX + x, baseY + contentH - y - h, w, h) display:YES];
     [remote orderFront:nil];
+    }
 
     if (pip != nil) {
         CGFloat pipW = w / 4.0;
-        if (pipW < 180.0) pipW = 180.0;
         if (pipW > 320.0) pipW = 320.0;
+        pipW = MIN(pipW, MIN(w - 32.0, (h - 32.0) * 16.0 / 9.0));
         CGFloat pipH = pipW * 9.0 / 16.0;
         CGFloat margin = 16.0;
         [pip setStyleMask:NSWindowStyleMaskBorderless];
@@ -75,8 +82,13 @@ Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
                                  baseY + contentH - (y + h) + margin, pipW, pipH) display:YES];
         [pip orderFront:nil];
     }
+    return JNI_TRUE;
 }
 
+JNIEXPORT void JNICALL Java_lab_sip_client_WindowLayout_attachNative(JNIEnv *env, jclass cls,
+    jlong parent, jlong remote, jlong pip, jint x, jint y, jint w, jint h) {
+    Java_lab_sip_client_WindowLayout_attachScaledNative(env, cls, parent, remote, pip, x, y, w, h, 0, 0);
+}
 JNIEXPORT void JNICALL
 Java_lab_sip_client_WindowLayout_detachNative(JNIEnv *env, jclass cls,
                                               jlong remoteHandle,

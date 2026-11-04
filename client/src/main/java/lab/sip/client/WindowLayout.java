@@ -48,7 +48,12 @@ public final class WindowLayout {
    */
   public static boolean attach(
       long parent, long remote, long pip, int x, int y, int w, int h) {
-    if (parent == 0 || remote == 0 || w <= 0 || h <= 0) {
+    return attach(parent, remote, pip, x, y, w, h, 0, 0);
+  }
+
+  public static boolean attach(long parent, long remote, long pip, int x, int y, int w, int h,
+      double scaleX, double scaleY) {
+    if (parent == 0 || (remote == 0 && pip == 0) || w <= 0 || h <= 0) {
       return false;
     }
     ensureLoaded();
@@ -56,11 +61,7 @@ public final class WindowLayout {
       return false;
     }
     try {
-      if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
-        return attachWindowsNative(parent, remote, pip, x, y, w, h);
-      }
-      attachNative(parent, remote, pip, x, y, w, h);
-      return true;
+      return attachScaledNative(parent, remote, pip, x, y, w, h, scaleX, scaleY);
     } catch (Throwable ignored) {
       return false;
     }
@@ -85,26 +86,13 @@ public final class WindowLayout {
     attempted = true;
     String os = System.getProperty("os.name", "").toLowerCase();
     try {
-      Path root = NativeLoader.findRepoRoot();
-      Path lib;
-      if (os.contains("win")) {
-        lib = root.resolve("native/windows-x64/callwindow.dll");
-      } else if (os.contains("mac")) {
-        String arch = System.getProperty("os.arch", "").toLowerCase();
-        Path dir =
-            root.resolve(
-                (arch.contains("aarch64") || arch.contains("arm64"))
-                    ? "native/macos-arm64"
-                    : "native/macos-x64");
-        lib = dir.resolve("libcallwindow.dylib");
-      } else {
-        return;
-      }
+      if (!os.contains("win") && !os.contains("mac")) return;
+      Path lib = NativeLoader.helperFile("callwindow.dll", "libcallwindow.dylib");
       if (!Files.isRegularFile(lib)) {
         return;
       }
       System.load(lib.toAbsolutePath().toString());
-      loaded = true;
+      loaded = layoutApiVersionNative() == 2;
     } catch (Throwable ignored) {
       loaded = false;
     }
@@ -112,11 +100,16 @@ public final class WindowLayout {
 
   private static native long findWindowNative(String title);
 
-  private static native void attachNative(
-      long parent, long remote, long pip, int x, int y, int w, int h);
-
-  private static native boolean attachWindowsNative(
-      long parent, long remote, long pip, int x, int y, int w, int h);
+  private static native int layoutApiVersionNative();
+  /** Windows diagnostic snapshot: parent, x, y, width, height, visible; empty if unavailable. */
+  static long[] describe(long handle) {
+    ensureLoaded();
+    if (!loaded) return new long[0];
+    try { return describeNative(handle); } catch (Throwable unavailable) { return new long[0]; }
+  }
+  private static native long[] describeNative(long handle);
+  private static native boolean attachScaledNative(
+      long parent, long remote, long pip, int x, int y, int w, int h, double scaleX, double scaleY);
 
   private static native void detachNative(long remote, long pip);
 }

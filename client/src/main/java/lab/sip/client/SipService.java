@@ -456,6 +456,7 @@ final class SipService {
     }
     VideoPreview candidate = new VideoPreview(vd.captureDevId);
     VideoPreviewOpParam opParam = new VideoPreviewOpParam();
+    opParam.setWindowFlags(2); // PJMEDIA_VID_DEV_WND_RESIZABLE
     try {
       candidate.start(opParam);
       videoPreview = candidate;
@@ -790,6 +791,7 @@ final class SipService {
       VideoMediaPolicy.configureAccount(cfg, mediaTuning);
       cfg.getVideoConfig().setAutoShowIncoming(false);
       cfg.getVideoConfig().setAutoTransmitOutgoing(false);
+      cfg.getVideoConfig().setWindowFlags(2);
       int capDev = findDefaultCaptureDev();
       if (capDev >= 0) {
         cfg.getVideoConfig().setDefaultCaptureDevice(capDev);
