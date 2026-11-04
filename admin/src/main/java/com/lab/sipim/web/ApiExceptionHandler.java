@@ -10,6 +10,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> invalidArgument(IllegalArgumentException error) {
+        return ResponseEntity.badRequest().body(Map.of("error",
+                error.getMessage() == null ? "invalid request" : error.getMessage()));
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<Map<String, String>> unreadableBody(HttpServletRequest request) {
         String uri = (request != null && request.getRequestURI() != null) ? request.getRequestURI() : "";

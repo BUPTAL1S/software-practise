@@ -87,6 +87,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private MainApp activeSession = this;
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
+  private final AttachmentPreviews attachmentPreviews = new AttachmentPreviews();
 
   public ObservableList<ChatMessage> getOrCreateSession(String target) {
     if (target == null || target.isBlank()) {
@@ -430,7 +431,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                     () -> {
                       if (sessionClosed) return;
                       for (HttpFileClient.PrivateMessageInfo info : list) {
-                        if (info.id() <= 0 || !seenPrivateMessageIds.add(info.id())) {
+                        if (info.id() <= 0) continue;
+                        if (!seenPrivateMessageIds.add(info.id())) {
+                          // A previous delivery acknowledgement may have failed. Retry
+                          // without inserting the already rendered message a second time.
+                          acknowledgePrivateMessage(info.id());
                           continue;
                         }
                         // Give the online SIP MESSAGE a few seconds to arrive first.
@@ -476,17 +481,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                             }
                           }
                         }
-                        pollExecutor.execute(
-                                () -> {
-                                  try {
-                                    httpFileClient.updatePrivateMessageStatus(
-                                        info.id(), "DELIVERED");
-                                  } catch (Exception ex) {
-                                    if (isHttpUnauthorized(ex)) {
-                                      reloginHttp();
-                                    }
-                                  }
-                                });
+                        acknowledgePrivateMessage(info.id());
                       }
                     });
               } catch (Exception ex) {
@@ -498,6 +493,13 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   /** Refresh delivery states for the currently open private conversation. */
+  private void acknowledgePrivateMessage(long id) {
+    pollExecutor.execute(() -> {
+      try { httpFileClient.updatePrivateMessageStatus(id, "DELIVERED"); }
+      catch (Exception ex) { if (isHttpUnauthorized(ex)) reloginHttp(); }
+    });
+  }
+
   private void refreshActivePrivateStatuses() {
     if (sessionClosed) return;
     String target = (peer != null && peer.getText() != null) ? extractUser(peer.getText().trim()) : "";
@@ -833,6 +835,11 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       new java.util.concurrent.atomic.AtomicBoolean();
   private final java.util.concurrent.atomic.AtomicBoolean directoryRefreshInFlight =
       new java.util.concurrent.atomic.AtomicBoolean();
+  private volatile String heartbeatRoom = "";
+  private final java.util.concurrent.ScheduledExecutorService heartbeatExecutor =
+      java.util.concurrent.Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "room-heartbeat"); thread.setDaemon(true); return thread;
+      });
   private final CallUiCoordinator calls = new CallUiCoordinator(this);
 
   private String campusIp = "";
@@ -1241,6 +1248,13 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         }));
     probeAndPollTimeline.setCycleCount(Animation.INDEFINITE);
     assembler.setOnLogout(() -> logoutToLogin(probeAndPollTimeline, roomPollingTimeline));
+    heartbeatExecutor.scheduleWithFixedDelay(() -> {
+      String room = heartbeatRoom;
+      if (!room.isBlank()) {
+        try { httpFileClient.sendRoomHeartbeat(room); }
+        catch (Exception failure) { /* Next independent heartbeat retries; never wait for contact probes. */ }
+      }
+    }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
 
     stage.setOnCloseRequest(
         e -> {
@@ -1439,6 +1453,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     if (sessionClosed) return;
     sessionClosed = true;
     backgroundLoginAllowed = false;
+    heartbeatRoom = "";
+    heartbeatExecutor.shutdownNow();
+    attachmentPreviews.close();
     polling.stop();
     roomPolling.stop();
     logs.dockBack();
@@ -1508,6 +1525,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
   private void pollOnlineStatusesAndRoomMessages() {
     if (sessionClosed || calls.isBusy()) return;
+    heartbeatRoom = sip.isInRoomCall() && sip.isCallConnected() ? extractUser(sip.currentCallTarget()) : "";
     if (!pollInFlight.compareAndSet(false, true)) {
       return;
     }
@@ -1519,17 +1537,6 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     pollExecutor.execute(
         () -> {
           try {
-          // Keep the ESL stale-member cleaner informed while this client is in a room.
-          if (inRoom && !activeRoom.isBlank()) {
-            try {
-              httpFileClient.setBaseUrl(httpServerField.getText().trim());
-              httpFileClient.sendRoomHeartbeat(activeRoom);
-            } catch (Exception ex) {
-              if (isHttpUnauthorized(ex)) {
-                reloginHttp();
-              }
-            }
-          }
           // 1. 探活联系人真实在线状态 (1001, 1002, 1003)
           String sipHost = (server != null && server.getText() != null) ? server.getText().trim() : "127.0.0.1";
           int sipPortNum = 5060;
@@ -3067,8 +3074,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             if (hasLocal) {
               img = new Image(item.getLocalPath().toUri().toString(), 180, 0, true, true);
             } else {
-              String normUrl = httpFileClient.normalizeFileUrl(fm.getUrl());
-              img = new Image(normUrl, 180, 0, true, true, true);
+              img = null;
+              attachmentPreviews.load(httpFileClient, fm.getUrl()).thenAccept(loaded -> Platform.runLater(() -> {
+                if (getItem() == item && !isEmpty()) previewImageView.setImage(loaded);
+              }));
             }
             previewImageView.setImage(img);
             previewImageView.setVisible(true);
@@ -3083,7 +3092,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
                         getHostServices().showDocument(item.getLocalPath().toUri().toString());
                       }
                     } else {
-                      getHostServices().showDocument(httpFileClient.normalizeFileUrl(fm.getUrl()));
+                      handleDownloadFile(item);
                     }
                   } catch (Exception ex) {
                     logs.append("错误", "打开图片失败: " + ex.getMessage());
@@ -3254,6 +3263,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     }
     sessionClosed = true;
     backgroundLoginAllowed = false;
+    heartbeatRoom = "";
+    heartbeatExecutor.shutdownNow();
+    attachmentPreviews.close();
     roomCameraUpdates.shutdownNow();
     pollExecutor.shutdownNow();
     calls.close();

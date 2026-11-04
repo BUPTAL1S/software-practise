@@ -2,6 +2,11 @@ server:
   port: ${SERVER_PORT:8080}
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 64MB
+      max-request-size: 65MB
+      file-size-threshold: 0
   datasource:
     url: jdbc:sqlite:${SIPIM_DB:./sipim.db}
     driver-class-name: org.sqlite.JDBC

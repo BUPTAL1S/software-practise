@@ -4,6 +4,7 @@ import com.lab.sipim.domain.FileIndex;
 import com.lab.sipim.domain.User;
 import com.lab.sipim.repo.FileIndexRepository;
 import com.lab.sipim.repo.UserRepository;
+import com.lab.sipim.security.IdentityRules;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,7 +91,10 @@ public class AvatarService implements ApplicationRunner {
         try {
             List<User> users = userRepo.findAll();
             for (User u : users) {
-                ensureUserAvatar(u);
+                try { ensureUserAvatar(u); }
+                catch (IllegalArgumentException invalid) {
+                    log.warn("Skipped unsafe legacy avatar identity for user id {}", u.getId());
+                }
             }
             log.info("Initialized avatars for {} users in {}", users.size(), getFsAvatarDir());
         } catch (Exception e) {
@@ -104,11 +108,12 @@ public class AvatarService implements ApplicationRunner {
         String username = user.getUsername();
         if (sipId == null || sipId.isBlank()) return;
 
-        Path targetPng = getFsAvatarDir().resolve(sipId + ".png");
+        validateIdentity(user);
+        Path targetPng = IdentityRules.avatarPath(getFsAvatarDir(), sipId);
         if (Files.exists(targetPng) && targetPng.toFile().length() > 0) {
             // Also ensure username.png exists for fallback
             if (username != null && !username.isBlank()) {
-                Path uPng = getFsAvatarDir().resolve(username + ".png");
+                Path uPng = IdentityRules.avatarPath(getFsAvatarDir(), username);
                 if (!Files.exists(uPng)) {
                     try {
                         Files.copy(targetPng, uPng, StandardCopyOption.REPLACE_EXISTING);
@@ -140,7 +145,8 @@ public class AvatarService implements ApplicationRunner {
                 if (found.isPresent()) {
                     Path source = Paths.get(found.get().getPath());
                     if (Files.exists(source)) {
-                        BufferedImage img = ImageIO.read(source.toFile());
+                        BufferedImage img;
+                        try (InputStream input = Files.newInputStream(source)) { img = readBoundedImage(input); }
                         if (img != null) {
                             BufferedImage processed = createCircularAvatar(img);
                             saveAvatarImage(processed, sipId, username);
@@ -156,6 +162,7 @@ public class AvatarService implements ApplicationRunner {
     }
 
     public String saveUploadedAvatar(User user, MultipartFile file) throws IOException {
+        validateIdentity(user);
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Avatar file cannot be empty");
         }
@@ -179,7 +186,8 @@ public class AvatarService implements ApplicationRunner {
             }
         }
 
-        BufferedImage original = ImageIO.read(file.getInputStream());
+        BufferedImage original;
+        try (InputStream input = file.getInputStream()) { original = readBoundedImage(input); }
         if (original == null || original.getWidth() <= 0 || original.getHeight() <= 0) {
             throw new IllegalArgumentException("Unsupported or corrupted image format. Please upload JPG, PNG, or WEBP.");
         }
@@ -215,6 +223,7 @@ public class AvatarService implements ApplicationRunner {
     }
 
     public void resetToDefaultAvatar(User user) {
+        validateIdentity(user);
         user.setAvatarUrl(null);
         userRepo.save(user);
         generatePlaceholderAvatar(user.getSipId(), user.getUsername());
@@ -222,11 +231,11 @@ public class AvatarService implements ApplicationRunner {
 
     private void saveAvatarImage(BufferedImage img, String sipId, String username) {
         try {
-            Path targetSip = getFsAvatarDir().resolve(sipId + ".png");
+            Path targetSip = IdentityRules.avatarPath(getFsAvatarDir(), sipId);
             ImageIO.write(img, "png", targetSip.toFile());
 
             if (username != null && !username.isBlank()) {
-                Path targetUser = getFsAvatarDir().resolve(username + ".png");
+                Path targetUser = IdentityRules.avatarPath(getFsAvatarDir(), username);
                 ImageIO.write(img, "png", targetUser.toFile());
             }
         } catch (IOException e) {
@@ -235,6 +244,8 @@ public class AvatarService implements ApplicationRunner {
     }
 
     public void generatePlaceholderAvatar(String sipId, String username) {
+        IdentityRules.avatarPath(getFsAvatarDir(), sipId);
+        if (username != null && !username.isBlank()) IdentityRules.avatarPath(getFsAvatarDir(), username);
         BufferedImage img = new BufferedImage(AVATAR_SIZE, AVATAR_SIZE, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = img.createGraphics();
 
@@ -247,7 +258,7 @@ public class AvatarService implements ApplicationRunner {
         g2.fillRect(0, 0, AVATAR_SIZE, AVATAR_SIZE);
 
         // Pick distinct vibrant color for user circle based on hash
-        int hash = Math.abs((sipId != null ? sipId : (username != null ? username : "guest")).hashCode());
+        int hash = (sipId != null ? sipId : (username != null ? username : "guest")).hashCode();
         Color[] accentColors = {
                 new Color(37, 99, 235),  // Royal Blue #2563EB
                 new Color(124, 58, 237), // Purple #7C3AED
@@ -256,7 +267,7 @@ public class AvatarService implements ApplicationRunner {
                 new Color(225, 29, 72),  // Rose #E11D48
                 new Color(13, 148, 136)  // Teal #0D9488
         };
-        Color circleColor = accentColors[hash % accentColors.length];
+        Color circleColor = accentColors[Math.floorMod(hash, accentColors.length)];
 
         // Draw central circle
         // Draw central circle (perfectly centered)
@@ -293,7 +304,32 @@ public class AvatarService implements ApplicationRunner {
     private void generateDefaultAvatarIfMissing() {
         Path defaultPng = getFsAvatarDir().resolve("default.png");
         if (!Files.exists(defaultPng) || defaultPng.toFile().length() == 0) {
-            generatePlaceholderAvatar("default", "会议成员");
+            generatePlaceholderAvatar("default", null);
+        }
+    }
+
+    private void validateIdentity(User user) {
+        if (user == null) throw new IllegalArgumentException("用户不能为空");
+        IdentityRules.avatarPath(getFsAvatarDir(), user.getSipId());
+        IdentityRules.avatarPath(getFsAvatarDir(), user.getUsername());
+    }
+
+    /** Inspect dimensions before allocating decoded pixels (compressed size alone is insufficient). */
+    static BufferedImage readBoundedImage(InputStream input) throws IOException {
+        try (var imageInput = ImageIO.createImageInputStream(input)) {
+            if (imageInput == null) throw new IllegalArgumentException("无法读取头像图片");
+            var readers = ImageIO.getImageReaders(imageInput);
+            if (!readers.hasNext()) throw new IllegalArgumentException("不支持或已损坏的图片格式");
+            var reader = readers.next();
+            try {
+                reader.setInput(imageInput, true, true);
+                int width = reader.getWidth(0), height = reader.getHeight(0);
+                if (width <= 0 || height <= 0 || width > 8192 || height > 8192
+                        || (long) width * height > 16_777_216L) {
+                    throw new IllegalArgumentException("头像尺寸过大，最大边长 8192、总像素不超过 1600 万");
+                }
+                return reader.read(0);
+            } finally { reader.dispose(); }
         }
     }
 
