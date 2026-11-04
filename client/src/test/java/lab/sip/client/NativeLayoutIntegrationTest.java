@@ -102,6 +102,8 @@ class NativeLayoutIntegrationTest {
         fx(() -> { window.setRemoteAvatarOff(true, "1002"); window.attachNative(0,pip); return null; });
         long hideDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
         while (WindowLayout.describe(remote)[5] != 0 && System.nanoTime() < hideDeadline) Thread.sleep(50);
+        Thread.sleep(350); // Allow the avatar's managed-state layout pulse to finish.
+        awaitPlacement(0,pip);
         long[] local=WindowLayout.describe(pip);
         System.out.println("HIDDEN remote="+java.util.Arrays.toString(WindowLayout.describe(remote))+" pip="+java.util.Arrays.toString(local));
         assertEquals(6,local.length); assertNotEquals(0,local[0]); assertEquals(1,local[5]);
@@ -130,15 +132,24 @@ class NativeLayoutIntegrationTest {
       do {
         long[] main=WindowLayout.describe(remote), local=WindowLayout.describe(pip);
         var expected = fx(() -> {
-          var field=VideoCallWindow.class.getDeclaredField("requestedBounds"); field.setAccessible(true);
-          return (NativeVideoPlacement.Bounds)field.get(window);
+          var field=VideoCallWindow.class.getDeclaredField("videoArea"); field.setAccessible(true);
+          var pane=(javafx.scene.layout.StackPane)field.get(window);
+          var area=pane.localToScene(pane.getLayoutBounds());
+          return new NativeVideoPlacement.Bounds(0,remote,pip,(int)Math.round(area.getMinX()),(int)Math.round(area.getMinY()),
+              (int)Math.round(area.getWidth()),(int)Math.round(area.getHeight()),stage.getOutputScaleX(),stage.getOutputScaleY());
         });
-        if (main.length==6 && local.length==6 && main[0]!=0 && main[0]==local[0] && local[5]==1 && expected!=null) {
+        if (local.length==6 && local[0]!=0 && local[5]==1) {
           int width=(int)Math.round(expected.w()*expected.scaleX()), height=(int)Math.round(expected.h()*expected.scaleY());
+          int x=(int)Math.round(expected.x()*expected.scaleX()), y=(int)Math.round(expected.y()*expected.scaleY());
           int pipWidth=Math.min(width/4,(int)Math.round(280*expected.scaleX()));
-          if (Math.abs(main[3]-width)<=1 && Math.abs(main[4]-height)<=1 && Math.abs(local[3]-pipWidth)<=1
-              && Math.abs(local[1]+local[3]+Math.round(12*expected.scaleX())-main[1]-width)<=1) {
-            check(remote,pip); return;
+          boolean remoteFits=remote==0 || (main.length==6 && main[0]==local[0] && main[5]==1
+              && Math.abs(main[1]-x)<=1 && Math.abs(main[2]-y)<=1
+              && Math.abs(main[3]-width)<=1 && Math.abs(main[4]-height)<=1);
+          if (remoteFits && Math.abs(local[3]-pipWidth)<=1 && Math.abs(local[4]-pipWidth*9/16)<=1
+              && Math.abs(local[1]+local[3]+Math.round(12*expected.scaleX())-x-width)<=1
+              && Math.abs(local[2]+local[4]+Math.round(12*expected.scaleX())-y-height)<=1) {
+            if (remote!=0) check(remote,pip);
+            return;
           }
         }
         fx(() -> { window.attachNative(remote,pip); return null; });
@@ -165,6 +176,11 @@ class NativeLayoutIntegrationTest {
         });
         Path path=Path.of("target/test-snapshots/native-layout-"+name+".png"); Files.createDirectories(path.getParent());
         javax.imageio.ImageIO.write(new java.awt.Robot().createScreenCapture(rect), "png", path.toFile());
+        System.out.println("CAPTURE " + name + " " + rect + " " + fx(() -> {
+          var field=VideoCallWindow.class.getDeclaredField("requestedBounds");field.setAccessible(true);
+          var expected=(NativeVideoPlacement.Bounds)field.get(window);
+          return expected + " actual=" + java.util.Arrays.toString(WindowLayout.describe(expected.pip()));
+        }));
       } finally { fx(() -> { stage.setAlwaysOnTop(previous); return null; }); }
     }
   }

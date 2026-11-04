@@ -194,7 +194,9 @@ final class VideoCallWindow {
     long oldPip = pipHandle;
     if (pip == 0 && oldPip != 0) runNative(() -> WindowLayout.detach(0, oldPip));
     remoteHandle = remote; pipHandle = pip;
-    var area = videoArea.localToScene(videoArea.getBoundsInLocal());
+    // Child avatar/waiting panes may still have stale or overflowing visual bounds
+    // during a managed-state transition. Only the allocated viewport owns video.
+    var area = videoArea.localToScene(videoArea.getLayoutBounds());
     requestedBounds = new NativeVideoPlacement.Bounds(0, remote, pip,
         (int)Math.round(area.getMinX()), (int)Math.round(area.getMinY()),
         Math.max(2, (int)Math.round(area.getWidth())), Math.max(2, (int)Math.round(area.getHeight())),
