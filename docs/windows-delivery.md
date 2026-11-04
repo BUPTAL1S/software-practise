@@ -20,12 +20,15 @@ pwsh -File scripts/build-windows.ps1 `
 - `JavaSIP-Client-Windows-x64.zip`：JavaFX 客户端、包内 Windows JRE、JNI 和所有同级 DLL。
 - `JavaSIP-Backend-Windows-x64.zip`：Spring Boot 后台及包内 Windows JRE。
 - `manifest.json`：构建提交、dirty 状态、Java 版本、模块和 JAR/DLL 的 SHA256。
+- 每个 ZIP 内另带 `build-id.txt` 和 `manifest.json`；客户端启动日志显示构建号，原生崩溃转储写入包内 `logs/`。
 
 构建验证 JDK 的真实 OS/架构，缺必需 DLL 或 JavaFX Windows 图形类/库时失败。
 JRE 包含 `java.se` 以及 JavaFX/加密/字符集/JFR 等补充模块，覆盖 Spring/Hibernate 对 naming、management、instrumentation、SQL、XML 的需求；不只分析客户端后省略后台所需模块。
 `pjsua2.dll` 当前导入 `libopenh264-7.dll`，需保留原名。NativeLoader 已支持预加载这个版本化名称。
 延迟修复后，组包还检查 DLL 的 x64 PE 类型和低延迟策略构建标记，拒绝静默复用旧 DLL。原生重建入口为 `scripts/build-native-windows.ps1`，不自动安装；补丁、回退变量和验证见 [延迟报告](reports/media-latency-20261030.md)。
 构建只复制 JAR、DLL、运行时和启动说明，不打入本机 `.env`、客户端偏好、现有数据库或上传文件。
+
+2026-11-04 起，发布必须同时包含视口补丁和布局/Windows 镜像 ABI 2 辅助库；构建会拒绝缺少新导出的旧 helper。源码仓库不跟踪 DLL，请先按 [原生构建说明](../native/windows-x64/BUILD.md) 重建。不能只换 JAR 后继续使用旧 DLL。
 
 ## 独立包验证
 
@@ -34,6 +37,8 @@ pwsh -File scripts/verify-windows-package.ps1 -PackageDirectory 'D:\path\to\dist
 ```
 
 验证时清除开发 JDK/MSYS2 的 PATH，先用包内 JRE 调用 NativeLoader，然后启动包内后台：
+
+- 先逐项核对 manifest 中 JAR/DLL 的 SHA256，再运行包内诊断脚本，拒绝漏换或混装。
 
 - HTTP 只绑定 127.0.0.1，系统自动分配端口。
 - ESL 禁用，数据库和头像目录隔离到 `validation-<随机值>/`。
@@ -46,6 +51,8 @@ pwsh -File scripts/verify-windows-package.ps1 -PackageDirectory 'D:\path\to\dist
 ## 接收端使用
 
 客户端解压后运行 `start-client.bat`，在既有账号设置中填正确的 SIP 和 HTTP 地址。默认媒体档为 balanced；必要时先设置 `SIP_MEDIA_PROFILE=legacy` 回退。详细参数见 [媒体说明](video-performance.md)。
+
+排查旧包或 DLL 混装时运行 `collect-diagnostics.bat`，输出保存在 `logs/bundle-diagnostics.txt`，包含构建号、Java/OS/架构、每个 DLL 的文件名、大小与 SHA256，并实际加载 JNI 和两个辅助库。该脚本不读取账号偏好，不注册 SIP，不打开摄像头/麦克风。报告卡死时同时保留本次构建号和 `logs/hs_err_pid*.log`（如果 JVM 已产生转储）；单纯无响应未必有崩溃转储。
 
 后台解压后运行 `start-backend.bat`，默认端口 8080，可传 `--server.port=8088` 等 Spring 参数。
 数据库和头像上传在 `data/`；现有其他上传路径仍相对包目录。保持控制台打开，Ctrl+C 停止当前实例。
