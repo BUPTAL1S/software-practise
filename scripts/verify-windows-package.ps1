@@ -13,6 +13,14 @@ $process = $null; $identity = $null
 try {
     # Prove neither the native loader nor the backend relies on the developer JDK/MSYS2 PATH.
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"; $env:JAVA_HOME = $null
+    $manifest = Get-Content -LiteralPath (Join-Path $package 'manifest.json') -Raw | ConvertFrom-Json
+    foreach ($file in $manifest.files) {
+        $path = [IO.Path]::GetFullPath((Join-Path $package $file.path))
+        if (-not $path.StartsWith($package + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Manifest file escapes package directory.' }
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256) { throw "Bundle hash mismatch: $($file.path)" }
+    }
+    & (Join-Path $client 'collect-diagnostics.bat')
+    if ($LASTEXITCODE -ne 0) { throw 'Portable native bundle diagnostics failed.' }
     & (Join-Path $client 'jre\bin\java.exe') ('-Dsip.native.dir=' + (Join-Path $client 'native')) '-cp' (Join-Path $client 'lib\sip-client.jar') 'lab.sip.client.NativeLoader'
     if ($LASTEXITCODE -ne 0) { throw 'Portable client JNI preflight failed.' }
     $stdout = Join-Path $evidence 'backend.stdout.log'; $stderr = Join-Path $evidence 'backend.stderr.log'
@@ -54,7 +62,7 @@ try {
     if ($users.Count -ne 8 -or $rooms.Count -ne 2 -or $stats.totalCalls -ne 0) { throw "Portable API read-back failed: users=$($users.Count), rooms=$($rooms.Count), totalCalls=$($stats.totalCalls)" }
     [ordered]@{status='PASS';nativeLoader='PASS';backendHealth='PASS';login='PASS';users=$users.Count;rooms=$rooms.Count;
         totalCalls=$stats.totalCalls;eslEnabled=$health.esl.enabled;port=$port;pid=$process.Id;started=$identity.ToString('o');
-        externalServiceUsed=$false;cameraOrMicrophoneOpened=$false} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding utf8
+        commit=$manifest.commit;manifestHashes='PASS';externalServiceUsed=$false;cameraOrMicrophoneOpened=$false} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding utf8
     Write-Output "PORTABLE_PACKAGE_PASS: $evidence"
 } finally {
     if ($process -and -not $process.HasExited) {

@@ -955,6 +955,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     httpStatusBadge.setTooltip(new Tooltip("后台 HTTP 服务尚未检测"));
 
     logs = new LogView();
+    logs.append("版本", "客户端构建 " + DeliveryDiagnostics.buildId());
     callStatus = new Label("SIP: 未启动");
     callStatus.getStyleClass().setAll("badge-offline");
     callStatus.setMaxWidth(Double.MAX_VALUE);
