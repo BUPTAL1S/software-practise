@@ -82,6 +82,11 @@ class LogoutFlowTest {
           assertNotSame(previous, current);
           assertNotSame(previous.sip(), current.sip(), "A closed native engine must not be reused");
           assertFalse(previous.sip().isStarted());
+          assertTrue(((java.util.concurrent.ExecutorService) field(previous, "heartbeatExecutor")).isShutdown(),
+              "Retired accounts must stop sending conference heartbeats");
+          AttachmentPreviews previews = (AttachmentPreviews) field(previous, "attachmentPreviews");
+          assertTrue(((java.util.concurrent.ExecutorService) field(previews, "workers")).isShutdown(),
+              "Retired accounts must not retain authenticated thumbnail workers");
           assertNull(previous.getHttpFileClient().getAuthToken());
           assertNull(current.getHttpFileClient().getAuthToken());
           assertTrue(current.getOrCreateSession("1002").isEmpty(), "Previous account data must not leak");

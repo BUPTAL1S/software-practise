@@ -30,7 +30,7 @@ public class LoginTokens {
         return ttlMs;
     }
 
-    public String issue(Long userId) {
+    public synchronized String issue(Long userId) {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = HexFormat.of().formatHex(bytes);
@@ -39,7 +39,7 @@ public class LoginTokens {
         return token;
     }
 
-    public Optional<Long> userIdOf(String token) {
+    public synchronized Optional<Long> userIdOf(String token) {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
@@ -52,26 +52,27 @@ public class LoginTokens {
             sessions.remove(token);
             return Optional.empty();
         }
-        // Sliding expiration on active access
+        // Serialize lookup/renewal with revoke and revokeUser; a request that
+        // read an old session must never reinsert it after logout/password change.
         sessions.put(token, new TokenSession(session.userId(), now + ttlMs));
         return Optional.of(session.userId());
     }
 
-    public Optional<TokenSession> getSession(String token) {
+    public synchronized Optional<TokenSession> getSession(String token) {
         if (token == null) {
             return Optional.empty();
         }
         return Optional.ofNullable(sessions.get(token));
     }
 
-    public boolean revoke(String token) {
+    public synchronized boolean revoke(String token) {
         if (token == null || token.isBlank()) {
             return false;
         }
         return sessions.remove(token) != null;
     }
 
-    public void revokeUser(Long userId) {
+    public synchronized void revokeUser(Long userId) {
         if (userId == null) {
             return;
         }
@@ -81,7 +82,7 @@ public class LoginTokens {
     /**
      * Distinct user IDs who still hold valid, unexpired login tokens.
      */
-    public Set<Long> onlineUserIds() {
+    public synchronized Set<Long> onlineUserIds() {
         long now = System.currentTimeMillis();
         sessions.entrySet().removeIf(entry -> now > entry.getValue().expireAt());
         Set<Long> userIds = new HashSet<>();
@@ -91,11 +92,11 @@ public class LoginTokens {
         return userIds;
     }
 
-    public void clear() {
+    public synchronized void clear() {
         sessions.clear();
     }
 
-    public void expireAllForTesting() {
+    public synchronized void expireAllForTesting() {
         long expiredTime = System.currentTimeMillis() - 1000L;
         sessions.replaceAll((k, s) -> new TokenSession(s.userId(), expiredTime));
     }
