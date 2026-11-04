@@ -41,5 +41,9 @@ final class AttachmentPreviews implements AutoCloseable {
     } catch (RejectedExecutionException busy) { cache.remove(key); future.completeExceptionally(busy); }
     return future;
   }
-  @Override public synchronized void close() { workers.shutdownNow(); cache.clear(); }
+  @Override public synchronized void close() {
+    workers.shutdownNow();
+    cache.values().forEach(future -> future.cancel(false));
+    cache.clear();
+  }
 }

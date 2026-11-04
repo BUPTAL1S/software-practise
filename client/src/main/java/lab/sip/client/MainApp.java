@@ -1453,6 +1453,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     if (sessionClosed) return;
     sessionClosed = true;
     backgroundLoginAllowed = false;
+    heartbeatRoom = "";
+    heartbeatExecutor.shutdownNow();
+    attachmentPreviews.close();
     polling.stop();
     roomPolling.stop();
     logs.dockBack();
