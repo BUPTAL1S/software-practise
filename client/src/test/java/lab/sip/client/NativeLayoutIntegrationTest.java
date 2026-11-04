@@ -13,12 +13,15 @@ import org.pjsip.pjsua2.*;
 @EnabledIfSystemProperty(named="sip.nativeLayoutTest", matches="true")
 class NativeLayoutIntegrationTest {
   @Test void maximizedAndContinuousResizeKeepIndependentRenderersInsideTheCallSurface() throws Exception {
+    int soakSeconds = Math.max(0, Math.min(180, Integer.getInteger("sip.nativeLayoutSoakSeconds", 0)));
     Path log = Path.of("target/native-layout.log").toAbsolutePath();
     var child = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
-        "-Dsip.captureDeviceName=Colorbar generator", "-cp", System.getProperty("surefire.test.class.path"), Probe.class.getName())
+        "-Dsip.captureDeviceName=Colorbar generator", "-Dsip.nativeLayoutSoakSeconds=" + soakSeconds,
+        "-Dsip.native.dir=" + NativeLoader.libraryFile().toAbsolutePath().getParent(),
+        "-cp", System.getProperty("surefire.test.class.path"), Probe.class.getName())
         .redirectErrorStream(true).redirectOutput(log.toFile()).start();
     try {
-      assertTrue(child.waitFor(60, TimeUnit.SECONDS), "Native layout probe timed out: " + log);
+      assertTrue(child.waitFor(60L + soakSeconds, TimeUnit.SECONDS), "Native layout probe timed out: " + log);
       String output = new String(Files.readAllBytes(log), java.nio.charset.StandardCharsets.UTF_8);
       assertEquals(0, child.exitValue(), output);
       assertTrue(output.contains("PASS: native fullscreen, resize, preview-only and mirror isolation"));
@@ -83,6 +86,19 @@ class NativeLayoutIntegrationTest {
           Thread.sleep(70);
         }
         awaitPlacement(remote,pip); screenshot("resized");
+        int soakSeconds = Integer.getInteger("sip.nativeLayoutSoakSeconds", 0);
+        long soakDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(soakSeconds);
+        int resize = 0;
+        while (System.nanoTime() < soakDeadline) {
+          final int step = resize++;
+          fx(() -> { stage.setWidth(800 + step % 4 * 150); stage.setHeight(600 + step % 3 * 90); return null; });
+          awaitPlacement(remote, pip);
+          Thread.sleep(1500);
+        }
+        if (soakSeconds > 0) {
+          screenshot("soak");
+          System.out.println("PASS: continuous native rendering " + soakSeconds + " seconds, " + resize + " settled resizes");
+        }
         fx(() -> { window.setRemoteAvatarOff(true, "1002"); window.attachNative(0,pip); return null; });
         long hideDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
         while (WindowLayout.describe(remote)[5] != 0 && System.nanoTime() < hideDeadline) Thread.sleep(50);
