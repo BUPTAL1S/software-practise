@@ -299,6 +299,11 @@ final class SipService {
     return call != null && call.cachedState == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED && !call.callDisconnected;
   }
 
+  long callElapsedNanos() {
+    ClientCall call = activeCall;
+    return call == null || call.connectedAtNanos == 0 ? 0 : Math.max(0, System.nanoTime() - call.connectedAtNanos);
+  }
+
   public boolean isAudioMuted() {
     return audioMuted;
   }
@@ -1242,11 +1247,15 @@ final class SipService {
     if (call == null) {
       return null;
     }
+    call.nativeLifetime.writeLock().lock();
     try {
-      call.hangup(new CallOpParam());
+      if (!call.callDisconnected && ownedCalls.contains(call)) {
+        CallOpParam param = new CallOpParam();
+        try { call.hangup(param); } finally { param.delete(); }
+      }
     } catch (Exception ignored) {
       // already gone; DISCONNECTED will delete
-    }
+    } finally { call.nativeLifetime.writeLock().unlock(); }
     return call;
   }
 
@@ -1470,6 +1479,7 @@ final class SipService {
     private final java.util.concurrent.locks.ReentrantReadWriteLock nativeLifetime = new java.util.concurrent.locks.ReentrantReadWriteLock();
     private final java.time.Instant initiateTime = java.time.Instant.now();
     private volatile java.time.Instant connectTime;
+    private volatile long connectedAtNanos;
     private final boolean isOutgoing;
     private final String dialedDst;
     private volatile boolean videoConfigured;
@@ -1714,7 +1724,7 @@ final class SipService {
         nativeLifetime.readLock().lock();
         boolean previous = cameraDesired;
         try {
-          if (shuttingDown || callDisconnected || activeCall != this) throw new IllegalStateException("通话已结束");
+          if (shuttingDown || localHangup || callDisconnected || activeCall != this) throw new IllegalStateException("通话已结束");
           cameraDesired = transmit;
           ensureThreadRegistered();
           if (!videoStreamActive) {
@@ -1799,6 +1809,7 @@ final class SipService {
         if (state == pjsip_inv_state.PJSIP_INV_STATE_CONFIRMED) {
           if (connectTime == null) {
             connectTime = java.time.Instant.now();
+            connectedAtNanos = System.nanoTime();
             events.log("通话", "通话已接通确认 (开始计时)");
           }
           startMediaStatistics();

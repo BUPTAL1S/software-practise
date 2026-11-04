@@ -348,6 +348,7 @@ class RoomConferenceTest {
             File out =
                 new File(
                     "target/test-snapshots/snapshot_room_exit_and_selection_fixed.png");
+            java.nio.file.Files.createDirectories(out.toPath().getParent());
             ImageIO.write(bi, "png", out);
             System.out.println("ROOM_FIXED_SNAPSHOT_SAVED: " + out.getAbsolutePath());
 

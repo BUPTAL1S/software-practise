@@ -232,6 +232,7 @@ final class CallUiCoordinator implements AutoCloseable {
         videoCallWindow.update(target, cameraOn, connected);
       }
       videoCallWindow.setMuted(sip.isAudioMuted());
+      videoCallWindow.syncElapsed(sip.callElapsedNanos());
       videoCallWindow.setAvatar(callAvatar(targetId));
       boolean showAvatar = connected && (remoteAvatarOff || !videoActive);
       videoCallWindow.setAvatarHint(
@@ -282,6 +283,7 @@ final class CallUiCoordinator implements AutoCloseable {
         callWindow.update(target, false, cameraOn, connected);
       }
       callWindow.setMuted(sip.isAudioMuted());
+      callWindow.syncElapsed(sip.callElapsedNanos());
       callWindow.setAvatar(callAvatar(targetId));
       stopCallPreview();
       stopPipLayout();

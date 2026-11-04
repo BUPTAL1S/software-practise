@@ -199,6 +199,7 @@ class UiVisualSnapshotTest {
   void testFullClientInRoomMeetingSnapshot() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
     AtomicReference<Throwable> failureRef = new AtomicReference<>();
+    AtomicReference<Runnable> exitAssertions = new AtomicReference<>();
 
     Platform.runLater(
         () -> {
@@ -308,8 +309,9 @@ class UiVisualSnapshotTest {
 
             // 7. Test Exit Meeting through UI button fire
             app.getHangupBtn().fire();
+            // Hangup is intentionally asynchronous. Check completion while FX keeps pumping.
+            exitAssertions.set(() -> {
             app.syncUiState();
-
             assertEquals("挂断", app.getHangupBtn().getText(), "Top bar button text must dynamically revert to '挂断'");
             assertFalse(app.getInRoomBanner().isVisible(), "In-room banner must be hidden after exit");
             assertFalse(app.getSip().isInCall(), "SipService must no longer be in call");
@@ -317,6 +319,7 @@ class UiVisualSnapshotTest {
             assertEquals("", app.getSip().currentCallTarget());
 
             stage.close();
+            });
           } catch (Throwable t) {
             failureRef.set(t);
           } finally {
@@ -327,6 +330,19 @@ class UiVisualSnapshotTest {
     assertTrue(latch.await(25, TimeUnit.SECONDS), "Full client snapshot generation timed out");
     if (failureRef.get() != null) {
       throw new AssertionError("Test failed inside JavaFX thread", failureRef.get());
+    }
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (true) {
+      var checked = new java.util.concurrent.CompletableFuture<Void>();
+      Platform.runLater(() -> {
+        try { exitAssertions.get().run(); checked.complete(null); }
+        catch (Throwable failure) { checked.completeExceptionally(failure); }
+      });
+      try { checked.get(1, TimeUnit.SECONDS); break; }
+      catch (java.util.concurrent.ExecutionException pending) {
+        if (System.nanoTime() >= deadline) throw new AssertionError("Async hangup did not update the UI", pending.getCause());
+        Thread.sleep(25);
+      }
     }
   }
 

@@ -32,6 +32,8 @@ class VoiceVideoUpgradeTest {
         assertTrue(peer.invited.await(3, TimeUnit.SECONDS)); peer.answer(false);
         await(sip::isCallConnected);
         assertFalse(sip.isCameraEnabled(), "Voice call must start with camera off");
+        Object dialog = sip.callIdentity();
+        long elapsed = sip.callElapsedNanos();
         peer.upgradeStatus = response;
         sip.setCallVideoTransmit(true);
         await(() -> peer.inviteCount.get() >= 2);
@@ -47,6 +49,8 @@ class VoiceVideoUpgradeTest {
           assertFalse(sip.isCurrentCallVideo());
         }
         assertTrue(sip.isCallConnected(), "Camera changes must preserve the audio call");
+        assertSame(dialog, sip.callIdentity(), "Upgrading must preserve the dialog");
+        assertTrue(sip.callElapsedNanos() >= elapsed, "Upgrading must preserve the call clock");
       } catch (Throwable failure) {
         throw new AssertionError(String.join("\n", logs), failure);
       } finally { sip.hangup(); peer.bye.await(2, TimeUnit.SECONDS); sip.shutdown(); }

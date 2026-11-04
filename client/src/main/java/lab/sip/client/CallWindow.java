@@ -128,4 +128,10 @@ final class CallWindow {
     timer.setCycleCount(Timeline.INDEFINITE);
     timer.play();
   }
+
+  void syncElapsed(long elapsedNanos) {
+    if (!connected || timerLabel == null) return;
+    startedAt = System.nanoTime() - Math.max(0, elapsedNanos);
+    timerLabel.setText(CallUi.duration(elapsedNanos));
+  }
 }
