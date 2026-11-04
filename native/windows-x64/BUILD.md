@@ -61,7 +61,7 @@ SWIG 生成的 Java 若与仓库 `client/src/main/java/org/pjsip/pjsua2/` 不一
 本机此前使用的释放补丁现归档在 [patches/video-hangup-2.17.patch](patches/video-hangup-2.17.patch)。
 SHA256 为 `49e0fef86d1da9c9840160381253014e5fb84b23df27e78d0326e68e6401a7f6`；覆盖 DirectShow、SDL、视频端口/设备和 pjsua 视频窗口释放。
 最初准备时对本机 pjproject 基线 `5a457451fa2712ba18e12b01738e8ff3af2b26fd` 的现有修改执行反向 dry-run 成功。随后为延迟优化在仓外独立检出重建了全部原生库与 JNI，没有改写原源码工作区。
-推荐使用 `scripts/build-native-windows.ps1 -PjSource <独立2.17源码目录> -JdkHome <Windows-x64-JDK17>`，会检查固定提交、应用或确认两个补丁，保留已有配置并固定 x64 host。脚本不会自动替换安装中的 DLL。手工构建也必须先应用两个补丁。
+推荐使用 `scripts/build-native-windows.ps1 -PjSource <独立2.17源码目录> -JdkHome <Windows-x64-JDK17>`，会检查固定提交、按顺序应用或确认释放、延迟、视口三个补丁，保留已有配置并固定 x64 host。脚本不会自动替换安装中的 DLL。手工构建也必须先应用这三个补丁。
 
 初始 DLL 的 SHA256 为 `e19935eb972d3bbe55dd29fe30820184ff66c0ddfd7c4b8f6a54857ae9c2610a`，保留备份。
 最终延迟修复 DLL 为 25418163 字节，SHA256 `060e37ee39066a02de62185f81e1779ea9332abac0f9a1291f25abb084b9ea7d`；3065 个 JNI 导出与初始 DLL 一致。源码补丁见 [video-latency-2.17.patch](patches/video-latency-2.17.patch)，不提交 DLL 二进制。
@@ -73,6 +73,18 @@ SHA256 为 `49e0fef86d1da9c9840160381253014e5fb84b23df27e78d0326e68e6401a7f6`；
 Windows 端本地摄像头预览的“照镜子”翻转功能由 `winmirror.dll` 提供：
 - **在 Windows 上编译**：直接双击运行 `native/windows-x64/build-winmirror.bat`；
 - **在 macOS/Linux 上交叉编译**：运行 `./native/windows-x64/build-winmirror.sh`（依赖 `mingw-w64`）。
+
+需要 Windows SDL2 开发头文件。`SDL_INCLUDE_DIR` 指向包含 `SDL2/SDL.h` 的目录；Windows 默认 `C:\msys64\mingw64\include`，MSYS2 默认 `/mingw64/include`。镜像按 SDL renderer 所属 HWND 选择，只翻转本地预览纹理，远端画面与 Win32 坐标不翻转。
+
+### 2026-11-04 原生布局接口升级
+
+`callwindow.dll` 必须由当前 `CallWindowWin.c` 重建，Java 侧只接受布局 ABI 2；旧 DLL 不会被误用。设置 `JAVA_HOME`、把 MinGW64 `bin` 加到 PATH 后运行 `build-callwindow.bat` 和 `build-winmirror.bat`。发布时同时更新 `pjsua2.dll`、`callwindow.dll`、`winmirror.dll`。
+
+[video-viewport-2.17.patch](patches/video-viewport-2.17.patch) 恢复 SDL 2.32 在 Windows 无边框窗口创建过程中丢失的 RESIZABLE 标志，并在每帧绘制时按真实 renderer 输出尺寸居中等比缩放，避免父窗口已变大而视频仍停在旧视口左上角。本地 PIP 以同级子窗口放置，不重复嵌套；原生布局调用在 Windows 专用工作线程执行，并合并连续缩放请求。Windows 镜像辅助库也检查 ABI 2，防止误用会翻转远端画面的旧 DLL。两个旧版布局 JNI 入口保留原签名，新的带缩放参数入口单独命名。
+
+按照仓库 PR 规范，移除此前误跟踪的 `callwindow.dll` 二进制；本地文件保留。检出源码后必须重建辅助库，便携 ZIP 则包含已验证的三个 DLL。
+
+本机合成视频验证：`mvn -f client/pom.xml -Dtest=NativeLayoutIntegrationTest -Dsip.nativeLayoutTest=true test`。它使用两个 Colorbar 设备，验证最大化、连续 32 次缩放、远端摄像头关闭后仅保留预览和镜像隔离。输出截图在 `client/target/test-snapshots/`；这是本机原生窗口验证，不代表双机真实通话验收。macOS 源码同步了 ABI，但须在 Mac 重新编译和实测。
 
 ## 启动
 

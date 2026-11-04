@@ -48,4 +48,25 @@ class NativeVideoPlacementTest {
     }));
     assertEquals(1, calls.get());
   }
+
+  @Test void invalidatingWhileNativeAttachIsBlockedDoesNotBlockUiOrCacheStalePlacement() throws Exception {
+    var placement = new NativeVideoPlacement();
+    var entered = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+    try {
+      var pending = worker.submit(() -> placement.apply(bounds(2, 3, 800, 1), () -> {
+        entered.countDown();
+        try { return release.await(2, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+      }));
+      assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+      assertTimeoutPreemptively(java.time.Duration.ofMillis(200), placement::invalidate);
+      release.countDown();
+      pending.get(1, java.util.concurrent.TimeUnit.SECONDS);
+      AtomicInteger calls = new AtomicInteger();
+      assertTrue(placement.apply(bounds(2, 3, 800, 1), () -> { calls.incrementAndGet(); return true; }));
+      assertEquals(1, calls.get(), "A late native result must not suppress the next attach");
+    } finally { release.countDown(); worker.shutdownNow(); }
+  }
 }

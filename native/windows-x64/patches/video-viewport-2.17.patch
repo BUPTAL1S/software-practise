@@ -1,0 +1,49 @@
+--- a/pjmedia/src/pjmedia-videodev/sdl_dev.c
++++ b/pjmedia/src/pjmedia-videodev/sdl_dev.c
+@@ -746,6 +746,10 @@
+                 sdl_log_err("SDL_CreateWindow()");
+                 return PJMEDIA_EVID_SYSERR;
+             }
++            /* SDL 2.32 Windows setup may clear RESIZABLE on borderless windows.
++             * Restore the requested contract on the SDL owner thread before embedding. */
++            if (flags & SDL_WINDOW_RESIZABLE)
++                SDL_SetWindowResizable(strm->window, SDL_TRUE);
+         }
+     }
+ 
+@@ -814,6 +818,7 @@
+     const pjmedia_video_format_info *vfi;
+     pjmedia_video_format_detail *vfd;
+ 
++    PJ_LOG(4, (THIS_FILE, "SDL viewport policy: renderer-output aspect-fit"));
+     sdl_info = get_sdl_format_info(fmt->id);
+     vfi = pjmedia_get_video_format_info(pjmedia_video_format_mgr_instance(),
+                                         fmt->id);
+@@ -897,10 +902,25 @@
+     const pjmedia_frame *frame = stream->frame;
+ 
+     if (stream->scr_tex) {
++        int output_w = 0, output_h = 0;
++        SDL_Rect fit = stream->dstrect;
++        /* External HWND parenting/resizing may not deliver SDL_WINDOWEVENT_RESIZED.
++         * Use the actual output every frame, preserving source aspect ratio. */
++        if (SDL_GetRendererOutputSize(stream->renderer, &output_w, &output_h) == 0 &&
++            output_w > 0 && output_h > 0 && stream->rect.w > 0 && stream->rect.h > 0) {
++            double scale_w = (double)output_w / stream->rect.w;
++            double scale_h = (double)output_h / stream->rect.h;
++            double scale = scale_w < scale_h ? scale_w : scale_h;
++            fit.w = (int)(stream->rect.w * scale + 0.5);
++            fit.h = (int)(stream->rect.h * scale + 0.5);
++            fit.x = (output_w - fit.w) / 2;
++            fit.y = (output_h - fit.h) / 2;
++        }
++        SDL_RenderSetViewport(stream->renderer, NULL);
+         SDL_UpdateTexture(stream->scr_tex, NULL, frame->buf, stream->pitch);
++        SDL_SetRenderDrawColor(stream->renderer, 0, 0, 0, 255);
+         SDL_RenderClear(stream->renderer);
+-        SDL_RenderCopy(stream->renderer, stream->scr_tex,
+-                       &stream->rect, &stream->dstrect);
++        SDL_RenderCopy(stream->renderer, stream->scr_tex, &stream->rect, &fit);
+         SDL_RenderPresent(stream->renderer);
+     }
+ #if PJMEDIA_VIDEO_DEV_SDL_HAS_OPENGL

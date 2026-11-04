@@ -126,6 +126,12 @@ public final class NativeLoader {
     return null;
   }
 
+  /** All helpers must come from the same bundle/architecture as the selected PJSUA2 library. */
+  static Path helperFile(String windowsName, String macName) {
+    String name = System.getProperty("os.name", "").toLowerCase().contains("win") ? windowsName : macName;
+    return libraryFile().toAbsolutePath().getParent().resolve(name);
+  }
+
   public static Path findRepoRoot() {
     // 1. Check user.dir
     Path userDir = Path.of(System.getProperty("user.dir")).toAbsolutePath();
@@ -168,6 +174,10 @@ public final class NativeLoader {
   public static void main(String[] args) {
     System.out.println("[NativeLoader] Testing native library loading in standalone JVM...");
     load();
+    if (!WindowLayout.isAvailable() || !NativeMirror.isSupported()) {
+      throw new IllegalStateException("Native call-window ABI 2 and preview mirror helpers are required beside PJSUA2");
+    }
     System.out.println("[NativeLoader] Success: PJSUA2 native library loaded successfully (" + libraryFile() + ")");
+    System.out.println("[NativeLoader] Success: call-window ABI 2 and preview mirror helpers loaded");
   }
 }

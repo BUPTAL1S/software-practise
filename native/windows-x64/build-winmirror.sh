@@ -19,12 +19,20 @@ if [ -z "$JAVA_HOME" ] || [ ! -d "$JAVA_HOME/include" ]; then
   exit 1
 fi
 
+# Point this at Windows SDL2 headers, not the host platform's SDL installation.
+SDL_INCLUDE_DIR="${SDL_INCLUDE_DIR:-/mingw64/include}"
+if [ ! -f "$SDL_INCLUDE_DIR/SDL2/SDL.h" ]; then
+  echo "[ERROR] Set SDL_INCLUDE_DIR to Windows SDL2 headers (contains SDL2/SDL.h)."
+  exit 1
+fi
+
 echo "[INFO] 正在编译 Windows 原生镜像模块 winmirror.dll (x64)..."
 "$CC" -shared -O2 -s -static-libgcc \
   -I"$JAVA_HOME/include" \
   -I"$JAVA_HOME/include/win32" \
   -I"$JAVA_HOME/include/darwin" \
   -I"$JAVA_HOME/include/linux" \
+  -I"$SDL_INCLUDE_DIR" \
   NativeMirrorWin.c \
   -o winmirror.dll \
   -luser32
