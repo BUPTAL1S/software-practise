@@ -27,6 +27,8 @@ def convert(source, target, uploads, linux_uploads):
                   for table in ("users", "rooms", "files", "cdr", "private_messages", "room_messages")}
         if counts["users"] == 0:
             raise ValueError("Empty user table: refuse to replace real data with demo accounts")
+        if counts["rooms"] == 0:
+            raise ValueError("Empty room table triggers demo initialization; agree a startup policy before migration")
         changes, seen = [], {}
         for file_id, old_path, stored_size in original.execute("SELECT id,path,size FROM files"):
             name = PureWindowsPath(old_path).name if "\\" in old_path else PurePosixPath(old_path).name
