@@ -56,6 +56,9 @@ public final class WindowLayout {
       return false;
     }
     try {
+      if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+        return attachWindowsNative(parent, remote, pip, x, y, w, h);
+      }
       attachNative(parent, remote, pip, x, y, w, h);
       return true;
     } catch (Throwable ignored) {
@@ -110,6 +113,9 @@ public final class WindowLayout {
   private static native long findWindowNative(String title);
 
   private static native void attachNative(
+      long parent, long remote, long pip, int x, int y, int w, int h);
+
+  private static native boolean attachWindowsNative(
       long parent, long remote, long pip, int x, int y, int w, int h);
 
   private static native void detachNative(long remote, long pip);

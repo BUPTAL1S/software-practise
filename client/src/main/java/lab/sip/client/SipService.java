@@ -79,6 +79,9 @@ final class SipService {
   private ClientCall activeCall;
   /** 最近一次创建的通话包装对象；关机时必须显式 delete，否则 finalize 会在库销毁后断言。 */
   private volatile ClientCall lastCall;
+  // Strong ownership until explicit deletion; queued FX cleanup must never
+  // outlive the endpoint or hand a native Call to the JVM finalizer thread.
+  private final java.util.Set<ClientCall> ownedCalls = java.util.concurrent.ConcurrentHashMap.newKeySet();
   private VideoPreview videoPreview;
   private AudioMedia callAudioMedia;
   private AudioMedia captureAudioMedia;
@@ -113,7 +116,7 @@ final class SipService {
   }
 
   synchronized boolean isRegistered() {
-    return started && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
+    return started && !shuttingDown && account != null && lastRegCode == pjsip_status_code.PJSIP_SC_OK;
   }
 
   static final class VideoDetails extends SipVideoDetails {
@@ -140,7 +143,8 @@ final class SipService {
           }
           endpoint.libRegisterThread(name);
         }
-      } catch (Throwable ignored) {
+      } catch (Exception failure) {
+        throw new IllegalStateException("无法注册原生 SIP 线程：" + Thread.currentThread().getName(), failure);
       }
     }
   }
@@ -1042,6 +1046,7 @@ final class SipService {
   }
 
   void answer(boolean video) throws Exception {
+    if (shuttingDown) throw new IllegalStateException("通话引擎正在关闭");
     ensureThreadRegistered();
     ClientCall call;
     synchronized (this) {
@@ -1108,6 +1113,9 @@ final class SipService {
     if (stray != null && stray != last && stray != pending) {
       deleteCallQuietly(stray);
     }
+    for (ClientCall retired : ownedCalls.toArray(new ClientCall[0])) {
+      deleteCallQuietly(retired);
+    }
     ClientAccount acc;
     synchronized (this) {
       clearBuddiesLocked();
@@ -1142,6 +1150,7 @@ final class SipService {
     if (!isRegistered()) {
       throw new IllegalStateException("尚未注册成功，无法发送消息");
     }
+    ensureThreadRegistered();
     if (peerUser == null || peerUser.trim().isEmpty()) {
       throw new IllegalArgumentException("接收方不能为空");
     }
@@ -1416,9 +1425,11 @@ final class SipService {
 
     @Override
     public void onIncomingCall(OnIncomingCallParam prm) {
+      if (shuttingDown) return;
       ensureThreadRegistered();
       ClientCall incoming;
       synchronized (SipService.this) {
+        if (shuttingDown || account != this) return;
         if (activeCall != null) {
           // 当前已有正在进行的通话（或振铃），向第二路新来电直接回复 486 Busy Here
           ClientCall busyCall = new ClientCall(this, prm.getCallId());
@@ -1597,12 +1608,18 @@ final class SipService {
     @Override public void delete() {
       stopMediaStatistics();
       nativeLifetime.writeLock().lock();
-      try { super.delete(); }
+      try {
+        if (!ownedCalls.contains(this)) return;
+        ensureThreadRegistered();
+        super.delete();
+        ownedCalls.remove(this);
+      }
       finally { nativeLifetime.writeLock().unlock(); }
     }
 
     ClientCall(Account acc, String dialedDst, boolean videoConfigured) {
       super(acc);
+      ownedCalls.add(this);
       this.isOutgoing = true;
       this.dialedDst = dialedDst != null ? dialedDst : "";
       this.videoConfigured = videoConfigured;
@@ -1615,6 +1632,7 @@ final class SipService {
 
     ClientCall(Account acc, int callId) {
       super(acc, callId);
+      ownedCalls.add(this);
       this.isOutgoing = false;
       this.dialedDst = "";
       this.videoConfigured = false;
@@ -1853,6 +1871,7 @@ final class SipService {
 
     @Override
     public void onCallMediaState(OnCallMediaStateParam prm) {
+      if (callDisconnected || shuttingDown) return;
       ensureThreadRegistered();
       try {
         CallInfo ci = getInfo();
@@ -1893,11 +1912,9 @@ final class SipService {
                     } else {
                       vidWin = new VideoWindow(winId);
                       if (this.activeVideoWindow != null) {
-                        try {
-                          this.activeVideoWindow.Show(false);
-                          this.activeVideoWindow.delete();
-                        } catch (Throwable ignored) {
-                        }
+                        // PJSIP may already have destroyed the previous window.
+                        // Never Show()/query a retired renderer during renegotiation.
+                        abandonVideoWindow(this.activeVideoWindow);
                       }
                       this.activeVideoWindow = vidWin;
                       this.activeVideoWinId = winId;

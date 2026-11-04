@@ -11,6 +11,95 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /** Exercise the actual incoming-window answer worker in an isolated JVM: a native assert must fail the test. */
 class IncomingCallWorkerTest {
+  @org.junit.jupiter.api.Test
+  void shutdownDrainsCallsEvenWhenFxCleanupIsDelayed() throws Exception {
+    runProbe(DelayedCleanupProbe.class, "cleanup", false);
+  }
+
+  public static class DelayedCleanupProbe {
+    public static void main(String[] args) throws Exception {
+      Platform.startup(() -> {}); Platform.setImplicitExit(false);
+      CountDownLatch releaseUi = new CountDownLatch(1), uiBlocked = new CountDownLatch(1);
+      Platform.runLater(() -> { uiBlocked.countDown(); try { releaseUi.await(20, TimeUnit.SECONDS); }
+        catch (InterruptedException error) { Thread.currentThread().interrupt(); } });
+      if (!uiBlocked.await(2, TimeUnit.SECONDS)) throw new AssertionError("UI not blocked");
+      CountDownLatch registered = new CountDownLatch(1);
+      var connected = new java.util.concurrent.atomic.AtomicInteger();
+      SipService sip = new SipService(new SipService.Events() {
+        public void log(String message) {}
+        public void log(String category, String message) {
+          if (category.equals("注册") && message.contains("200")) registered.countDown();
+          if (message.contains("通话已接通确认")) connected.incrementAndGet();
+        }
+        public void sip(boolean outgoing, String summary, String raw) {}
+        public void stateChanged() {}
+      });
+      try (CallConnectedNotificationTest.Peer peer = new CallConnectedNotificationTest.Peer()) {
+        sip.start(15988, "127.0.0.1");
+        sip.register("127.0.0.1:" + peer.socket.getLocalPort(), "1098", "", "lab", "udp");
+        if (!registered.await(3, TimeUnit.SECONDS)) throw new AssertionError("Registration missing");
+        for (int index = 1; index <= 3; index++) {
+          String previous = peer.invite;
+          sip.call("1099", "lab", false);
+          long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+          while (peer.invite == previous && System.nanoTime() < until) Thread.sleep(10);
+          if (peer.invite == previous) throw new AssertionError("INVITE missing");
+          peer.answer(false);
+          while (connected.get() < index && System.nanoTime() < until) Thread.sleep(10);
+          if (connected.get() < index) throw new AssertionError("Call not connected");
+          sip.hangup();
+          while (sip.isInCall() && System.nanoTime() < until) Thread.sleep(10);
+          if (sip.isInCall()) throw new AssertionError("Call not disconnected");
+        }
+        sip.shutdown();
+        CountDownLatch uiDrained = new CountDownLatch(1);
+        Platform.runLater(uiDrained::countDown);
+        releaseUi.countDown();
+        if (!uiDrained.await(3, TimeUnit.SECONDS)) throw new AssertionError("Delayed cleanup not drained");
+        System.gc(); System.runFinalization();
+        System.out.println("PASS cleanup worker");
+      } finally { releaseUi.countDown(); Platform.exit(); }
+      System.exit(0);
+    }
+  }
+  @org.junit.jupiter.api.Test
+  void cameraControlMessageCanUseAFreshThread() throws Exception {
+    runProbe(MessageProbe.class, "message", false);
+  }
+
+  public static class MessageProbe {
+    public static void main(String[] args) throws Exception {
+      CountDownLatch registered = new CountDownLatch(1);
+      CountDownLatch delivered = new CountDownLatch(1);
+      SipService sip = new SipService(new SipService.Events() {
+        public void log(String message) {}
+        public void log(String category, String message) {
+          if (category.equals("注册") && message.contains("200")) registered.countDown();
+        }
+        public void sip(boolean outgoing, String summary, String raw) {}
+        public void stateChanged() {}
+        public void instantMessageStatus(String to, String body, int code, String reason) {
+          if (code == 200) delivered.countDown();
+        }
+      });
+      try (Peer peer = new Peer()) {
+        sip.start(15986, "127.0.0.1");
+        sip.register("127.0.0.1:" + peer.socket.getLocalPort(), "1098", "", "lab", "udp");
+        if (!registered.await(3, TimeUnit.SECONDS)) throw new AssertionError("Registration missing");
+        CompletableFuture<Void> sent = new CompletableFuture<>();
+        new Thread(() -> {
+          try { sip.sendMessage("1099", "lab", SipService.VIDEO_AVATAR_OFF); sent.complete(null); }
+          catch (Throwable error) { sent.completeExceptionally(error); }
+        }, "camera-avatar-control").start();
+        sent.get(3, TimeUnit.SECONDS);
+        if (!peer.message.await(3, TimeUnit.SECONDS)) throw new AssertionError("Camera control MESSAGE missing");
+        if (!delivered.await(3, TimeUnit.SECONDS)) throw new AssertionError("Camera control MESSAGE was not acknowledged");
+        sip.shutdown();
+        System.out.println("PASS message worker");
+      }
+      System.exit(0);
+    }
+  }
   @ParameterizedTest @ValueSource(booleans = {false, true})
   void incomingCallCanBeAnsweredByUiWorkerWithoutAborting(boolean videoOffer) throws Exception {
     runProbe(Probe.class, "incoming", videoOffer);
@@ -28,7 +117,7 @@ class IncomingCallWorkerTest {
     Process child = new ProcessBuilder(java, "-cp", cp, probe.getName(), Boolean.toString(videoOffer))
         .redirectErrorStream(true).redirectOutput(log.toFile()).start();
     try {
-      for (int i = 0; i < 100 && child.isAlive(); i++) {
+      for (int i = 0; i < 300 && child.isAlive(); i++) {
         if (Files.exists(log)) {
           String output = new String(Files.readAllBytes(log), StandardCharsets.UTF_8);
           assertFalse(output.contains("Calling pjlib from unknown/external thread"), output);
@@ -68,9 +157,10 @@ class IncomingCallWorkerTest {
         boolean video = Boolean.parseBoolean(args[0]);
         Platform.runLater(() -> ui.dial("1099", "lab", video));
         if (!peer.invited.await(4, TimeUnit.SECONDS)) throw new AssertionError("Outgoing INVITE missing");
-        peer.answer(video);
+        if (video) peer.answerWithVideo(); else peer.answer(false);
         if (!connected.await(4, TimeUnit.SECONDS)) throw new AssertionError("Outgoing call never connected");
-        sip.hangup(); peer.bye.await(2, TimeUnit.SECONDS);
+        Platform.runLater(ui::hangup);
+        if (!peer.bye.await(3, TimeUnit.SECONDS)) throw new AssertionError("UI hangup never sent BYE");
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Platform.runLater(() -> { ui.close(); closed.complete(null); });
         closed.get(3, TimeUnit.SECONDS);
@@ -142,7 +232,7 @@ class IncomingCallWorkerTest {
           } catch (Throwable error) { metadata.completeExceptionally(error); }
         }, "incoming-details").start();
         metadata.get(3, TimeUnit.SECONDS);
-        Platform.runLater(() -> ui.answer(false));
+        Platform.runLater(() -> ui.answer(Boolean.parseBoolean(args[0])));
         if (!peer.answered.await(5, TimeUnit.SECONDS)) throw new AssertionError("answer worker never sent 200 OK");
         sip.hangup();
         Thread.sleep(150);
@@ -160,6 +250,7 @@ class IncomingCallWorkerTest {
     final DatagramSocket socket = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"));
     final CountDownLatch answered = new CountDownLatch(1);
     final CountDownLatch ringing = new CountDownLatch(1);
+    final CountDownLatch message = new CountDownLatch(1);
     final Thread worker;
     int port;
     Peer() throws Exception {
@@ -168,12 +259,13 @@ class IncomingCallWorkerTest {
           byte[] bytes = new byte[16000]; DatagramPacket packet = new DatagramPacket(bytes, bytes.length);
           socket.receive(packet);
           String message = new String(bytes, 0, packet.getLength(), StandardCharsets.UTF_8);
-          if (message.startsWith("REGISTER ") || message.startsWith("BYE ")) {
+          if (message.startsWith("REGISTER ") || message.startsWith("BYE ") || message.startsWith("MESSAGE ")) {
             StringBuilder reply = new StringBuilder("SIP/2.0 200 OK\r\n");
             for (String line : message.split("\r\n"))
               if (line.startsWith("Via:") || line.startsWith("From:") || line.startsWith("To:")
                   || line.startsWith("Call-ID:") || line.startsWith("CSeq:")) reply.append(line).append("\r\n");
             send(reply + "Expires: 3600\r\nContent-Length: 0\r\n\r\n", packet.getSocketAddress());
+            if (message.startsWith("MESSAGE ")) this.message.countDown();
           } else if (message.startsWith("SIP/2.0 180")) {
             ringing.countDown();
           } else if (message.startsWith("SIP/2.0 200") && message.contains("CSeq: 1 INVITE")) {

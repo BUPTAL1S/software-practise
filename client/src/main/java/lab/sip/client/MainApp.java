@@ -1069,7 +1069,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     answerVideo.setOnAction(e -> {
       calls.answer(true);
     });
-    hangup.setOnAction(e -> run(sip::hangup));
+    hangup.setOnAction(e -> calls.hangup());
 
     ContextMenu previewMenu = new ContextMenu();
     MenuItem mirrorToggleItem = new MenuItem();
