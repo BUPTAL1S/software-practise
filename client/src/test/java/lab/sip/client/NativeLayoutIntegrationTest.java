@@ -152,9 +152,20 @@ class NativeLayoutIntegrationTest {
       fail("Native renderer did not converge to the final requested viewport");
     }
     static void screenshot(String name) throws Exception {
-      var rect=fx(() -> new java.awt.Rectangle((int)stage.getX(),(int)stage.getY(),(int)stage.getWidth(),(int)stage.getHeight()));
-      Path path=Path.of("target/test-snapshots/native-layout-"+name+".png"); Files.createDirectories(path.getParent());
-      javax.imageio.ImageIO.write(new java.awt.Robot().createScreenCapture(rect), "png", path.toFile());
+      boolean previous = fx(() -> {
+        boolean top = stage.isAlwaysOnTop(); stage.setAlwaysOnTop(true); stage.toFront(); return top;
+      });
+      try {
+        Thread.sleep(250);
+        var rect=fx(() -> {
+          var root=stage.getScene().getRoot(); var area=root.localToScreen(root.getBoundsInLocal());
+          // Capture only this window's client content, without desktop corners/titlebar.
+          return new java.awt.Rectangle((int)Math.ceil(area.getMinX()),(int)Math.ceil(area.getMinY()),
+              (int)Math.floor(area.getWidth()),(int)Math.floor(area.getHeight()));
+        });
+        Path path=Path.of("target/test-snapshots/native-layout-"+name+".png"); Files.createDirectories(path.getParent());
+        javax.imageio.ImageIO.write(new java.awt.Robot().createScreenCapture(rect), "png", path.toFile());
+      } finally { fx(() -> { stage.setAlwaysOnTop(previous); return null; }); }
     }
   }
 }
