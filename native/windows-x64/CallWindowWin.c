@@ -118,4 +118,3 @@ JNIEXPORT jlongArray JNICALL Java_lab_sip_client_WindowLayout_describeNative(JNI
     if (result) (*env)->SetLongArrayRegion(env, result, 0, 6, data);
     return result;
 }
-
