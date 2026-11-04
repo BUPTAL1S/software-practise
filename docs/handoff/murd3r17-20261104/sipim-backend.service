@@ -1,0 +1,22 @@
+[Unit]
+Description=SIP Connect backend
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=sipim
+Group=sipim
+WorkingDirectory=/srv/sipim/app
+EnvironmentFile=/etc/sipim/deploy.env
+ExecStart=/usr/bin/java -Djava.awt.headless=true -jar /srv/sipim/app/sipim-admin.jar --sipim.files.upload-dir=/srv/sipim/data/uploads --sipim.avatar.upload-dir=/srv/sipim/data/uploads --sipim.avatar.fs-dir=/srv/sipim/data/avatars
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

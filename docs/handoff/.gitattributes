@@ -1,0 +1,10 @@
+# Keep delivered text bytes stable across Windows and Linux for SHA256SUMS.
+.gitattributes text eol=lf
+**/*.md text eol=lf
+**/*.py text eol=lf
+**/*.yml text eol=lf
+**/*.example text eol=lf
+**/*.service text eol=lf
+**/SHA256SUMS text eol=lf
+**/*.docx binary
+*.zip binary

@@ -1,0 +1,57 @@
+# Independent server compose file. Do not merge with server/docker-compose.yml.
+name: sipim-server
+services:
+  kamailio:
+    image: ghcr.io/kamailio/kamailio-ci:5.8.3-alpine
+    entrypoint: ["kamailio"]
+    command: ["-DD", "-E", "-m", "64", "-M", "8"]
+    ports:
+      - "5060:5060/tcp"
+      - "5060:5060/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${CONFIG_ROOT:?set CONFIG_ROOT}/kamailio:/etc/kamailio:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+  freeswitch:
+    image: safarov/freeswitch:1.11.3
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:?set PUBLIC_IP}
+      ESL_PASSWORD: ${ESL_PASSWORD:?set ESL_PASSWORD}
+    # 5080 stays inside the compose network. Only Kamailio connects to it.
+    ports:
+      - "127.0.0.1:8021:8021/tcp"
+      - "21000-21099:21000-21099/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${CONFIG_ROOT:?set CONFIG_ROOT}/freeswitch:/tmp/freeswitch-custom:ro
+      - ${DATA_ROOT:?set DATA_ROOT}/avatars:/tmp/freeswitch-custom/avatars:ro
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if [ ! -f /etc/freeswitch/switch.conf.xml ]; then
+          mkdir -p /etc/freeswitch
+          cp -a /usr/share/freeswitch/conf/vanilla/. /etc/freeswitch/
+        fi
+        cp -a /tmp/freeswitch-custom/. /etc/freeswitch/
+        mkdir -p /usr/share/freeswitch/sounds
+        cp -a /tmp/freeswitch-custom/sounds/. /usr/share/freeswitch/sounds/
+        sed -i "s/external_rtp_ip=127.0.0.1/external_rtp_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
+        sed -i "s/external_sip_ip=127.0.0.1/external_sip_ip=$$PUBLIC_IP/" /etc/freeswitch/vars.xml
+        exec /entrypoint.sh
+    # Override the image's default check so changing the ESL secret stays healthy.
+    healthcheck:
+      test: ["CMD-SHELL", "fs_cli -H 127.0.0.1 -P 8021 -p \"$$ESL_PASSWORD\" -x status | grep -q '^UP'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
