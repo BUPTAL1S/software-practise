@@ -7,7 +7,7 @@
 - `server/docker-compose.yml` 能拉起 Kamailio + FreeSWITCH（不要数据库容器）
 - Kamailio：REGISTER / 查找 / 一对一转发
 - Kamailio：用户部分 `room-*` 的 INVITE 转到 FreeSWITCH，其它 INVITE 不进 MCU
-- FreeSWITCH：一个会议室，`max-members=8`，视频 3×3，720p30（`1280x720`，不要 1080p）。媒体 UDP `21000-21099`，H.264 与一对一相同：`97`、`42e01e`、`packetization-mode=1`
+- FreeSWITCH：一个会议室，`max-members=8`，视频按人数使用 1/2/4/9 格，画布 `960x540` / 15fps / 1mb。媒体 UDP `21000-21099`，H.264 与一对一相同：`97`、`42e01e`、`packetization-mode=1`
 - 给后台开 ESL（默认 8021），只用于房间事件
 - 维护测试账号（至少 8 个），写在本目录 README，方便双机多开
 

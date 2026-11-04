@@ -25,9 +25,9 @@
       <param name="max-members" value="8"/>
       <param name="max-members-sound" value="conference/conf-locked.wav"/>
 
-      <!-- 低负载九宫格；宽度低于部分 PJSIP OpenH264 构建的 1200 接收上限。 -->
+      <!-- 保留现有 profile 名供拨号方案使用；按视频人数选择 1/2/4/9 格。 -->
       <param name="video-mode" value="mux"/>
-      <param name="video-layout-name" value="3x3"/>
+      <param name="video-layout-name" value="group:sip-adaptive"/>
       <param name="video-canvas-size" value="960x540"/>
       <param name="video-fps" value="15"/>
       <param name="video-codec-bandwidth" value="1mb"/>

@@ -49,7 +49,7 @@ cd client
 
 SIP 域：`lab`。
 - **一对一通话**：`INVITE sip:<user>@lab` 走 Kamailio 路由，两端 RTP 直连，**绝对不进入 MCU**；
-- **多人会议室**：`INVITE sip:room-<id>@lab` 由 Kamailio 自动转至 FreeSWITCH MCU（5080 端口）。当前 XML 为 `video-mcu-3x3`、960×540、15fps、1mb 的九宫格混流与音频混音，配置上限 8 人；第 9 人拒绝仍需真实 MCU 验收。客户端默认发送目标为 848×480/25fps，实际输出受双方协商和 MCU 配置影响；
+- **多人会议室**：`INVITE sip:room-<id>@lab` 由 Kamailio 自动转至 FreeSWITCH MCU（5080 端口）。当前 XML 为 `video-mcu-3x3`、960×540、15fps、1mb 的 1/2/4/9 格自适应混流与音频混音，配置上限 8 人；第 9 人拒绝仍需真实 MCU 验收。客户端默认发送目标为 848×480/25fps，实际输出受双方协商和 MCU 配置影响；
 - **后台与 ESL**：后台通过纯 Java 原生 Socket 监听 FreeSWITCH 8021 ESL 端口，自动同步实时在会人数与峰值；
 - 原生库不入库，见 `native/`。
 
