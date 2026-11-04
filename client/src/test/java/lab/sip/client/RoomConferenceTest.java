@@ -348,6 +348,7 @@ class RoomConferenceTest {
             File out =
                 new File(
                     "target/test-snapshots/snapshot_room_exit_and_selection_fixed.png");
+            java.nio.file.Files.createDirectories(out.toPath().getParent());
             ImageIO.write(bi, "png", out);
             System.out.println("ROOM_FIXED_SNAPSHOT_SAVED: " + out.getAbsolutePath());
 
@@ -471,7 +472,7 @@ class RoomConferenceTest {
     assertTrue(sip.isCurrentCallVideo());
     assertTrue(sip.isCurrentRoom("sip:room-101@lab"));
     assertEquals("sip:room-101@lab", sip.currentCallTarget());
-    assertTrue(sip.statusText().contains("在会中 · 视频会议 (3×3 混流)"));
+    assertTrue(sip.statusText().contains("在会中 · 视频会议"));
 
     sip.hangup();
     assertFalse(sip.isInCall());

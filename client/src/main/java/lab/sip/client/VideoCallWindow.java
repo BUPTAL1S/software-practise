@@ -512,4 +512,10 @@ final class VideoCallWindow {
     }
   }
 
+  void syncElapsed(long elapsedNanos) {
+    if (!connected || timerLabel == null) return;
+    startedAt = System.nanoTime() - Math.max(0, elapsedNanos);
+    timerLabel.setText(CallUi.duration(elapsedNanos));
+  }
+
 }

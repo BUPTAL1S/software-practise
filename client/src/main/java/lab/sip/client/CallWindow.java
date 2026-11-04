@@ -51,8 +51,9 @@ final class CallWindow {
     initialLabel.setText(CallUi.initial(target));
     refreshStatus();
     setCameraOn(cameraOn);
-    cameraBtn.setVisible(video);
-    cameraBtn.setManaged(video);
+    cameraBtn.setVisible(true);
+    cameraBtn.setManaged(true);
+    cameraBtn.setDisable(!connected);
     CallUi.state(hangupBtn, connected ? "挂断" : "取消呼叫", false);
     timerLabel.setVisible(connected);
     if (connected) startTimer();
@@ -126,5 +127,11 @@ final class CallWindow {
         e -> timerLabel.setText(CallUi.duration(System.nanoTime() - startedAt))));
     timer.setCycleCount(Timeline.INDEFINITE);
     timer.play();
+  }
+
+  void syncElapsed(long elapsedNanos) {
+    if (!connected || timerLabel == null) return;
+    startedAt = System.nanoTime() - Math.max(0, elapsedNanos);
+    timerLabel.setText(CallUi.duration(elapsedNanos));
   }
 }
