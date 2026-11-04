@@ -24,6 +24,18 @@ if ([BitConverter]::ToUInt16($jni, $pe+4) -ne 0x8664) { throw 'pjsua2.dll must b
 if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('Video latency policy: decode-floor=')) {
     throw 'This release requires the video latency patch. Rebuild with scripts/build-native-windows.ps1 before packaging.'
 }
+if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('SDL viewport policy: renderer-output aspect-fit')) {
+    throw 'Rebuild PJSUA2 with the viewport patch before packaging.'
+}
+foreach ($helper in @(@('callwindow.dll','Java_lab_sip_client_WindowLayout_attachScaledNative'),
+                       @('winmirror.dll','Java_lab_sip_client_NativeMirror_mirrorApiVersionNative'))) {
+    $binary = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $native $helper[0])))
+    if (-not $binary.Contains($helper[1])) { throw "Rebuild the ABI 2 native helper: $($helper[0])" }
+}
+$commit = & git -C $repo rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source commit.' }
+$dirty = [bool](& git -C $repo status --porcelain)
+$buildId = $commit.Substring(0,12) + $(if ($dirty) { '-dirty' } else { '' })
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo ('dist\windows-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw "Output already exists; choose a new directory: $output" }
@@ -56,9 +68,11 @@ try {
 setlocal
 cd /d "%~dp0"
 set "PATH=%~dp0native;%PATH%"
+set /p SIP_BUILD_ID=<"%~dp0build-id.txt"
+if not exist logs mkdir logs
 if not defined SIP_MEDIA_PROFILE set "SIP_MEDIA_PROFILE=balanced"
 if /I "%SIP_MEDIA_PROFILE%"=="legacy" if not defined SIP_VIDEO_LATENCY_MODE set "SIP_VIDEO_LATENCY_MODE=legacy"
-"%~dp0jre\bin\java.exe" "-Dsip.native.dir=%~dp0native" "-Dsip.media.profile=%SIP_MEDIA_PROFILE%" -jar "%~dp0lib\sip-client.jar" %*
+"%~dp0jre\bin\java.exe" "-Dsip.build.id=%SIP_BUILD_ID%" "-XX:ErrorFile=%~dp0logs\hs_err_pid%%p.log" "-Dsip.native.dir=%~dp0native" "-Dsip.media.profile=%SIP_MEDIA_PROFILE%" -jar "%~dp0lib\sip-client.jar" %*
 exit /b %ERRORLEVEL%
 '@
     $backendLauncher = @'
@@ -71,6 +85,19 @@ exit /b %ERRORLEVEL%
 '@
     [IO.File]::WriteAllText((Join-Path $client 'start-client.bat'), $clientLauncher.Replace("`r`n","`n").Replace("`n","`r`n") + "`r`n", [Text.ASCIIEncoding]::new())
     [IO.File]::WriteAllText((Join-Path $backend 'start-backend.bat'), $backendLauncher.Replace("`r`n","`n").Replace("`n","`r`n") + "`r`n", [Text.ASCIIEncoding]::new())
+    foreach ($bundle in @($client,$backend)) { $buildId | Set-Content -LiteralPath (Join-Path $bundle 'build-id.txt') -Encoding ascii }
+    $diagnosticLauncher = @'
+@echo off
+setlocal
+cd /d "%~dp0"
+set /p SIP_BUILD_ID=<"%~dp0build-id.txt"
+if not exist logs mkdir logs
+"%~dp0jre\bin\java.exe" "-Dsip.build.id=%SIP_BUILD_ID%" "-Dsip.native.dir=%~dp0native" -cp "%~dp0lib\sip-client.jar" lab.sip.client.DeliveryDiagnostics > "%~dp0logs\bundle-diagnostics.txt" 2>&1
+set "RESULT=%ERRORLEVEL%"
+type "%~dp0logs\bundle-diagnostics.txt"
+exit /b %RESULT%
+'@
+    [IO.File]::WriteAllText((Join-Path $client 'collect-diagnostics.bat'), $diagnosticLauncher.Replace("`r`n","`n").Replace("`n","`r`n") + "`r`n", [Text.ASCIIEncoding]::new())
     @'
 Windows x64 / Java 17 portable client. Run start-client.bat.
 No installed Java, Maven or MSYS2 is required on the receiving computer.
@@ -89,14 +116,13 @@ Database and avatar uploads are under data/. Other existing upload paths remain 
 Keep the console open; Ctrl+C stops this instance. No other service is stopped.
 This package does not start or modify Docker, Kamailio or FreeSWITCH.
 '@ | Set-Content -LiteralPath (Join-Path $backend 'README.txt') -Encoding utf8
-    $commit = & git -C $repo rev-parse HEAD
-    $dirty = [bool](& git -C $repo status --porcelain)
     $manifest = [ordered]@{ platform='windows-x64'; java=([regex]::Match($release,'JAVA_VERSION="([^"]+)"').Groups[1].Value);
         commit=$commit; dirty=$dirty; createdAt=(Get-Date).ToString('o'); modules=$modules; files=@() }
     $manifest.files = @(Get-ChildItem -LiteralPath $client,$backend -Recurse -File | Where-Object {$_.Extension -in '.jar','.dll'} | ForEach-Object {
         [ordered]@{path=[IO.Path]::GetRelativePath($output,$_.FullName); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
     })
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8
+    foreach ($bundle in @($client,$backend)) { Copy-Item -LiteralPath (Join-Path $output 'manifest.json') -Destination (Join-Path $bundle 'manifest.json') }
     foreach ($bundle in @($client,$backend)) { Compress-Archive -LiteralPath $bundle -DestinationPath ($bundle + '.zip') -CompressionLevel Optimal }
     Get-FileHash -LiteralPath ($client+'.zip'),($backend+'.zip') -Algorithm SHA256 | Format-Table -AutoSize
     Write-Output "PACKAGES_READY: $output"
