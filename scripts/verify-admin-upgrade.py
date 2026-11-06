@@ -140,7 +140,10 @@ def main():
         assert request(app.origin, "/api/login", body={"username": "1008", "password": "1008"})[0] == 200
         _, csv = app.api("/api/admin/workbench/cdr/export")
         assert csv.startswith(b"\xef\xbb\xbf")
-        assert app.api("/api/admin/workbench/operations")[1]["esl"]["enabled"] is False
+        _, operations = app.api("/api/admin/workbench/operations")
+        assert operations["esl"]["enabled"] is False
+        assert operations["schemaVersion"] == 2
+        assert operations["revision"] != "development"
         _, audit = app.api("/api/admin/workbench/audit/page")
         audit_count = audit["total"]
         assert audit_count >= 3
@@ -167,7 +170,7 @@ def main():
         app.close()
         app = None
         result = {"status": "PASS", "users": len(current_users), "calls": 1, "messages": 2, "files": 1,
-                  "credentialsPreserved": True, "disabledRestore": True, "retiredIdentityReserved": True,
+                  "revision": operations["revision"], "schemaVersion": operations["schemaVersion"], "credentialsPreserved": True, "disabledRestore": True, "retiredIdentityReserved": True,
                   "auditSurvivesRestart": True, "backupRestore": True, "externalServiceUsed": False}
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps(result))

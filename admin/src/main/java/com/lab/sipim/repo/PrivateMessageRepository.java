@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PrivateMessageRepository extends JpaRepository<PrivateMessage, Long> {
+    @Query("SELECT m FROM PrivateMessage m WHERE (:user IS NULL OR m.senderKey=:user OR m.receiverKey=:user) AND (:peer IS NULL OR m.senderKey=:peer OR m.receiverKey=:peer) ORDER BY m.id DESC")
+    List<PrivateMessage> searchForAdmin(@Param("user") String user,@Param("peer") String peer,org.springframework.data.domain.Pageable page);
 
     @Query(
             "select m from PrivateMessage m "

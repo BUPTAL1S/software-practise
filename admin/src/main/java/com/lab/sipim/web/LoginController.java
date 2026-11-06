@@ -83,8 +83,21 @@ public class LoginController {
     }
 
     @PostMapping("/register")
-    @org.springframework.transaction.annotation.Transactional
     public synchronized ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
+        // Enter the transaction only after acquiring the alias lock, and commit
+        // before releasing it. Otherwise a second SQLite reader can prevent the
+        // first registration from committing while waiting for its write lock.
+        ResponseEntity<?> response=new org.springframework.transaction.support.TransactionTemplate(transactions)
+            .execute(status -> registerData(request));
+        if(response.getStatusCode().value()==201) {
+            @SuppressWarnings("unchecked") Map<String,Object> body=new LinkedHashMap<>((Map<String,Object>)response.getBody());
+            body.put("token",tokens.issue(((Number)body.get("id")).longValue()));
+            return ResponseEntity.status(201).body(body);
+        }
+        return response;
+    }
+    @org.springframework.beans.factory.annotation.Autowired private org.springframework.transaction.PlatformTransactionManager transactions;
+    private ResponseEntity<?> registerData(RegisterRequest request) {
         if (request == null || blank(request.username()) || blank(request.password())) {
             return ResponseEntity.badRequest().body(Map.of("error", MISSING));
         }
@@ -118,12 +131,10 @@ public class LoginController {
         reservations.reserve(username,"account");reservations.reserve(sipId,"account");
         audit.record(audit.actor(username),"USER_CREATE",username,"SUCCESS","account created");
 
-        String token = tokens.issue(saved.getId());
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("id", saved.getId());
         resp.put("username", saved.getUsername());
         resp.put("sipId", saved.getSipId());
-        resp.put("token", token);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(resp);
     }

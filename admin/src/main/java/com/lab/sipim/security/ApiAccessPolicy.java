@@ -15,6 +15,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
     @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.bootstrap.ApplicationReadiness readiness;
     private final LoginTokens tokens;
     private final UserRepository users;
     private final ObjectMapper json;
@@ -53,6 +54,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         response.setHeader("Cache-Control", "no-store");
         String path = org.springframework.web.util.UrlPathHelper.defaultInstance.getLookupPathForRequest(request);
         String method = request.getMethod();
+        if(!readiness.isReady() && !path.equals("/api/health"))return deny(response,503,"后台正在初始化，请稍后重试");
         boolean read = method.equals("GET") || method.equals("HEAD");
         boolean adminOnly = path.startsWith("/api/admin/") && !path.equals("/api/admin/login")
                 || path.matches("/api/users/[0-9]+/state")

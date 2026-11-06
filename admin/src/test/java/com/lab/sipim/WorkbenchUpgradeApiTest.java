@@ -25,6 +25,7 @@ class WorkbenchUpgradeApiTest {
     @Autowired jakarta.persistence.EntityManagerFactory entityManagers;
     @Autowired com.lab.sipim.service.IdentityReservations identities;
     @org.springframework.boot.test.mock.mockito.SpyBean com.lab.sipim.service.AdminAudit audit;
+    @org.springframework.boot.test.mock.mockito.SpyBean com.lab.sipim.bootstrap.ApplicationReadiness readiness;
     String admin;
     @BeforeEach void setup(){calls.deleteAll();admin=tokens.issue(users.findByUsername("1001").orElseThrow().getId());}
     void call(String peer,int second){var c=new Cdr();c.setCaller("1001");c.setCalleeOrRoom(peer);c.setStartedAt(Instant.parse("2026-11-06T00:00:00Z").plusSeconds(second));c.setDurationSec(10);calls.save(c);}
@@ -56,7 +57,7 @@ class WorkbenchUpgradeApiTest {
         assertTrue(csv.startsWith("\uFEFF\"id\""));assertEquals(127,csv.lines().count());
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM audit_events WHERE action='DATA_EXPORT' AND result='SUCCESS'",Long.class)>0);
         mvc.perform(get("/api/admin/workbench/operations").header("Authorization","Bearer "+admin))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(1)).andExpect(jsonPath("$.esl.enabled").value(false));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(2)).andExpect(jsonPath("$.esl.enabled").value(false));
         mvc.perform(get("/api/admin/workbench/audit/page").header("Authorization","Bearer "+admin).param("action","DATA_EXPORT"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].action").value("DATA_EXPORT"));
     }
@@ -72,12 +73,12 @@ class WorkbenchUpgradeApiTest {
     @Test void tenThousandRecordsLoadOnlyOnePageWithinTheLocalLatencyBudget() throws Exception {
         call("1002",0);
         Object timestamp=jdbc.queryForObject("SELECT started_at FROM cdr LIMIT 1",Object.class);
-        String plan=jdbc.queryForList("EXPLAIN QUERY PLAN SELECT * FROM cdr WHERE lower(caller)='1001' AND lower(callee_or_room)='1002' ORDER BY id DESC LIMIT 25").toString();
-        assertTrue(plan.contains("idx_cdr_query_lower"),plan);
+        String plan=jdbc.queryForList("EXPLAIN QUERY PLAN SELECT * FROM cdr WHERE caller_key='1001' AND callee_or_room_key='1002' ORDER BY id DESC LIMIT 25").toString();
+        assertTrue(plan.contains("idx_cdr_query_keys"),plan);
         new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status->{
             java.util.List<Object[]> batch=new java.util.ArrayList<>();
-            for(int i=1;i<10000;i++)batch.add(new Object[]{"1001","1002",timestamp,10});
-            jdbc.batchUpdate("INSERT INTO cdr(caller,callee_or_room,started_at,duration_sec) VALUES(?,?,?,?)",batch);
+            for(int i=1;i<10000;i++)batch.add(new Object[]{"1001","1002",timestamp,10,"1001","1002"});
+            jdbc.batchUpdate("INSERT INTO cdr(caller,callee_or_room,started_at,duration_sec,caller_key,callee_or_room_key) VALUES(?,?,?,?,?,?)",batch);
         });
         var statistics=entityManagers.unwrap(org.hibernate.SessionFactory.class).getStatistics();
         boolean original=statistics.isStatisticsEnabled();statistics.setStatisticsEnabled(true);statistics.clear();
@@ -115,5 +116,20 @@ class WorkbenchUpgradeApiTest {
         var pending=mvc.perform(get("/api/admin/workbench/files/export").header("Authorization","Bearer "+admin))
             .andExpect(request().asyncStarted()).andReturn();
         mvc.perform(asyncDispatch(pending)).andExpect(status().isOk());
+        for(String path:java.util.List.of("/api/files","/api/admin/messages","/api/admin/room-messages")) {
+            mvc.perform(get(path).header("Authorization","Bearer "+admin).param("user","").param("room","").param("sender","").param("peer",""))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isArray());
+            mvc.perform(get(path).header("Authorization","Bearer "+admin).param("limit","0")).andExpect(status().isBadRequest());
+        }
+    }
+    @Test void initializationRejectsAccountCreationUntilIdentityBackfillIsReady() throws Exception {
+        org.mockito.Mockito.doReturn(false).when(readiness).isReady();
+        try {
+            mvc.perform(get("/api/health")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("starting"));
+            mvc.perform(post("/api/register").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"startup-race\",\"password\":\"secret\"}"))
+                .andExpect(status().isServiceUnavailable());
+            assertTrue(users.findByUsername("startup-race").isEmpty());
+        } finally {org.mockito.Mockito.reset(readiness);}
     }
 }

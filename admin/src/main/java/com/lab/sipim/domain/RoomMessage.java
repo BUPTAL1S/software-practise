@@ -11,6 +11,14 @@ import java.time.Instant;
 @Entity
 @Table(name = "room_messages", indexes = @jakarta.persistence.Index(name="idx_room_messages_filter",columnList="room_uri,sender,id"))
 public class RoomMessage {
+    @Column(name="room_uri_key") private String roomUriKey;
+    @Column(name="sender_key") private String senderKey;
+    @jakarta.persistence.PrePersist @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        roomUriKey=roomUri==null?null:roomUri.trim().toLowerCase(java.util.Locale.ROOT);
+        senderKey=sender==null?null:sender.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
