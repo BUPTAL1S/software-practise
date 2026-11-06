@@ -59,7 +59,7 @@
     clearTimeout(toastTimer);
     text('toast', ''); $('toast').style.display = 'none';
     $('registerForm').reset(); $('roomForm').reset();
-    ['filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
+    ['rangeStart', 'rangeEnd', 'filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
       .forEach(id => { $(id).value = ''; });
     ['cdrCountBadge', 'roomCountBadge', 'userCountBadge', 'fileCountBadge', 'roomChatBadge']
       .forEach(id => text(id, '--'));
@@ -263,7 +263,7 @@
         text('eslStatus', label);
         $('eslStatus').className = 'badge badge-' + (esl?.enabled && esl?.connected ? 'success' : 'gray');
       }, force),
-      load('stats', base + '/stats', data => {
+      load('stats', base + '/query-stats?' + dateParams(), data => {
         text('statTotalCalls', data.totalCalls ?? '--');
         text('statTotalDuration', duration(data.totalDurationSec));
         text('statTotalDurationDesc', '累计已上报通话时长');
@@ -280,10 +280,28 @@
     ];
   }
 
+  function dateParams() {
+    const params=new URLSearchParams();
+    for (const [id,key,end] of [['rangeStart','fromTime',false],['rangeEnd','untilTime',true]]) {
+      const value=$(id)?.value;
+      if(value) {const [y,m,d]=value.split('-').map(Number);const date=new Date(y,m-1,d+(end?1:0));params.set(key,date.toISOString());}
+    }
+    return params;
+  }
+  async function exportData(resource, filters, control) {
+    const params=dateParams();
+    for(const [key,id] of Object.entries(filters))if($(id).value.trim())params.set(key,$(id).value.trim());
+    const currentEpoch=epoch;control.disabled=true;
+    try {
+      const data=await api(base+'/'+resource+'/export?'+params,{blob:true});if(currentEpoch!==epoch || !token)return;
+      const link=element('a');const url=URL.createObjectURL(data);link.href=url;link.download=resource+'.csv';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);showToast('导出完成');
+    }catch(error){if(currentEpoch===epoch)showToast(error.message,true);}finally{control.disabled=false;}
+  }
   function paged(key, path, render, force) {
     const url = new URL(path, location.origin);
     const resource = key === 'chat' ? 'messages' : key === 'roomChat' ? 'room-messages' : key;
     url.pathname = base + '/' + resource + '/page';
+    if(!['users','rooms'].includes(resource))dateParams().forEach((value,key)=>url.searchParams.set(key,value));
     const requestedSize = Math.min(100, Number(url.searchParams.get('limit') || 25));
     url.searchParams.delete('limit');
     const signature = url.searchParams.toString();
@@ -433,6 +451,12 @@
     if (!refreshing) { refreshQueued = false; refresh(true); }
   }
   function install() {
+    $('applyRange').addEventListener('click',()=>{paging.clear();refresh(true);});
+    $('clearRange').addEventListener('click',()=>{$('rangeStart').value='';$('rangeEnd').value='';paging.clear();refresh(true);});
+    for(const [id,resource,filters] of [['exportCdr','cdr',{caller:'filterCaller',callee:'filterCallee'}],['exportFiles','files',{}],['exportChat','messages',{user:'chatUserFilter',peer:'chatPeerFilter'}],['exportRoomChat','room-messages',{room:'chatRoomFilter',sender:'chatRoomSenderFilter'}]]) {
+      $(id).addEventListener('click',event=>exportData(resource,filters,event.currentTarget));
+    }
+
     document.querySelectorAll('[data-tab]').forEach(item => item.addEventListener('click', event => activateTab(event.currentTarget.dataset.tab)));
     $('refreshAll').addEventListener('click', () => refresh(true));
     $('autoRefreshToggle').addEventListener('change', scheduleRefresh);

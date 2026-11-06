@@ -45,6 +45,13 @@ public class WorkbenchQueries {
         List<Map<String,Object>> items=new ArrayList<>(); for(Object row:rows)items.add(view(row));
         return new PageResult(items,page,size,total,((long)page+1)*size<total,snapshot);
     }
+    public Map<String,Object> callStats(Map<String,String> params) {
+        var cb=em.getCriteriaBuilder();var q=cb.createQuery(Object[].class);var root=q.from(Cdr.class);
+        q.multiselect(cb.count(root),cb.coalesce(cb.sumAsLong(root.get("durationSec")),0L));
+        q.where(predicates(cb,root,resource("cdr"),params,Long.MAX_VALUE));
+        Object[] result=em.createQuery(q).getSingleResult();long count=((Number)result[0]).longValue(),seconds=((Number)result[1]).longValue();
+        return map("totalCalls",count,"totalDurationSec",seconds,"averageDurationSec",count==0?0.0:Math.round(10.0*seconds/count)/10.0);
+    }
     private Predicate[] predicates(jakarta.persistence.criteria.CriteriaBuilder cb,Root<?> root,Resource resource,Map<String,String> params,long snapshot) {
         List<Predicate> where=new ArrayList<>();where.add(cb.le(root.get("id"),snapshot));
         resource.filters().forEach((key,field)->{String value=clean(params.get(key));if(value!=null)where.add(cb.equal(cb.lower(root.get(field)),value.toLowerCase(Locale.ROOT)));});
