@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api")
 public class HealthController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.bootstrap.ApplicationReadiness readiness;
 
     private final EslEventListener eslListener;
 
@@ -20,7 +21,7 @@ public class HealthController {
     @GetMapping("/health")
     public Map<String, Object> health() {
         Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("status", "ok");
+        resp.put("status", readiness == null || readiness.isReady() ? "ok" : "starting");
         if (eslListener != null) {
             Map<String, Object> esl = new LinkedHashMap<>();
             esl.put("enabled", eslListener.isEnabled());

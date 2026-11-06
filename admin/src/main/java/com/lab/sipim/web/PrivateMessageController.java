@@ -162,7 +162,8 @@ public class PrivateMessageController {
         }
         String user = trim(userFilter);
         String peer = trim(peerFilter);
-        List<PrivateMessage> list = messages.findAllByOrderByIdDesc();
+        if(limit<1 || limit>500)throw new IllegalArgumentException("limit must be between 1 and 500");
+        List<PrivateMessage> list = messages.searchForAdmin(user==null || user.isBlank()?null:user,peer==null || peer.isBlank()?null:peer,org.springframework.data.domain.PageRequest.of(0,limit));
         List<Map<String, Object>> result = new ArrayList<>();
         for (PrivateMessage m : list) {
             if (user != null && !user.isEmpty()

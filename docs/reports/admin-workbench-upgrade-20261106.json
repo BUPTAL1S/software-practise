@@ -1,0 +1,57 @@
+{
+  "sourceCommit": "6948308fb9b9d2859888696331e9a8c209ea0977",
+  "dirty": false,
+  "backendTests": {
+    "total": 123,
+    "passed": 122,
+    "skippedRealMcu": 1,
+    "failures": 0,
+    "errors": 0
+  },
+  "isolatedBrowserTests": {
+    "total": 14,
+    "passed": 14
+  },
+  "pagination": {
+    "records": 10000,
+    "pageSize": 25,
+    "requests": 20,
+    "p95Milliseconds": 3.006,
+    "loadedEntitiesPerRequest": 25,
+    "indexPlanVerified": true
+  },
+  "upgradeRestore": {
+    "status": "PASS",
+    "users": 8,
+    "calls": 1,
+    "messages": 2,
+    "files": 1,
+    "revision": "6948308fb9b9",
+    "schemaVersion": 2,
+    "credentialsPreserved": true,
+    "disabledRestore": true,
+    "retiredIdentityReserved": true,
+    "auditSurvivesRestart": true,
+    "backupRestore": true,
+    "externalServiceUsed": false
+  },
+  "packageHashes": {
+    "JavaSIP-Backend-Windows-x64.zip": "5b619f3dc82166cb6636763c6e008646a66209ac206b6a8ef33ffc76290513b7",
+    "JavaSIP-Client-Windows-x64.zip": "c0736abf380e1668eebeef1d1ea99f5a527e9c47d8faba09b33cf4aa101e0c1b"
+  },
+  "portablePackage": "PASS",
+  "backendRuntimeComparedWithTestedBuild": "identical except build-info.properties",
+  "previewUrl": "http://127.0.0.1:8088/admin.html",
+  "previewUsesIsolatedDemoData": true,
+  "previewEslEnabled": false,
+  "collaboratorDeploymentChanged": false,
+  "pullRequests": [
+    "https://github.com/BUPTAL1S/software-practise/pull/65",
+    "https://github.com/BUPTAL1S/software-practise/pull/66",
+    "https://github.com/BUPTAL1S/software-practise/pull/67",
+    "https://github.com/BUPTAL1S/software-practise/pull/68",
+    "https://github.com/BUPTAL1S/software-practise/pull/69",
+    "https://github.com/BUPTAL1S/software-practise/pull/70",
+    "https://github.com/BUPTAL1S/software-practise/pull/71"
+  ]
+}

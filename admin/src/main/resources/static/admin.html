@@ -328,10 +328,15 @@
         <span>👥</span>
       </div>
       <div class="stat-value" id="statPeakRoomMembers">0</div>
-      <div class="stat-desc">扫描线区间重叠计算</div>
+      <div class="stat-desc">全局历史峰值，不随日期筛选变化</div>
     </div>
   </div>
 
+  <div class="card form-inline">
+    <label>开始日期 <input id="rangeStart" type="date"></label><label>结束日期 <input id="rangeEnd" type="date"></label>
+    <button id="applyRange" class="btn btn-primary btn-sm">应用日期</button><button id="clearRange" class="btn btn-outline btn-sm">全部日期</button>
+    <span class="section-note">按本地时区筛选，包含结束当天；话单按开始时间统计。</span>
+  </div>
   <!-- 选项卡切换 -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="tab-cdr">📞 通话记录 (CDR)</button>
@@ -339,6 +344,7 @@
     <button class="tab-btn" data-tab="tab-users">👤 用户列表 (Users)</button>
     <button class="tab-btn" data-tab="tab-files">📁 文件记录 (Files)</button>
     <button class="tab-btn" data-tab="tab-chat">💬 聊天记录 (仅 1001)</button>
+    <button class="tab-btn" data-tab="tab-operations">运维与操作记录</button>
   </div>
 
   <!-- Tab 1: 通话记录 -->
@@ -363,11 +369,11 @@
           <select id="filterLimit">
             <option value="50">50 条</option>
             <option value="100" selected>100 条</option>
-            <option value="200">200 条</option>
+            <option value="25">25 条</option>
           </select>
         </div>
         <button class="btn btn-primary btn-sm" id="queryCdr">查询筛选</button>
-        <button class="btn btn-outline btn-sm" id="resetCdr">重置</button>
+        <button class="btn btn-outline btn-sm" id="resetCdr">重置</button> <button id="exportCdr" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
 
       <div style="overflow-x: auto;">
@@ -392,6 +398,7 @@
 
   <!-- Tab 2: 会议房间 -->
   <div id="tab-rooms" class="tab-content">
+    <label>房间状态 <select id="roomState"><option value="">全部</option><option value="false">正常</option><option value="true">已归档</option></select></label>
     <p id="dataStatus-rooms" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
@@ -441,8 +448,9 @@
 
   <!-- Tab 3: 用户列表 -->
   <div id="tab-users" class="tab-content">
+    <label>账号状态 <select id="userState"><option value="">全部</option><option value="false">正常</option><option value="true">已禁用</option></select></label>
     <p id="dataStatus-users" class="data-status" role="status">等待更新</p>
-    <p class="section-note">管理员可删除普通用户。删除后账号无法登录后台，客户端联系人自动同步移除；历史聊天、文件和通话记录保留。管理员账号受保护。</p>
+    <p class="section-note">管理员可禁用或恢复普通用户。禁用后无法登录业务后台，历史记录及账号身份保留；SIP通话状态独立于后台账号。管理员账号受保护。</p>
     <div class="card">
       <div class="card-title">
         <span>快速注册 / 添加用户</span>
@@ -491,10 +499,11 @@
 
   <!-- Tab 4: 文件传输记录 -->
   <div id="tab-files" class="tab-content">
+    <div class="form-inline"><label>发送方 <input id="fileFrom"></label><label>接收方／房间 <input id="fileTo"></label><button id="queryFiles" class="btn btn-primary btn-sm">查询筛选</button></div>
     <p id="dataStatus-files" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
-        <span>文件传输索引 (Files)</span>
+        <span>文件传输索引 (Files)</span><button id="exportFiles" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
         <span class="badge badge-primary" id="fileCountBadge">0 个</span>
       </div>
       <div style="overflow-x: auto;">
@@ -540,11 +549,11 @@
           <span class="input-label">限制:</span>
           <select id="chatLimit">
             <option value="100">100 条</option>
-            <option value="200" selected>200 条</option>
-            <option value="500">500 条</option>
+            <option value="50" selected>50 条</option>
+            <option value="25">25 条</option>
           </select>
         </div>
-        <button class="btn btn-accent btn-sm" id="queryChat">查询聊天记录</button>
+        <button class="btn btn-accent btn-sm" id="queryChat">查询聊天记录</button> <button id="exportChat" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         私聊消息由客户端在 SIP 送达后写入后台；对方离线时状态为 PENDING，对方重新上线后通过 HTTP 拉取并标记 DELIVERED。
@@ -583,7 +592,7 @@
           <span class="input-label">发送方:</span>
           <input type="text" id="chatRoomSenderFilter" placeholder="如 1002" style="width: 100px;">
         </div>
-        <button class="btn btn-accent btn-sm" id="queryRoomChat">查询聊天室记录</button>
+        <button class="btn btn-accent btn-sm" id="queryRoomChat">查询聊天室记录</button> <button id="exportRoomChat" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         会议室聊天由客户端通过 HTTP 写入 `room_messages`，这里展示持久化后的房间聊天记录。
@@ -608,6 +617,15 @@
     </div>
   </div>
 
+  <div id="tab-operations" class="tab-content">
+    <p id="dataStatus-operations" class="data-status" role="status">等待更新</p>
+    <div class="card"><div class="card-title">后台运行状态</div><table><thead><tr><th>项目</th><th>当前值</th></tr></thead><tbody id="operationsTableBody"></tbody></table></div>
+    <div class="card"><div class="card-title">管理员操作记录</div>
+      <div class="form-inline"><label>操作者 <input id="auditActor" placeholder="如1001"></label><label>操作类型 <input id="auditAction" placeholder="如USER_DISABLE"></label><button id="queryAudit" class="btn btn-primary btn-sm">查询记录</button></div>
+      <p class="section-note">日期筛选同样适用于操作记录；记录保留在数据库中。</p>
+      <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>时间</th><th>操作者</th><th>操作</th><th>目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="auditTableBody"></tbody></table></div>
+    </div>
+  </div>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/admin.js" defer></script>
