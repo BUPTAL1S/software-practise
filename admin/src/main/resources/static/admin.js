@@ -7,6 +7,7 @@
   let sessionAbort = new AbortController();
   const resources = new Map(), tables = new Map(), failures = new Map();
   const deletingUsers = new Set();
+  const paging = new Map();
   const base = '/api/admin/workbench';
 
   function text(id, value) {
@@ -51,7 +52,7 @@
     sessionAbort.abort();
     sessionAbort = new AbortController();
     resources.forEach((_, key) => abortResource(key));
-    resources.clear(); tables.clear(); failures.clear();
+    resources.clear(); tables.clear(); failures.clear(); paging.clear();
     onlineNames = null; userRows = null;
     deletingUsers.clear();
     clearTimeout(refreshTimer);
@@ -279,12 +280,41 @@
     ];
   }
 
+  function paged(key, path, render, force) {
+    const url = new URL(path, location.origin);
+    const resource = key === 'chat' ? 'messages' : key === 'roomChat' ? 'room-messages' : key;
+    url.pathname = base + '/' + resource + '/page';
+    const requestedSize = Math.min(100, Number(url.searchParams.get('limit') || 25));
+    url.searchParams.delete('limit');
+    const signature = url.searchParams.toString();
+    let state = paging.get(key);
+    if (!state || state.signature !== signature) {
+      state = {signature, page:0, size:requestedSize, snapshot:0}; paging.set(key,state);
+    }
+    url.searchParams.set('page', state.page); url.searchParams.set('size', state.size);
+    if (state.page > 0 && state.snapshot) url.searchParams.set('snapshotMaxId',state.snapshot);
+    return load(key, url.pathname + url.search, data => {
+      if (!data || !Array.isArray(data.items)) throw Error('分页响应格式不正确');
+      state.snapshot = data.snapshotMaxId;
+      render(data.items);
+      const tab = key === 'chat' || key === 'roomChat' ? 'chat' : key;
+      let host = $('pager-' + key);
+      if (!host) {host=element('div',null,'form-inline'); host.id='pager-'+key; $('tab-'+tab).append(host);}
+      const previous=button('上一页',()=>{state.page--; panelLoads(true);}); previous.disabled=state.page===0;
+      const next=button('下一页',()=>{state.page++; panelLoads(true);}); next.disabled=!data.hasNext;
+      const latest=button('返回最新',()=>{state.page=0;state.snapshot=0;panelLoads(true);});
+      const sizes=element('select'); sizes.setAttribute('aria-label','每页条数');
+      [25,50,100].forEach(n=>{const o=element('option',n+'条/页');o.value=n;o.selected=n===state.size;sizes.append(o);});
+      sizes.addEventListener('change',()=>{state.size=Number(sizes.value);state.page=0;state.snapshot=0;panelLoads(true);});
+      host.replaceChildren(previous,element('span',`第 ${data.page+1} 页 · 共 ${data.total} 条`),next,sizes,latest);
+    },force);
+  }
   function panelLoads(force) {
     if (activeTab === 'cdr') {
       const params = new URLSearchParams({ limit: $('filterLimit').value });
       if ($('filterCaller').value.trim()) params.set('caller', $('filterCaller').value.trim());
       if ($('filterCallee').value.trim()) params.set('callee', $('filterCallee').value.trim());
-      return [load('cdr', base + '/cdr?' + params, data => {
+      return [paged('cdr', base + '/cdr?' + params, data => {
         renderTable('cdrTableBody', data, 6, call => row(badge('#' + call.id), call.call_id || call.callId || '-',
           button(call.caller, () => { $('filterCaller').value = call.caller; panelLoads(true); }),
           button(call.callee_or_room || call.calleeOrRoom, () => {
@@ -293,7 +323,7 @@
         text('cdrCountBadge', data.length + ' 条 · 累计 ' + duration(data.reduce((sum, c) => sum + Number(c.duration_sec ?? c.durationSec ?? 0), 0)));
       }, force)];
     }
-    if (activeTab === 'rooms') return [load('rooms', base + '/rooms', data => {
+    if (activeTab === 'rooms') return [paged('rooms', base + '/rooms', data => {
       renderTable('roomsTableBody', data, 6, room => {
         const uri = room.sip_uri || room.sipUri;
         return row(badge('#' + room.id), element('strong', room.name), badge(uri, 'primary'),
@@ -302,11 +332,11 @@
       });
       text('roomCountBadge', data.length + ' 间');
     }, force)];
-    if (activeTab === 'users') return [load('users', base + '/users', data => {
+    if (activeTab === 'users') return [paged('users', base + '/users', data => {
       if (!Array.isArray(data)) throw new Error('用户列表格式不正确');
       userRows = data; renderUsers(); text('userCountBadge', data.length + ' 人');
     }, force)];
-    if (activeTab === 'files') return [load('files', base + '/files', data => {
+    if (activeTab === 'files') return [paged('files', base + '/files', data => {
       renderTable('filesTableBody', data, 7, file => row(badge('#' + file.id), element('strong', file.name), size(file.size),
         badge(file.from), badge(file.to, 'primary'), time(file.created_at || file.createdAt),
         button('下载', event => download(file, event.currentTarget))));
@@ -318,11 +348,11 @@
     const roomParams = new URLSearchParams({ limit: $('chatLimit').value });
     if ($('chatRoomFilter').value.trim()) roomParams.set('room', $('chatRoomFilter').value.trim());
     if ($('chatRoomSenderFilter').value.trim()) roomParams.set('sender', $('chatRoomSenderFilter').value.trim());
-    return [load('chat', '/api/admin/messages?' + params, data => {
+    return [paged('chat', '/api/admin/messages?' + params, data => {
       renderTable('chatTableBody', data, 7, message => row(badge('#' + message.id), badge(message.sender),
         badge(message.receiver, 'primary'), message.content, message.is_file || message.isFile ? '文件' : '文字',
         badge(message.status, message.status === 'DELIVERED' ? 'success' : 'gray'), time(message.created_at || message.createdAt)));
-    }, force), load('roomChat', '/api/admin/room-messages?' + roomParams, data => {
+    }, force), paged('roomChat', '/api/admin/room-messages?' + roomParams, data => {
       renderTable('roomChatTableBody', data, 6, message => row(badge('#' + message.id), badge(message.room_uri || message.roomUri, 'primary'),
         badge(message.sender), message.content, message.is_file || message.isFile ? '文件' : '文字', time(message.created_at || message.createdAt)));
       text('roomChatBadge', data.length + ' 条');

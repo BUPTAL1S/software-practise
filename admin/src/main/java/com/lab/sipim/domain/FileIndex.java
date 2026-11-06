@@ -9,7 +9,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 
 @Entity
-@Table(name = "files")
+@Table(name = "files", indexes = @jakarta.persistence.Index(name="idx_files_filter",columnList="from_user,to_user_or_room,id"))
 public class FileIndex {
 
     @Id
