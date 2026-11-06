@@ -3,6 +3,7 @@
 Requires Python 3 and two Windows backend bundles. Never touches live databases.
 """
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -82,7 +83,7 @@ class Backend:
 
 
 def account_hashes(database):
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         return dict(connection.execute("SELECT username,password_hash FROM users"))
 
 
@@ -121,6 +122,7 @@ def main():
             timestamp = connection.execute("SELECT started_at FROM cdr LIMIT 1").fetchone()[0]
             connection.execute("INSERT INTO files(from_user,to_user_or_room,path,size,created_at) VALUES(?,?,?,?,?)",
                                ("1001", "1008", str(attachment), attachment.stat().st_size, timestamp))
+        connection.close()
         hashes = account_hashes(data / "sipim.db")
         shutil.copytree(data, root / "pre-upgrade-backup")
         app = Backend(candidate, data, root, "candidate-first")
@@ -143,7 +145,7 @@ def main():
         _, operations = app.api("/api/admin/workbench/operations")
         assert operations["esl"]["enabled"] is False
         assert operations["schemaVersion"] == 2
-        assert operations["revision"] != "development"
+        assert re.fullmatch(r"[0-9a-f]{12}(?:-dirty)?", operations["revision"])
         _, audit = app.api("/api/admin/workbench/audit/page")
         audit_count = audit["total"]
         assert audit_count >= 3
