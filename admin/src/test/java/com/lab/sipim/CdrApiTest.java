@@ -82,6 +82,21 @@ public class CdrApiTest {
                 .andExpect(jsonPath("$.duration_sec").value(45));
     }
 
+    @Test void combinedFiltersApplyToLegacyAndWorkbenchQueries() throws Exception {
+        for (String peer : java.util.List.of("1002", "room-101")) {
+            var record = new com.lab.sipim.domain.Cdr();
+            record.setCaller("1001"); record.setCalleeOrRoom(peer);
+            record.setStartedAt(Instant.now()); record.setDurationSec(10); cdrRepo.save(record);
+        }
+        for (String path : java.util.List.of("/api/cdr", "/api/admin/workbench/cdr")) {
+            mvc.perform(get(path).param("caller", " 1001 ").param("callee", "room-101"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
+            mvc.perform(get(path).param("caller", "1001").param("callee", "missing"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(0)));
+            mvc.perform(get(path).param("limit", "0")).andExpect(status().isBadRequest());
+        }
+    }
+
     @Test
     void reportCdrMissingFieldsReturns400() throws Exception {
         Map<String, Object> req = Map.of("duration_sec", 10);

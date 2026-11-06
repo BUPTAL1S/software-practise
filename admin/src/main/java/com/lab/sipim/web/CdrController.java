@@ -158,18 +158,10 @@ public class CdrController {
             @RequestParam(value = "callee", required = false) String callee,
             @RequestParam(value = "limit", defaultValue = "100") int limit) {
 
-        List<Cdr> list;
-        if (caller != null && !caller.isBlank()) {
-            list = cdrRepo.findByCallerOrderByIdDesc(caller.trim());
-        } else if (callee != null && !callee.isBlank()) {
-            list = cdrRepo.findByCalleeOrRoomOrderByIdDesc(callee.trim());
-        } else {
-            list = cdrRepo.findAllByOrderByIdDesc();
-        }
-
-        if (limit > 0 && list.size() > limit) {
-            list = list.subList(0, limit);
-        }
+        if (limit < 1 || limit > 500) throw new IllegalArgumentException("limit must be between 1 and 500");
+        List<Cdr> list = cdrRepo.search(caller == null || caller.isBlank() ? null : caller.trim(),
+                callee == null || callee.isBlank() ? null : callee.trim(),
+                org.springframework.data.domain.PageRequest.of(0, limit));
 
         List<Map<String, Object>> resp = new ArrayList<>();
         for (Cdr c : list) {
