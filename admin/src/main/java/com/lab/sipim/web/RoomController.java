@@ -52,6 +52,7 @@ public class RoomController {
         List<Map<String, Object>> resp = new ArrayList<>();
         Map<String, Integer> peaks = rooms.isEmpty() ? Map.of() : roomStatistics.peaksByRoom();
         for (Room r : rooms) {
+            if(r.isArchived())continue;
             resp.add(formatRoom(r, peaks.getOrDefault(RoomCallStatistics.roomKey(r.getSipUri()), 0)));
         }
         return ResponseEntity.ok(resp);
@@ -60,7 +61,7 @@ public class RoomController {
     @GetMapping("/{identifier}")
     public ResponseEntity<?> getRoom(@PathVariable("identifier") String identifier) {
         Optional<Room> found = findRoom(identifier);
-        if (found.isEmpty()) {
+        if (found.isEmpty() || found.get().isArchived()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
         }
         return ResponseEntity.ok(formatRoom(found.get()));

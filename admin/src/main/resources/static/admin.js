@@ -326,9 +326,9 @@
     if (activeTab === 'rooms') return [paged('rooms', base + '/rooms', data => {
       renderTable('roomsTableBody', data, 6, room => {
         const uri = room.sip_uri || room.sipUri;
-        return row(badge('#' + room.id), element('strong', room.name), badge(uri, 'primary'),
+        return row(badge('#' + room.id), element('strong', room.name+(room.archived?'（已归档）':'')), badge(uri, 'primary'),
           (room.max_members ?? room.maxMembers) + ' 人', badge((room.member_count ?? room.memberCount ?? 0) + ' 人'),
-          button('复制 URI', () => copyText(uri)));
+          (() => {const actions=element('div',null,'form-inline');actions.append(button('复制 URI',()=>copyText(uri)),button('重命名',()=>changeRoom(room,true)),button(room.archived?'恢复房间':'归档房间',()=>changeRoom(room,false)));return actions;})());
       });
       text('roomCountBadge', data.length + ' 间');
     }, force)];
@@ -359,6 +359,13 @@
     }, force)];
   }
 
+  async function changeRoom(room, rename) {
+    let payload;
+    if (rename) {const name=prompt('新房间名称（SIP URI保持不变）',room.name); if(name===null)return;payload={name:name.trim()};}
+    else {if(!confirm(`确定${room.archived?'恢复':'归档'}房间 ${room.name}？归档仅影响业务目录。`))return;payload={archived:!room.archived};}
+    try {await api(base+'/rooms/'+room.id+'/state',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});showToast('房间已更新');panelLoads(true);}
+    catch(error){showToast(error.message,true);}
+  }
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
     if (token && $('autoRefreshToggle').checked && !document.hidden)
