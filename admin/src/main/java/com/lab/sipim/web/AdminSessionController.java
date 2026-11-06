@@ -25,7 +25,7 @@ public class AdminSessionController {
                 || request.username().isBlank() || request.password().isBlank())
             return ResponseEntity.badRequest().body(Map.of("error", "请输入管理员账号和密码"));
         var user = users.findByUsername(request.username().trim()).orElse(null);
-        if (user == null || !passwords.matches(request.password(), user.getPasswordHash()))
+        if (user == null || user.isDisabled() || !passwords.matches(request.password(), user.getPasswordHash()))
             return ResponseEntity.status(401).body(Map.of("error", "账号或密码错误"));
         if (!ApiAccessPolicy.isAdmin(user))
             return ResponseEntity.status(403).body(Map.of("error", "仅管理员账号 1001 可以登录工作台"));

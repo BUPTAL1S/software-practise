@@ -9,6 +9,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 @Component
+@org.springframework.core.annotation.Order(0)
 public class DemoDataLoader implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DemoDataLoader.class);

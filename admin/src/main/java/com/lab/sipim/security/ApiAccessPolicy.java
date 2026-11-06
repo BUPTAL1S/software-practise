@@ -54,6 +54,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         String method = request.getMethod();
         boolean read = method.equals("GET") || method.equals("HEAD");
         boolean adminOnly = path.startsWith("/api/admin/") && !path.equals("/api/admin/login")
+                || path.matches("/api/users/[0-9]+/state")
                 || path.equals("/api/users/online")
                 || path.matches("/api/users/[0-9]+") && method.equals("DELETE")
                 || path.equals("/api/files") && read
@@ -71,7 +72,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         String header = request.getHeader("Authorization");
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7).trim() : "";
         User user = tokens.userIdOf(token).flatMap(users::findById).orElse(null);
-        if (user == null) return deny(response, 401, "unauthorized");
+        if (user == null || user.isDisabled()) return deny(response, 401, "unauthorized");
         if (adminOnly && !isAdmin(user)) return deny(response, 403, "仅管理员账号 1001 可以访问管理工作台");
         if (isAdmin(user)) return true;
 

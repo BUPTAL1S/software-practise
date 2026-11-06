@@ -219,34 +219,34 @@
       : onlineNames.has(user.username) || onlineNames.has(user.sipId) ? '后台已登录' : '未登录后台' }));
     renderTable('usersTableBody', rows, 5, user => {
       const protectedUser = user.username === '1001' || String(user.role || '').toUpperCase() === 'ADMIN';
-      const remove = button(protectedUser ? '管理员受保护' : user.deleting ? '正在删除…' : '删除用户', () => deleteUser(user));
+      const remove = button(protectedUser ? '管理员受保护' : user.deleting ? '正在处理…' : user.disabled ? '恢复账号' : '禁用账号', () => deleteUser(user));
       remove.className = 'btn btn-danger btn-sm';
       remove.dataset.deleteUserId = String(user.id);
       remove.disabled = protectedUser || user.deleting;
-      remove.title = protectedUser ? '管理员账号受保护' : '删除此用户';
+      remove.title = protectedUser ? '管理员账号受保护' : '禁用或恢复账号，历史记录保留';
       return row(badge('#' + user.id), user.username,
         badge(user.sipId || user.sip_id || user.username, 'primary'),
-        badge(user.sessionStatus, user.sessionStatus === '后台已登录' ? 'success' : 'gray'), remove);
+        badge(user.disabled ? '已禁用' : user.sessionStatus, !user.disabled && user.sessionStatus === '后台已登录' ? 'success' : 'gray'), remove);
     });
   }
   async function deleteUser(user) {
     if (!token || deletingUsers.has(user.id)) return;
-    if (!confirm(`确定删除用户 ${user.username} 吗？\n账号将无法登录后台，客户端联系人自动移除。\n历史聊天、文件和通话记录保留。此操作不可撤销。`)) return;
+    if (!confirm(`确定${user.disabled ? '恢复' : '禁用'}账号 ${user.username} 吗？历史记录与身份保留。`)) return;
     const currentEpoch = epoch;
     deletingUsers.add(user.id);
     renderUsers();
     try {
-      await api(base + '/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
+      await api(base + '/users/' + encodeURIComponent(user.id) + '/state', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({disabled:!user.disabled,reason:'管理员禁用'}) });
       if (currentEpoch !== epoch || !token) return;
       // A list requested before deletion must not resurrect the removed row.
       abortResource('users');
-      userRows = userRows.filter(item => item.id !== user.id);
+      userRows = userRows.map(item => item.id === user.id ? {...item, disabled:!user.disabled} : item);
       renderUsers();
       text('userCountBadge', userRows.length + ' 人');
-      showToast('用户 ' + user.username + ' 已删除，客户端联系人将自动同步');
+      showToast('用户 ' + user.username + ' 状态已更新');
       await refresh(true);
     } catch (error) {
-      if (currentEpoch === epoch && token) showToast('删除失败：' + error.message, true);
+      if (currentEpoch === epoch && token) showToast('更新失败：' + error.message, true);
     } finally {
       if (currentEpoch === epoch) { deletingUsers.delete(user.id); renderUsers(); }
     }

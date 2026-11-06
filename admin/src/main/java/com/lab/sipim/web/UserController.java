@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AccountManagement management;
 
     private final UserRepository users;
     private final LoginController loginController;
@@ -33,7 +34,7 @@ public class UserController {
     public Map<String, Object> online() {
         java.util.List<String> names = new java.util.ArrayList<>();
         for (Long userId : tokens.onlineUserIds()) {
-            users.findById(userId).map(User::getUsername).ifPresent(names::add);
+            users.findById(userId).filter(u -> !u.isDisabled()).map(User::getUsername).ifPresent(names::add);
         }
         names.sort(String::compareTo);
         Map<String, Object> body = new java.util.LinkedHashMap<>();
@@ -44,8 +45,10 @@ public class UserController {
 
     @GetMapping
     public List<UserView> list() {
-        return users.findAll().stream().map(UserView::from).toList();
+        return users.findAll().stream().filter(u -> !u.isDisabled()).map(UserView::from).toList();
     }
+
+    public List<UserView> managementList() {return users.findAll().stream().map(UserView::from).toList();}
 
     @GetMapping("/{identifier}")
     public ResponseEntity<UserView> getOne(@PathVariable("identifier") String identifier) {
@@ -65,7 +68,7 @@ public class UserController {
         if (found.isEmpty()) {
             found = users.findBySipId(trimmed);
         }
-        return found.map(u -> ResponseEntity.ok(UserView.from(u)))
+        return found.filter(u -> !u.isDisabled()).map(u -> ResponseEntity.ok(UserView.from(u)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -93,10 +96,16 @@ public class UserController {
         if (id.equals(caller.get().getId()) || "ADMIN".equalsIgnoreCase(target.getRole())) {
             return ResponseEntity.status(409).body(Map.of("error", "不能删除当前账号或管理员账号"));
         }
-        // Message, file and CDR records use account names and remain available for history/audit.
-        users.delete(target);
-        tokens.revokeUser(id);
-        return ResponseEntity.ok(Map.of("success", true, "id", id, "username", target.getUsername()));
+        return ResponseEntity.ok(management.state(id,true,"管理员禁用",caller.get().getUsername()));
+    }
+
+    @PatchMapping("/{id}/state")
+    public ResponseEntity<?> state(@PathVariable Long id,@RequestBody Map<String,Object> body,
+            @RequestHeader("Authorization") String authorization) {
+        User actor=tokens.userIdOf(MeController.bearerToken(authorization)).flatMap(users::findById).orElseThrow();
+        if(!com.lab.sipim.security.ApiAccessPolicy.isAdmin(actor))return ResponseEntity.status(403).build();
+        if(!(body.get("disabled") instanceof Boolean disabled))throw new IllegalArgumentException("disabled 必须为布尔值");
+        return ResponseEntity.ok(management.state(id,disabled,String.valueOf(body.getOrDefault("reason","")),actor.getUsername()));
     }
 
     @PostMapping(value = "/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -181,9 +190,9 @@ public class UserController {
         ));
     }
 
-    public record UserView(Long id, String username, String sipId, String avatarUrl, String nickname, String role) {
+    public record UserView(Long id, String username, String sipId, String avatarUrl, String nickname, String role, boolean disabled, String disabledReason, String disabledAt) {
         static UserView from(User user) {
-            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl(), user.getNickname(), user.getRole());
+            return new UserView(user.getId(), user.getUsername(), user.getSipId(), user.getAvatarUrl(), user.getNickname(), user.getRole(), user.isDisabled(), user.getDisabledReason(), user.getDisabledAt());
         }
     }
 }
