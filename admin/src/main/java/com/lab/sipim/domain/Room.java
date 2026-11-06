@@ -11,6 +11,12 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "rooms")
 public class Room {
+    @Column(nullable=false) private boolean archived;
+    @Column(name="archived_at") private String archivedAt;
+    public boolean isArchived(){return archived;}
+    public void setArchived(boolean value){archived=value;}
+    public String getArchivedAt(){return archivedAt;}
+    public void setArchivedAt(String value){archivedAt=value;}
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

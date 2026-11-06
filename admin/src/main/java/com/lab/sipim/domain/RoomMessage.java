@@ -9,7 +9,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 
 @Entity
-@Table(name = "room_messages")
+@Table(name = "room_messages", indexes = @jakarta.persistence.Index(name="idx_room_messages_filter",columnList="room_uri,sender,id"))
 public class RoomMessage {
 
     @Id
