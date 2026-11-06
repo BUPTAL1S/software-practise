@@ -14,6 +14,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /** One policy for the workbench and legacy API aliases; public client directory stays public. */
 @Configuration
 public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.bootstrap.ApplicationReadiness readiness;
     private final LoginTokens tokens;
     private final UserRepository users;
     private final ObjectMapper json;
@@ -52,6 +54,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         response.setHeader("Cache-Control", "no-store");
         String path = org.springframework.web.util.UrlPathHelper.defaultInstance.getLookupPathForRequest(request);
         String method = request.getMethod();
+        if(!readiness.isReady() && !path.equals("/api/health"))return deny(response,503,"后台正在初始化，请稍后重试");
         boolean read = method.equals("GET") || method.equals("HEAD");
         boolean adminOnly = path.startsWith("/api/admin/") && !path.equals("/api/admin/login")
                 || path.matches("/api/users/[0-9]+/state")
@@ -73,6 +76,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7).trim() : "";
         User user = tokens.userIdOf(token).flatMap(users::findById).orElse(null);
         if (user == null || user.isDisabled()) return deny(response, 401, "unauthorized");
+        request.setAttribute("auditActor",user.getUsername());
         if (adminOnly && !isAdmin(user)) return deny(response, 403, "仅管理员账号 1001 可以访问管理工作台");
         if (isAdmin(user)) return true;
 
@@ -91,6 +95,11 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
     }
 
     private boolean deny(HttpServletResponse response, int status, String message) throws Exception {
+        var attributes=org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if(attributes instanceof org.springframework.web.context.request.ServletRequestAttributes web && web.getRequest().getRequestURI().startsWith("/api/admin/")) {
+            audit.record(audit.actor("unknown"),"REQUEST_REJECTED",web.getRequest().getRequestURI(),"FAILED","HTTP "+status);
+            web.getRequest().setAttribute("auditRecorded",Boolean.TRUE);
+        }
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         json.writeValue(response.getWriter(), Map.of("error", message));

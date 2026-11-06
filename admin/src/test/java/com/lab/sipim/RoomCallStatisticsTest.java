@@ -51,6 +51,7 @@ class RoomCallStatisticsTest {
         assertThat(result).hasSize(200);
         assertThat(result.get(199)).containsEntry("peak_members", 50);
         verify(cdrs, times(1)).findRoomCalls();
+        verify(cdrs).count(); verify(cdrs).sumTotalDurationSec(); verify(cdrs).newestId();
         verifyNoMoreInteractions(cdrs);
     }
 
@@ -62,5 +63,15 @@ class RoomCallStatisticsTest {
                 mock(LoginTokens.class), new RoomCallStatistics(cdrs), new RoomPresenceRegistry());
         assertThat(controller.listRooms().getBody()).isEmpty();
         verifyNoInteractions(cdrs);
+    }
+    @Test void unchangedHistoryReusesPeakCalculationAndNewHistoryInvalidatesIt() {
+        var records=mock(CdrRepository.class);
+        when(records.count()).thenReturn(1L,1L,2L);
+        when(records.findRoomCalls()).thenReturn(List.of(call("room-101",0,10)),List.of(call("room-101",0,10),call("room-101",1,10)));
+        var statistics=new RoomCallStatistics(records);
+        assertThat(statistics.peakForRoom("room-101")).isEqualTo(1);
+        assertThat(statistics.peakForRoom("room-101")).isEqualTo(1);
+        assertThat(statistics.peakForRoom("room-101")).isEqualTo(2);
+        verify(records,times(2)).findRoomCalls();
     }
 }

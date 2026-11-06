@@ -10,6 +10,12 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "users")
 public class User {
+    @Column(name="username_key") private String usernameKey;
+    @jakarta.persistence.PrePersist @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        usernameKey=username==null?null:username.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
     @Column(nullable = false) private boolean disabled;
     @Column(name="disabled_reason") private String disabledReason;
     @Column(name="disabled_at") private String disabledAt;

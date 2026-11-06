@@ -26,6 +26,14 @@ import java.time.Instant;
             @Index(name = "idx_private_status", columnList = "status")
         })
 public class PrivateMessage {
+    @Column(name="sender_key") private String senderKey;
+    @Column(name="receiver_key") private String receiverKey;
+    @jakarta.persistence.PrePersist @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        senderKey=sender==null?null:sender.trim().toLowerCase(java.util.Locale.ROOT);
+        receiverKey=receiver==null?null:receiver.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
 
     public static final String PENDING = "PENDING";
     public static final String DELIVERED = "DELIVERED";

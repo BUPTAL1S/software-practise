@@ -54,9 +54,9 @@ public class WorkbenchQueries {
     }
     private Predicate[] predicates(jakarta.persistence.criteria.CriteriaBuilder cb,Root<?> root,Resource resource,Map<String,String> params,long snapshot) {
         List<Predicate> where=new ArrayList<>();where.add(cb.le(root.get("id"),snapshot));
-        resource.filters().forEach((key,field)->{String value=clean(params.get(key));if(value!=null)where.add(cb.equal(cb.lower(root.get(field)),value.toLowerCase(Locale.ROOT)));});
+        resource.filters().forEach((key,field)->{String value=clean(params.get(key));if(value!=null)where.add(cb.equal(root.get(field+"Key"),value.toLowerCase(Locale.ROOT)));});
         if(resource.type()==PrivateMessage.class)for(String key:List.of("user","peer")) {
-            String value=clean(params.get(key));if(value!=null)where.add(cb.or(cb.equal(cb.lower(root.get("sender")),value.toLowerCase(Locale.ROOT)),cb.equal(cb.lower(root.get("receiver")),value.toLowerCase(Locale.ROOT))));
+            String value=clean(params.get(key));if(value!=null)where.add(cb.or(cb.equal(root.get("senderKey"),value.toLowerCase(Locale.ROOT)),cb.equal(root.get("receiverKey"),value.toLowerCase(Locale.ROOT))));
         }
         for(String state:List.of("disabled","archived"))if(params.containsKey(state)) {
             if(!Set.of("true","false").contains(params.get(state)))throw new IllegalArgumentException("Invalid "+state);
