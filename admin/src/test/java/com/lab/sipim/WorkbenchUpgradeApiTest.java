@@ -107,4 +107,13 @@ class WorkbenchUpgradeApiTest {
         String ordinary=tokens.issue(users.findByUsername("1002").orElseThrow().getId());
         mvc.perform(get("/api/admin/workbench/operations").header("Authorization","Bearer "+ordinary)).andExpect(status().isForbidden());
     }
+    @Test void everyPageAndFileExportResolveWithoutLegacyDownloadRouteCollision() throws Exception {
+        for(String resource:java.util.List.of("cdr","files","messages","room-messages","users","rooms")) {
+            mvc.perform(get("/api/admin/workbench/"+resource+"/page").header("Authorization","Bearer "+admin))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items").isArray());
+        }
+        var pending=mvc.perform(get("/api/admin/workbench/files/export").header("Authorization","Bearer "+admin))
+            .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(pending)).andExpect(status().isOk());
+    }
 }

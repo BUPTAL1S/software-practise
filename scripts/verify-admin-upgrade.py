@@ -55,7 +55,11 @@ class Backend:
                     status, result = request(self.origin, "/api/admin/login", body={"username": "1001", "password": "1001"})
                     if status == 200:
                         self.token = result["token"]
-                        return
+                        # HTTP starts before the demo-data runner finishes; wait
+                        # for the full fixture rather than racing account seeding.
+                        status, users = self.api("/api/admin/workbench/users")
+                        if status == 200 and {str(n) for n in range(1001, 1009)}.issubset({u["username"] for u in users}):
+                            return
                 time.sleep(.1)
             raise RuntimeError("Backend startup timed out")
         except BaseException:
