@@ -328,10 +328,15 @@
         <span>👥</span>
       </div>
       <div class="stat-value" id="statPeakRoomMembers">0</div>
-      <div class="stat-desc">扫描线区间重叠计算</div>
+      <div class="stat-desc">房间历史峰值另见运维信息</div>
     </div>
   </div>
 
+  <div class="card form-inline">
+    <label>开始日期 <input id="rangeStart" type="date"></label><label>结束日期 <input id="rangeEnd" type="date"></label>
+    <button id="applyRange" class="btn btn-primary btn-sm">应用日期</button><button id="clearRange" class="btn btn-outline btn-sm">全部日期</button>
+    <span class="section-note">按本地时区筛选，包含结束当天；话单按开始时间统计。</span>
+  </div>
   <!-- 选项卡切换 -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="tab-cdr">📞 通话记录 (CDR)</button>
@@ -367,7 +372,7 @@
           </select>
         </div>
         <button class="btn btn-primary btn-sm" id="queryCdr">查询筛选</button>
-        <button class="btn btn-outline btn-sm" id="resetCdr">重置</button>
+        <button class="btn btn-outline btn-sm" id="resetCdr">重置</button> <button id="exportCdr" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
 
       <div style="overflow-x: auto;">
@@ -494,7 +499,7 @@
     <p id="dataStatus-files" class="data-status" role="status">等待更新</p>
     <div class="card">
       <div class="card-title">
-        <span>文件传输索引 (Files)</span>
+        <span>文件传输索引 (Files)</span><button id="exportFiles" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
         <span class="badge badge-primary" id="fileCountBadge">0 个</span>
       </div>
       <div style="overflow-x: auto;">
@@ -544,7 +549,7 @@
             <option value="25">25 条</option>
           </select>
         </div>
-        <button class="btn btn-accent btn-sm" id="queryChat">查询聊天记录</button>
+        <button class="btn btn-accent btn-sm" id="queryChat">查询聊天记录</button> <button id="exportChat" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         私聊消息由客户端在 SIP 送达后写入后台；对方离线时状态为 PENDING，对方重新上线后通过 HTTP 拉取并标记 DELIVERED。
@@ -583,7 +588,7 @@
           <span class="input-label">发送方:</span>
           <input type="text" id="chatRoomSenderFilter" placeholder="如 1002" style="width: 100px;">
         </div>
-        <button class="btn btn-accent btn-sm" id="queryRoomChat">查询聊天室记录</button>
+        <button class="btn btn-accent btn-sm" id="queryRoomChat">查询聊天室记录</button> <button id="exportRoomChat" class="btn btn-outline btn-sm">导出筛选结果 CSV</button>
       </div>
       <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
         会议室聊天由客户端通过 HTTP 写入 `room_messages`，这里展示持久化后的房间聊天记录。
