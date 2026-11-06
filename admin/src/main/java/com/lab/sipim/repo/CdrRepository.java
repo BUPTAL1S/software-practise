@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface CdrRepository extends JpaRepository<Cdr, Long> {
+    @Query("SELECT c FROM Cdr c WHERE (:caller IS NULL OR c.caller = :caller) AND (:callee IS NULL OR c.calleeOrRoom = :callee) ORDER BY c.id DESC")
+    List<Cdr> search(@Param("caller") String caller, @Param("callee") String callee, org.springframework.data.domain.Pageable page);
 
     List<Cdr> findAllByOrderByIdDesc();
 
