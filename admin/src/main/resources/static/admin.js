@@ -7,6 +7,8 @@
   let sessionAbort = new AbortController();
   const resources = new Map(), tables = new Map(), failures = new Map();
   const deletingUsers = new Set();
+  const changingRooms = new Set();
+  const paging = new Map();
   const base = '/api/admin/workbench';
 
   function text(id, value) {
@@ -51,14 +53,14 @@
     sessionAbort.abort();
     sessionAbort = new AbortController();
     resources.forEach((_, key) => abortResource(key));
-    resources.clear(); tables.clear(); failures.clear();
+    resources.clear(); tables.clear(); failures.clear(); paging.clear();
     onlineNames = null; userRows = null;
-    deletingUsers.clear();
+    deletingUsers.clear(); changingRooms.clear();
     clearTimeout(refreshTimer);
     clearTimeout(toastTimer);
     text('toast', ''); $('toast').style.display = 'none';
     $('registerForm').reset(); $('roomForm').reset();
-    ['filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
+    ['fileFrom','fileTo','auditActor','auditAction','rangeStart', 'rangeEnd', 'filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
       .forEach(id => { $(id).value = ''; });
     ['cdrCountBadge', 'roomCountBadge', 'userCountBadge', 'fileCountBadge', 'roomChatBadge']
       .forEach(id => text(id, '--'));
@@ -165,8 +167,8 @@
     return result;
   }
   function statusFor(key) {
-    const tab = key === 'roomChat' || key === 'chat' ? 'chat' : key;
-    const keys = tab === 'chat' ? ['chat', 'roomChat'] : [key];
+    const tab = key === 'audit' || key === 'operations' ? 'operations' : key === 'roomChat' || key === 'chat' ? 'chat' : key;
+    const keys = tab === 'operations' ? ['operations','audit'] : tab === 'chat' ? ['chat', 'roomChat'] : [key];
     const failed = keys.map(k => failures.get(k)).filter(Boolean);
     const stamp = resources.get(key)?.updated;
     text('dataStatus-' + tab, failed.length ? '刷新失败：' + failed.join('；') + '。已保留上次数据'
@@ -186,7 +188,7 @@
       if (!current()) return;
       render(data);
       item.updated = new Date().toISOString(); failures.delete(key);
-      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].includes(key)) statusFor(key);
+      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].includes(key)) statusFor(key);
     }).catch(error => {
       if (!current() || error.name === 'AbortError') return;
       failures.set(key, error.message);
@@ -199,7 +201,7 @@
         text('statOnlineUsers', '--'); text('statOnlineUsersDesc', '会话状态未知');
         renderUsers();
       }
-      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].includes(key)) statusFor(key);
+      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].includes(key)) statusFor(key);
     }).finally(() => {
       if (resources.get(key) === item) item.promise = null;
       if (current()) syncSummary();
@@ -219,37 +221,44 @@
       : onlineNames.has(user.username) || onlineNames.has(user.sipId) ? '后台已登录' : '未登录后台' }));
     renderTable('usersTableBody', rows, 5, user => {
       const protectedUser = user.username === '1001' || String(user.role || '').toUpperCase() === 'ADMIN';
-      const remove = button(protectedUser ? '管理员受保护' : user.deleting ? '正在删除…' : '删除用户', () => deleteUser(user));
+      const remove = button(protectedUser ? '管理员受保护' : user.deleting ? '正在处理…' : user.disabled ? '恢复账号' : '禁用账号', () => deleteUser(user));
       remove.className = 'btn btn-danger btn-sm';
       remove.dataset.deleteUserId = String(user.id);
       remove.disabled = protectedUser || user.deleting;
-      remove.title = protectedUser ? '管理员账号受保护' : '删除此用户';
+      remove.title = protectedUser ? '管理员账号受保护' : '禁用或恢复账号，历史记录保留';
       return row(badge('#' + user.id), user.username,
         badge(user.sipId || user.sip_id || user.username, 'primary'),
-        badge(user.sessionStatus, user.sessionStatus === '后台已登录' ? 'success' : 'gray'), remove);
+        badge(user.disabled ? '已禁用' : user.sessionStatus, !user.disabled && user.sessionStatus === '后台已登录' ? 'success' : 'gray'), remove);
     });
   }
   async function deleteUser(user) {
     if (!token || deletingUsers.has(user.id)) return;
-    if (!confirm(`确定删除用户 ${user.username} 吗？\n账号将无法登录后台，客户端联系人自动移除。\n历史聊天、文件和通话记录保留。此操作不可撤销。`)) return;
+    if (!confirm(`确定${user.disabled ? '恢复' : '禁用'}账号 ${user.username} 吗？历史记录与身份保留。`)) return;
     const currentEpoch = epoch;
     deletingUsers.add(user.id);
     renderUsers();
     try {
-      await api(base + '/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
+      await api(base + '/users/' + encodeURIComponent(user.id) + '/state', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({disabled:!user.disabled,reason:'管理员禁用'}) });
       if (currentEpoch !== epoch || !token) return;
       // A list requested before deletion must not resurrect the removed row.
       abortResource('users');
-      userRows = userRows.filter(item => item.id !== user.id);
+      userRows = userRows.map(item => item.id === user.id ? {...item, disabled:!user.disabled} : item);
       renderUsers();
       text('userCountBadge', userRows.length + ' 人');
-      showToast('用户 ' + user.username + ' 已删除，客户端联系人将自动同步');
+      showToast('用户 ' + user.username + ' 状态已更新');
       await refresh(true);
     } catch (error) {
-      if (currentEpoch === epoch && token) showToast('删除失败：' + error.message, true);
+      if (currentEpoch === epoch && token) showToast('更新失败：' + error.message, true);
     } finally {
       if (currentEpoch === epoch) { deletingUsers.delete(user.id); renderUsers(); }
     }
+  }
+  function renderOperations(data) {
+      const esl=data.esl || {};
+      const lines=[['后台版本',data.version],['构建提交',data.revision],['启动时间',time(data.startedAt)],['运行时长',duration(data.uptimeSeconds)],['数据库版本',data.schemaVersion],['历史保留身份数',data.reservedHistoricalIdentities],['ESL最近连接',time(esl.lastConnectedAt)],['ESL最近断开',time(esl.lastDisconnectedAt)],['最近人数同步',time(esl.lastSnapshotAt)],['人数状态',esl.roomStateFresh?'有效':'未知或已过期'],['最近连接错误',esl.lastError || '无'],['连接尝试次数',esl.connectionAttempts]];
+      renderTable('operationsTableBody',lines,2,item=>row(item[0],item[1]??'--'));
+      text('statPeakRoomMembers',data.globalPeakRoomMembers??'--');
+
   }
   function baseLoads(force) {
     return [
@@ -262,12 +271,13 @@
         text('eslStatus', label);
         $('eslStatus').className = 'badge badge-' + (esl?.enabled && esl?.connected ? 'success' : 'gray');
       }, force),
-      load('stats', base + '/stats', data => {
+      load('operations',base+'/operations',renderOperations,force),
+      load('stats', base + '/query-stats?' + dateParams(), data => {
         text('statTotalCalls', data.totalCalls ?? '--');
         text('statTotalDuration', duration(data.totalDurationSec));
         text('statTotalDurationDesc', '累计已上报通话时长');
         text('statAvgDuration', duration(data.averageDurationSec));
-        text('statPeakRoomMembers', data.peakRoomMembers ?? '--');
+
       }, force),
       load('online', base + '/users/online', data => {
         if (!Array.isArray(data.users)) throw new Error('会话列表格式不正确');
@@ -279,12 +289,62 @@
     ];
   }
 
+  function dateParams() {
+    const params=new URLSearchParams();
+    for (const [id,key,end] of [['rangeStart','fromTime',false],['rangeEnd','untilTime',true]]) {
+      const value=$(id)?.value;
+      if(value) {const [y,m,d]=value.split('-').map(Number);const date=new Date(y,m-1,d+(end?1:0));params.set(key,date.toISOString());}
+    }
+    return params;
+  }
+  async function exportData(resource, filters, control) {
+    const params=dateParams();
+    for(const [key,id] of Object.entries(filters))if($(id).value.trim())params.set(key,$(id).value.trim());
+    const currentEpoch=epoch;control.disabled=true;
+    try {
+      const data=await api(base+'/'+resource+'/export?'+params,{blob:true});if(currentEpoch!==epoch || !token)return;
+      const link=element('a');const url=URL.createObjectURL(data);link.href=url;link.download=resource+'.csv';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);showToast('导出完成');
+    }catch(error){if(currentEpoch===epoch)showToast(error.message,true);}finally{control.disabled=false;}
+  }
+  function paged(key, path, render, force) {
+    const url = new URL(path, location.origin);
+    const resource = key === 'chat' ? 'messages' : key === 'roomChat' ? 'room-messages' : key;
+    url.pathname = base + '/' + resource + '/page';
+    if(!['users','rooms'].includes(resource))dateParams().forEach((value,key)=>url.searchParams.set(key,value));
+    const requestedSize = Math.min(100, Number(url.searchParams.get('limit') || 25));
+    url.searchParams.delete('limit');
+    if(key==='users' && $('userState').value)url.searchParams.set('disabled',$('userState').value);
+    if(key==='rooms' && $('roomState').value)url.searchParams.set('archived',$('roomState').value);
+    if(key==='files')for(const [key,id] of [['from','fileFrom'],['to','fileTo']])if($(id).value.trim())url.searchParams.set(key,$(id).value.trim());
+    const signature = url.searchParams.toString();
+    let state = paging.get(key);
+    if (!state || state.signature !== signature) {
+      state = {signature, page:0, size:requestedSize, snapshot:0}; paging.set(key,state);
+    }
+    url.searchParams.set('page', state.page); url.searchParams.set('size', state.size);
+    if (state.page > 0 && state.snapshot) url.searchParams.set('snapshotMaxId',state.snapshot);
+    return load(key, url.pathname + url.search, data => {
+      if (!data || !Array.isArray(data.items)) throw Error('分页响应格式不正确');
+      state.snapshot = data.snapshotMaxId;
+      render(data.items);
+      const tab = key === 'audit' ? 'operations' : key === 'chat' || key === 'roomChat' ? 'chat' : key;
+      let host = $('pager-' + key);
+      if (!host) {host=element('div',null,'form-inline'); host.id='pager-'+key; $('tab-'+tab).append(host);}
+      const previous=button('上一页',()=>{state.page--; panelLoads(true);}); previous.disabled=state.page===0;
+      const next=button('下一页',()=>{state.page++; panelLoads(true);}); next.disabled=!data.hasNext;
+      const latest=button('返回最新',()=>{state.page=0;state.snapshot=0;panelLoads(true);});
+      const sizes=element('select'); sizes.setAttribute('aria-label','每页条数');
+      [25,50,100].forEach(n=>{const o=element('option',n+'条/页');o.value=n;o.selected=n===state.size;sizes.append(o);});
+      sizes.addEventListener('change',()=>{state.size=Number(sizes.value);state.page=0;state.snapshot=0;panelLoads(true);});
+      host.replaceChildren(previous,element('span',`第 ${data.page+1} 页 · 共 ${data.total} 条`),next,sizes,latest);
+    },force);
+  }
   function panelLoads(force) {
     if (activeTab === 'cdr') {
       const params = new URLSearchParams({ limit: $('filterLimit').value });
       if ($('filterCaller').value.trim()) params.set('caller', $('filterCaller').value.trim());
       if ($('filterCallee').value.trim()) params.set('callee', $('filterCallee').value.trim());
-      return [load('cdr', base + '/cdr?' + params, data => {
+      return [paged('cdr', base + '/cdr?' + params, data => {
         renderTable('cdrTableBody', data, 6, call => row(badge('#' + call.id), call.call_id || call.callId || '-',
           button(call.caller, () => { $('filterCaller').value = call.caller; panelLoads(true); }),
           button(call.callee_or_room || call.calleeOrRoom, () => {
@@ -293,42 +353,56 @@
         text('cdrCountBadge', data.length + ' 条 · 累计 ' + duration(data.reduce((sum, c) => sum + Number(c.duration_sec ?? c.durationSec ?? 0), 0)));
       }, force)];
     }
-    if (activeTab === 'rooms') return [load('rooms', base + '/rooms', data => {
+    if (activeTab === 'rooms') return [paged('rooms', base + '/rooms', data => {
       renderTable('roomsTableBody', data, 6, room => {
         const uri = room.sip_uri || room.sipUri;
-        return row(badge('#' + room.id), element('strong', room.name), badge(uri, 'primary'),
+        return row(badge('#' + room.id), element('strong', room.name+(room.archived?'（已归档）':'')), badge(uri, 'primary'),
           (room.max_members ?? room.maxMembers) + ' 人', badge((room.member_count ?? room.memberCount ?? 0) + ' 人'),
-          button('复制 URI', () => copyText(uri)));
+          (() => {const actions=element('div',null,'form-inline');actions.append(button('复制 URI',()=>copyText(uri)),button('重命名',()=>changeRoom(room,true)),button(room.archived?'恢复房间':'归档房间',()=>changeRoom(room,false)));for(const control of actions.querySelectorAll('button')){control.dataset.roomId=room.id;control.disabled=changingRooms.has(room.id);}return actions;})());
       });
       text('roomCountBadge', data.length + ' 间');
     }, force)];
-    if (activeTab === 'users') return [load('users', base + '/users', data => {
+    if (activeTab === 'users') return [paged('users', base + '/users', data => {
       if (!Array.isArray(data)) throw new Error('用户列表格式不正确');
       userRows = data; renderUsers(); text('userCountBadge', data.length + ' 人');
     }, force)];
-    if (activeTab === 'files') return [load('files', base + '/files', data => {
+    if (activeTab === 'files') return [paged('files', base + '/files', data => {
       renderTable('filesTableBody', data, 7, file => row(badge('#' + file.id), element('strong', file.name), size(file.size),
         badge(file.from), badge(file.to, 'primary'), time(file.created_at || file.createdAt),
         button('下载', event => download(file, event.currentTarget))));
       text('fileCountBadge', data.length + ' 个');
     }, force)];
+    if (activeTab === 'operations') return [paged('audit',base+'/audit?'+new URLSearchParams({actor:$('auditActor').value.trim(),action:$('auditAction').value.trim()}),data=>{
+      renderTable('auditTableBody',data,7,item=>row(item.id,time(item.occurred_at),item.actor,item.action,item.target,badge(item.result,item.result==='SUCCESS'?'success':'gray'),item.detail));
+    },force)];
     const params = new URLSearchParams({ limit: $('chatLimit').value });
     if ($('chatUserFilter').value.trim()) params.set('user', $('chatUserFilter').value.trim());
     if ($('chatPeerFilter').value.trim()) params.set('peer', $('chatPeerFilter').value.trim());
     const roomParams = new URLSearchParams({ limit: $('chatLimit').value });
     if ($('chatRoomFilter').value.trim()) roomParams.set('room', $('chatRoomFilter').value.trim());
     if ($('chatRoomSenderFilter').value.trim()) roomParams.set('sender', $('chatRoomSenderFilter').value.trim());
-    return [load('chat', '/api/admin/messages?' + params, data => {
+    return [paged('chat', '/api/admin/messages?' + params, data => {
       renderTable('chatTableBody', data, 7, message => row(badge('#' + message.id), badge(message.sender),
         badge(message.receiver, 'primary'), message.content, message.is_file || message.isFile ? '文件' : '文字',
         badge(message.status, message.status === 'DELIVERED' ? 'success' : 'gray'), time(message.created_at || message.createdAt)));
-    }, force), load('roomChat', '/api/admin/room-messages?' + roomParams, data => {
+    }, force), paged('roomChat', '/api/admin/room-messages?' + roomParams, data => {
       renderTable('roomChatTableBody', data, 6, message => row(badge('#' + message.id), badge(message.room_uri || message.roomUri, 'primary'),
         badge(message.sender), message.content, message.is_file || message.isFile ? '文件' : '文字', time(message.created_at || message.createdAt)));
       text('roomChatBadge', data.length + ' 条');
     }, force)];
   }
 
+  async function changeRoom(room, rename) {
+    if(!token || changingRooms.has(room.id))return;
+    const currentEpoch=epoch;
+    let payload;
+    if (rename) {const name=prompt('新房间名称（SIP URI保持不变）',room.name); if(name===null)return;payload={name:name.trim()};}
+    else {if(!confirm(`确定${room.archived?'恢复':'归档'}房间 ${room.name}？归档仅影响业务目录。`))return;payload={archived:!room.archived};}
+    changingRooms.add(room.id);document.querySelectorAll('[data-room-id="'+room.id+'"]').forEach(control=>control.disabled=true);
+    try {await api(base+'/rooms/'+room.id+'/state',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(currentEpoch!==epoch || !token)return;showToast('房间已更新');panelLoads(true);}
+    catch(error){if(currentEpoch===epoch)showToast(error.message,true);}
+    finally{changingRooms.delete(room.id);if(currentEpoch===epoch)document.querySelectorAll('[data-room-id="'+room.id+'"]').forEach(control=>control.disabled=false);}
+  }
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
     if (token && $('autoRefreshToggle').checked && !document.hidden)
@@ -348,7 +422,7 @@
     }
   }
   function activateTab(id) {
-    ['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].forEach(abortResource);
+    ['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].forEach(abortResource);
     activeTab = id.replace('tab-', '');
     document.querySelectorAll('[data-tab]').forEach(item => {
       const selected = item.dataset.tab === id;
@@ -396,6 +470,15 @@
     if (!refreshing) { refreshQueued = false; refresh(true); }
   }
   function install() {
+    $('queryAudit').addEventListener('click',()=>panelLoads(true));
+    $('queryFiles').addEventListener('click',()=>panelLoads(true));
+    ['userState','roomState'].forEach(id=>$(id).addEventListener('change',()=>panelLoads(true)));
+    $('applyRange').addEventListener('click',()=>{paging.clear();refresh(true);});
+    $('clearRange').addEventListener('click',()=>{$('rangeStart').value='';$('rangeEnd').value='';paging.clear();refresh(true);});
+    for(const [id,resource,filters] of [['exportCdr','cdr',{caller:'filterCaller',callee:'filterCallee'}],['exportFiles','files',{from:'fileFrom',to:'fileTo'}],['exportChat','messages',{user:'chatUserFilter',peer:'chatPeerFilter'}],['exportRoomChat','room-messages',{room:'chatRoomFilter',sender:'chatRoomSenderFilter'}]]) {
+      $(id).addEventListener('click',event=>exportData(resource,filters,event.currentTarget));
+    }
+
     document.querySelectorAll('[data-tab]').forEach(item => item.addEventListener('click', event => activateTab(event.currentTarget.dataset.tab)));
     $('refreshAll').addEventListener('click', () => refresh(true));
     $('autoRefreshToggle').addEventListener('change', scheduleRefresh);

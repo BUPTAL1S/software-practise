@@ -9,8 +9,16 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 
 @Entity
-@Table(name = "files")
+@Table(name = "files", indexes = @jakarta.persistence.Index(name="idx_files_filter",columnList="from_user,to_user_or_room,id"))
 public class FileIndex {
+    @Column(name="from_user_key") private String fromUserKey;
+    @Column(name="to_user_or_room_key") private String toUserOrRoomKey;
+    @jakarta.persistence.PrePersist @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        fromUserKey=fromUser==null?null:fromUser.trim().toLowerCase(java.util.Locale.ROOT);
+        toUserOrRoomKey=toUserOrRoom==null?null:toUserOrRoom.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

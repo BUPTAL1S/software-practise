@@ -126,18 +126,9 @@ public class FileController {
             @RequestParam(value = "to", required = false) String toUserOrRoom,
             @RequestParam(value = "limit", defaultValue = "100") int limit) {
 
-        List<FileIndex> list;
-        if (fromUser != null && !fromUser.isBlank()) {
-            list = fileRepo.findByFromUserOrderByIdDesc(fromUser.trim());
-        } else if (toUserOrRoom != null && !toUserOrRoom.isBlank()) {
-            list = fileRepo.findByToUserOrRoomOrderByIdDesc(toUserOrRoom.trim());
-        } else {
-            list = fileRepo.findAllByOrderByIdDesc();
-        }
-
-        if (limit > 0 && list.size() > limit) {
-            list = list.subList(0, limit);
-        }
+        if(limit<1 || limit>500)throw new IllegalArgumentException("limit must be between 1 and 500");
+        List<FileIndex> list=fileRepo.searchForAdmin(fromUser==null || fromUser.isBlank()?null:fromUser.trim().toLowerCase(java.util.Locale.ROOT),
+            toUserOrRoom==null || toUserOrRoom.isBlank()?null:toUserOrRoom.trim().toLowerCase(java.util.Locale.ROOT),org.springframework.data.domain.PageRequest.of(0,limit));
 
         List<Map<String, Object>> resp = new ArrayList<>();
         for (FileIndex idx : list) {
@@ -174,7 +165,7 @@ public class FileController {
         boolean avatar = "profile".equals(index.getToUserOrRoom()) && userRepo.existsByAvatarUrl("/api/files/" + id);
         if (!avatar) {
             User viewer = tokens.userIdOf(MeController.bearerToken(authorization)).flatMap(userRepo::findById).orElse(null);
-            if (viewer == null) return ResponseEntity.status(401).build();
+            if (viewer == null || viewer.isDisabled()) return ResponseEntity.status(401).build();
             String recipient = Optional.ofNullable(index.getToUserOrRoom()).orElse("");
             String roomKey = recipient.replaceFirst("(?i)^sip:", "").split("@", 2)[0];
             // Rooms currently form a public directory: their attachments require a logged-in account.

@@ -11,6 +11,18 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "rooms")
 public class Room {
+    @Column(name="sip_uri_key") private String sipUriKey;
+    @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        sipUriKey=sipUri==null?null:sipUri.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    @Column(nullable=false) private boolean archived;
+    @Column(name="archived_at") private String archivedAt;
+    public boolean isArchived(){return archived;}
+    public void setArchived(boolean value){archived=value;}
+    public String getArchivedAt(){return archivedAt;}
+    public void setArchivedAt(String value){archivedAt=value;}
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -33,6 +45,7 @@ public class Room {
         if (id != null && (sipUri == null || sipUri.isBlank())) {
             sipUri = "room-" + id;
         }
+        normalizeQueryKeys();
     }
 
     public Long getId() {

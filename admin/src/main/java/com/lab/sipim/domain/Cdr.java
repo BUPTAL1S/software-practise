@@ -9,8 +9,16 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 
 @Entity
-@Table(name = "cdr")
+@Table(name = "cdr", indexes = @jakarta.persistence.Index(name="idx_cdr_filter",columnList="caller,callee_or_room,id"))
 public class Cdr {
+    @Column(name="caller_key") private String callerKey;
+    @Column(name="callee_or_room_key") private String calleeOrRoomKey;
+    @jakarta.persistence.PrePersist @jakarta.persistence.PreUpdate
+    private void normalizeQueryKeys() {
+        callerKey=caller==null?null:caller.trim().toLowerCase(java.util.Locale.ROOT);
+        calleeOrRoomKey=calleeOrRoom==null?null:calleeOrRoom.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

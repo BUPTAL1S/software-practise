@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/rooms")
 public class RoomController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
 
     private final RoomRepository roomRepo;
     private final RoomMessageRepository messageRepo;
@@ -52,6 +53,7 @@ public class RoomController {
         List<Map<String, Object>> resp = new ArrayList<>();
         Map<String, Integer> peaks = rooms.isEmpty() ? Map.of() : roomStatistics.peaksByRoom();
         for (Room r : rooms) {
+            if(r.isArchived())continue;
             resp.add(formatRoom(r, peaks.getOrDefault(RoomCallStatistics.roomKey(r.getSipUri()), 0)));
         }
         return ResponseEntity.ok(resp);
@@ -60,7 +62,7 @@ public class RoomController {
     @GetMapping("/{identifier}")
     public ResponseEntity<?> getRoom(@PathVariable("identifier") String identifier) {
         Optional<Room> found = findRoom(identifier);
-        if (found.isEmpty()) {
+        if (found.isEmpty() || found.get().isArchived()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "room not found"));
         }
         return ResponseEntity.ok(formatRoom(found.get()));
@@ -243,6 +245,7 @@ public class RoomController {
         if (customSipUri != null) {
             room.setSipUri(customSipUri);
             Room saved = roomRepo.save(room);
+            audit.record(audit.actor("client"),"ROOM_CREATE",saved.getSipUri(),"SUCCESS","room created");
             return ResponseEntity.status(HttpStatus.CREATED).body(formatRoom(saved));
         }
 
@@ -253,6 +256,7 @@ public class RoomController {
         saved.setSipUri("room-" + saved.getId());
         saved = roomRepo.save(saved);
 
+        audit.record(audit.actor("client"),"ROOM_CREATE",saved.getSipUri(),"SUCCESS","room created");
         return ResponseEntity.status(HttpStatus.CREATED).body(formatRoom(saved));
     }
 

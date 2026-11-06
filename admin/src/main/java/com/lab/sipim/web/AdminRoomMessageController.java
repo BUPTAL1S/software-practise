@@ -53,7 +53,8 @@ public class AdminRoomMessageController {
         }
         String room = trim(roomFilter);
         String sender = trim(senderFilter);
-        List<RoomMessage> all = messages.findAllByOrderByIdDesc();
+        if(limit<1 || limit>500)throw new IllegalArgumentException("limit must be between 1 and 500");
+        List<RoomMessage> all = messages.searchForAdmin(room==null || room.isBlank()?null:room,sender==null || sender.isBlank()?null:sender,org.springframework.data.domain.PageRequest.of(0,limit));
         List<Map<String, Object>> result = new ArrayList<>();
         for (RoomMessage message : all) {
             if (room != null && !room.isEmpty()

@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface FileIndexRepository extends JpaRepository<FileIndex, Long> {
+    @Query("SELECT f FROM FileIndex f WHERE (:sender IS NULL OR f.fromUserKey=:sender) AND (:target IS NULL OR f.toUserOrRoomKey=:target) ORDER BY f.id DESC")
+    List<FileIndex> searchForAdmin(@Param("sender") String sender,@Param("target") String target,org.springframework.data.domain.Pageable page);
 
     List<FileIndex> findAllByOrderByIdDesc();
 

@@ -48,7 +48,7 @@ try {
     $mavenArgs = @('-DskipTests','clean','package'); if ($Offline) { $mavenArgs = @('-o') + $mavenArgs }
     & $Maven '-f' (Join-Path $repo 'client\pom.xml') '-Ppackage-windows' @mavenArgs
     if ($LASTEXITCODE -ne 0) { throw 'Client packaging failed.' }
-    & $Maven '-f' (Join-Path $repo 'admin\pom.xml') @mavenArgs
+    & $Maven '-f' (Join-Path $repo 'admin\pom.xml') ('-Dsipim.build.id='+$buildId) @mavenArgs
     if ($LASTEXITCODE -ne 0) { throw 'Backend packaging failed.' }
     $clientJar = Join-Path $repo 'client\target\sip-client-0.1.0-all.jar'
     $backendJar = Join-Path $repo 'admin\target\sipim-admin-0.1.0-SNAPSHOT.jar'
