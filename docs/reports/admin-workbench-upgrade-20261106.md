@@ -88,3 +88,28 @@ python scripts/verify-admin-upgrade.py --baseline <旧后台包目录> --candida
 禁用只控制业务后台权限与目录展示，不立即撤销Kamailio注册或终止已有SIP通话。
 房间归档只控制业务目录，不锁定MCU房间或踢除成员；手动SIP拨号的准入需要信令侧另行配合。
 所有管理操作均由服务端鉴权，不能仅依靠页面隐藏按钮。
+
+## 最终候选包验证
+
+候选包源提交为 `6948308fb9b9`，迁移版本2，构建版本字段已验证为真实提交号。
+候选后台与完整回归所测后台的JAR逐项比较，只有build-info.properties不同，运行类、依赖和页面字节一致。
+完整后台123项测试中122项通过、1项真实MCU测试未运行；隔离页面14项通过。
+旧包生成8用户、1话单、2私聊、1附件后升级，验证全部凭据不变、文件字节相同、历史身份保留、禁用恢复、
+CSV、重启后审计保留，再恢复旧数据库和旧程序成功读取话单与附件。升级后数据另外保留。
+最终包完成manifest全部哈希、ZIP CRC、干净PATH原生加载和隔离后台健康/登录验证。
+
+精确哈希与机器可读结果见 [验证汇总](admin-workbench-upgrade-20261106.json)。
+本机新版预览为 `http://127.0.0.1:8088/admin.html`，独立演示库、ESL关闭；协作者实例尚未部署本次改动。
+
+| 批次 | PR |
+|---|---|
+| 1 组合筛选 | [#65](https://github.com/BUPTAL1S/software-practise/pull/65) |
+| 2 迁移与审计基础 | [#66](https://github.com/BUPTAL1S/software-practise/pull/66) |
+| 3 账号状态 | [#67](https://github.com/BUPTAL1S/software-practise/pull/67) |
+| 4 数据库分页 | [#68](https://github.com/BUPTAL1S/software-practise/pull/68) |
+| 5 房间管理 | [#69](https://github.com/BUPTAL1S/software-practise/pull/69) |
+| 6 日期与CSV | [#70](https://github.com/BUPTAL1S/software-practise/pull/70) |
+| 7 运维与集成修复 | [#71](https://github.com/BUPTAL1S/software-practise/pull/71) |
+| 8 交付验证 | 本文所在的交付PR |
+
+这些PR为递进依赖，请按批次顺序合并；部署以最终累计候选包和迁移恢复说明为准。
