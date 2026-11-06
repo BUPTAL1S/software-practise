@@ -12,33 +12,38 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class Browser {
   constructor() {
-    const executable = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-    fs.mkdirSync(target, { recursive: true });
-    const profile = fs.mkdtempSync(path.join(target, 'workbench-browser-'));
-    this.child = spawn(executable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
-      '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-gpu',
-      '--window-size=1360,1000', '--user-data-dir=' + profile], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
-    this.nextId = 0; this.pending = new Map(); this.buffer = ''; this.exceptions = [];
-    this.child.stderr.on('data', () => {});
-    const decoder = new (require('node:string_decoder').StringDecoder)('utf8');
-    this.child.stdio[4].on('data', chunk => {
-      this.buffer += decoder.write(chunk);
-      let end;
-      while ((end = this.buffer.indexOf('\0')) >= 0) {
-        const value = JSON.parse(this.buffer.slice(0, end)); this.buffer = this.buffer.slice(end + 1);
-        if (value.id) {
-          const job = this.pending.get(value.id);
-          if (job) { clearTimeout(job.timer); this.pending.delete(value.id); value.error ? job.reject(Error(JSON.stringify(value.error))) : job.resolve(value.result); }
-        } else if (value.method === 'Runtime.exceptionThrown') this.exceptions.push(value.params.exceptionDetails);
+    const candidates=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'];
+    const executable=candidates.find(file=>file && fs.existsSync(file));
+    if(!executable)throw Error('Set CHROME_PATH to an installed Chromium browser');
+    fs.mkdirSync(target,{recursive:true});
+    const profile=fs.mkdtempSync(path.join(target,'workbench-browser-'));
+    this.child=spawn(executable,['--headless=new','--remote-debugging-port=0','--no-first-run','--disable-background-networking','--disable-component-update','--disable-sync','--disable-gpu','--window-size=1360,1000','--user-data-dir='+profile],{windowsHide:true,stdio:['ignore','ignore','pipe']});
+    this.nextId=0;this.pending=new Map();this.exceptions=[];this.stderr='';
+    this.child.stderr.on('data',chunk=>{this.stderr=(this.stderr+chunk).slice(-4000);});
+    this.connection=(async()=>{
+      const active=path.join(profile,'DevToolsActivePort');const deadline=Date.now()+15000;
+      while(!fs.existsSync(active)) {
+        if(this.child.exitCode!==null || Date.now()>deadline)throw Error('Headless browser failed: '+this.stderr);
+        await sleep(50);
       }
-    });
+      const port=fs.readFileSync(active,'utf8').split('\n')[0].trim();
+      const version=await(await fetch('http://127.0.0.1:'+port+'/json/version')).json();
+      this.socket=new WebSocket(version.webSocketDebuggerUrl);
+      this.socket.addEventListener('message',event=>{
+        const value=JSON.parse(event.data);
+        if(value.id){const job=this.pending.get(value.id);if(job){clearTimeout(job.timer);this.pending.delete(value.id);value.error?job.reject(Error(JSON.stringify(value.error))):job.resolve(value.result);}}
+        else if(value.method==='Runtime.exceptionThrown')this.exceptions.push(value.params.exceptionDetails);
+      });
+      await new Promise((resolve,reject)=>{this.socket.addEventListener('open',resolve,{once:true});this.socket.addEventListener('error',reject,{once:true});});
+    })();
   }
-  send(method, params = {}, sessionId) {
-    const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(Error('CDP timeout: ' + method)); }, 10000);
-      this.pending.set(id, { resolve, reject, timer });
-      this.child.stdio[3].write(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }) + '\0');
+  async send(method,params={},sessionId) {
+    await this.connection;
+    const id=++this.nextId;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout: '+method));},10000);
+      this.pending.set(id,{resolve,reject,timer});
+      this.socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));
     });
   }
   async open(url) {
@@ -68,14 +73,14 @@ class Browser {
   }
   async close() {
     try { await this.send('Browser.close'); } catch (_) { }
-    this.child.kill();
+    this.socket?.close(); this.child.kill();
     for (const job of this.pending.values()) clearTimeout(job.timer);
   }
 }
 
 test('management workbench browser contract', { timeout: 60000 }, async t => {
   const state = { requests: [], health: 'ok', online: true, expired: false, cdrDelay: 0,
-    activeCdr: 0, maxCdr: 0, roomPosts: 0, userPosts: 0, roomsFail: false,
+    activeCdr: 0, maxCdr: 0, largeCdr:false, roomPosts: 0, userPosts: 0, roomsFail: false,
     userDeleted: false, userDeleteFail: false, userDeletes: 0 };
   const hostile = `<img src=x onerror="window.injected=true"> O'Reilly & <svg onload="window.injected=true">`;
   const server = http.createServer(async (request, response) => {
@@ -91,7 +96,11 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
     state.requests.push({ path: url.pathname, query: url.searchParams.toString(), method: request.method, auth: request.headers.authorization, body });
     const send = (data, status = 200) => {
       if (response.destroyed) return;
-      response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(url.pathname.endsWith('/page') && Array.isArray(data) ? {items:data,page:Number(url.searchParams.get('page')||0),size:Number(url.searchParams.get('size')||25),total:data.length,hasNext:false,snapshotMaxId:10} : data));
+      if(url.pathname.endsWith('/page') && Array.isArray(data)) {
+        const page=Number(url.searchParams.get('page')||0),size=Number(url.searchParams.get('size')||25);
+        data={items:data.slice(page*size,(page+1)*size),page,size,total:data.length,hasNext:(page+1)*size<data.length,snapshotMaxId:data.length};
+      }
+      response.writeHead(status,{'Content-Type':'application/json'});response.end(JSON.stringify(data));
     };
     if (url.pathname === '/api/admin/login') {
       const user = JSON.parse(body);
@@ -113,7 +122,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       response.on('close', () => { state.activeCdr--; });
       const caller = url.searchParams.get('caller') || hostile;
       await sleep(caller === 'slow' ? 400 : state.cdrDelay);
-      send([{ id: 1, caller, callee_or_room: hostile, call_id: hostile, duration_sec: 15, started_at: 'invalid-date' }]); return;
+      send(Array.from({length:state.largeCdr?150:1},(_,i)=>({id:i+1,caller,callee_or_room:hostile,call_id:hostile,duration_sec:15,started_at:'invalid-date'}))); return;
     }
     if (route.endsWith('/rooms')) {
       if (state.roomsFail) { send({ error: 'rooms unavailable' }, 503); return; }
@@ -231,7 +240,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       assert.equal(await browser.evaluate('document.querySelectorAll("tbody img,tbody svg,tbody script").length'), 0);
       assert.equal(await browser.evaluate('window.injected === undefined'), true);
     });
-    await t.test('protected admin, delete cancellation, failure retry and duplicate suppression', async () => {
+    await t.test('protected admin, disable cancellation, failure retry and duplicate suppression', async () => {
       await clickTab('users');
       assert.equal(await browser.evaluate(`document.querySelector('[data-delete-user-id="1"]').disabled`), true);
       await browser.evaluate(`window.confirm=()=>false; document.querySelector('[data-delete-user-id="2"]').click()`);
@@ -244,9 +253,35 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       await browser.evaluate(`var remove=document.querySelector('[data-delete-user-id="2"]'); remove.click(); remove.click()`);
       await browser.wait(`document.querySelector('[data-delete-user-id="2"]').textContent === '恢复账号'`);
       assert.equal(state.userDeletes, 2, 'one failed request and one successful request');
-      assert.equal(await browser.evaluate('document.getElementById("userCountBadge").textContent'), '1 人');
+      assert.equal(await browser.evaluate('document.getElementById("userCountBadge").textContent'), '2 人');
       assert.equal(await browser.evaluate('document.querySelectorAll("tbody img,tbody svg,tbody script").length'), 0);
       await browser.screenshot('workbench-user-deletion.png');
+    });
+    await t.test('restoring a disabled account keeps the same visible identity', async()=>{
+      await browser.evaluate(`document.querySelector('[data-delete-user-id="2"]').click()`);
+      await browser.wait(`document.querySelector('[data-delete-user-id="2"]').textContent === '禁用账号'`);
+      assert.equal(state.userDeleted,false);
+    });
+    await t.test('operations and audit metadata render without HTML execution',async()=>{
+      await browser.evaluate(`document.querySelector('[data-tab="tab-operations"]').click()`);
+      await browser.wait(`document.querySelector('#auditTableBody td') !== null`);
+      assert.equal(await browser.evaluate(`document.getElementById('operationsTableBody').textContent.includes('abc')`),true);
+      assert.equal(await browser.evaluate(`document.querySelectorAll('#auditTableBody img,#auditTableBody script').length`),0);
+      await browser.evaluate(`document.getElementById('rangeStart').value='2026-11-01';document.getElementById('rangeEnd').value='2026-11-06';document.getElementById('applyRange').click()`);
+      await browser.wait(`!document.getElementById('refreshAll').disabled`);
+      assert.ok(state.requests.some(item=>item.path.endsWith('/audit/page') && item.query.includes('fromTime=') && item.query.includes('untilTime=')));
+      await browser.evaluate(`document.getElementById('clearRange').click()`);
+    });
+    await t.test('page size, next page and return to latest use the page API',async()=>{
+      state.largeCdr=true;await clickTab('cdr');await refresh();
+      await browser.evaluate(`var sizeSelect=document.querySelector('#pager-cdr select');sizeSelect.value='25';sizeSelect.dispatchEvent(new Event('change'))`);
+      await browser.wait(`document.querySelectorAll('#cdrTableBody tr').length === 25`);
+      await browser.evaluate(`Array.from(document.querySelectorAll('#pager-cdr button')).find(b=>b.textContent==='下一页').click()`);
+      await browser.wait(`document.getElementById('pager-cdr').textContent.includes('第 2 页')`);
+      assert.ok(state.requests.some(item=>item.path.endsWith('/cdr/page') && item.query.includes('page=1') && item.query.includes('snapshotMaxId=150')));
+      await browser.evaluate(`Array.from(document.querySelectorAll('#pager-cdr button')).find(b=>b.textContent==='返回最新').click()`);
+      await browser.wait(`document.getElementById('pager-cdr').textContent.includes('第 1 页')`);
+      state.largeCdr=false;await refresh();
     });
     await t.test('hidden page pauses polling and resumes when visible; nested tab click works', async () => {
       await browser.wait('!document.getElementById("refreshAll").disabled');

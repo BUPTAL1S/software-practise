@@ -14,6 +14,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /** One policy for the workbench and legacy API aliases; public client directory stays public. */
 @Configuration
 public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
     private final LoginTokens tokens;
     private final UserRepository users;
     private final ObjectMapper json;
@@ -92,6 +93,11 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
     }
 
     private boolean deny(HttpServletResponse response, int status, String message) throws Exception {
+        var attributes=org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if(attributes instanceof org.springframework.web.context.request.ServletRequestAttributes web && web.getRequest().getRequestURI().startsWith("/api/admin/")) {
+            audit.record(audit.actor("unknown"),"REQUEST_REJECTED",web.getRequest().getRequestURI(),"FAILED","HTTP "+status);
+            web.getRequest().setAttribute("auditRecorded",Boolean.TRUE);
+        }
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         json.writeValue(response.getWriter(), Map.of("error", message));

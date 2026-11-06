@@ -21,6 +21,9 @@ class WorkbenchUpgradeApiTest {
     @Autowired UserRepository users; @Autowired LoginTokens tokens; @Autowired WorkbenchQueries queries;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired com.lab.sipim.service.AccountManagement accounts;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired jakarta.persistence.EntityManagerFactory entityManagers;
+    @Autowired com.lab.sipim.service.IdentityReservations identities;
     @org.springframework.boot.test.mock.mockito.SpyBean com.lab.sipim.service.AdminAudit audit;
     String admin;
     @BeforeEach void setup(){calls.deleteAll();admin=tokens.issue(users.findByUsername("1001").orElseThrow().getId());}
@@ -65,5 +68,43 @@ class WorkbenchUpgradeApiTest {
             assertThrows(IllegalStateException.class,()->accounts.state(user.getId(),true,"test","1001"));
             assertFalse(users.findById(user.getId()).orElseThrow().isDisabled());
         } finally {org.mockito.Mockito.reset(audit);}
+    }
+    @Test void tenThousandRecordsLoadOnlyOnePageWithinTheLocalLatencyBudget() throws Exception {
+        call("1002",0);
+        Object timestamp=jdbc.queryForObject("SELECT started_at FROM cdr LIMIT 1",Object.class);
+        String plan=jdbc.queryForList("EXPLAIN QUERY PLAN SELECT * FROM cdr WHERE lower(caller)='1001' AND lower(callee_or_room)='1002' ORDER BY id DESC LIMIT 25").toString();
+        assertTrue(plan.contains("idx_cdr_query_lower"),plan);
+        new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status->{
+            java.util.List<Object[]> batch=new java.util.ArrayList<>();
+            for(int i=1;i<10000;i++)batch.add(new Object[]{"1001","1002",timestamp,10});
+            jdbc.batchUpdate("INSERT INTO cdr(caller,callee_or_room,started_at,duration_sec) VALUES(?,?,?,?)",batch);
+        });
+        var statistics=entityManagers.unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean original=statistics.isStatisticsEnabled();statistics.setStatisticsEnabled(true);statistics.clear();
+        try {
+            long[] times=new long[20];
+            for(int i=0;i<20;i++) {
+                long before=statistics.getEntityLoadCount(),start=System.nanoTime();
+                var page=queries.page("cdr",java.util.Map.of("size","25","caller","1001","callee","1002"));
+                times[i]=System.nanoTime()-start;
+                assertEquals(10000,page.total());assertEquals(25,page.items().size());
+                assertEquals(25,statistics.getEntityLoadCount()-before);
+            }
+            java.util.Arrays.sort(times);
+            System.out.println("PERFORMANCE: records=10000 page=25 samples=20 p95_ms="+times[18]/1_000_000.0+" entities_per_request=25");
+            assertTrue(times[18]<java.util.concurrent.TimeUnit.SECONDS.toNanos(1));
+        } finally {statistics.setStatisticsEnabled(original);}
+        call("1002",10001);
+        mvc.perform(get("/api/admin/workbench/cdr/export").header("Authorization","Bearer "+admin))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("匹配记录超过10000条，请缩小筛选范围后导出"));
+    }
+    @Test void historicalIdentityIsReservedWithoutCreatingOrAssigningAnAccount() throws Exception {
+        String alias="retired-"+java.util.UUID.randomUUID();call(alias,0);identities.run(null);
+        assertTrue(users.findByUsername(alias).isEmpty());
+        mvc.perform(post("/api/register").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(java.util.Map.of("username",alias.toUpperCase(),"password","secret"))))
+            .andExpect(status().isConflict());
+        String ordinary=tokens.issue(users.findByUsername("1002").orElseThrow().getId());
+        mvc.perform(get("/api/admin/workbench/operations").header("Authorization","Bearer "+ordinary)).andExpect(status().isForbidden());
     }
 }

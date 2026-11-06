@@ -14,8 +14,12 @@ public class SchemaMigration implements InitializingBean {
     public SchemaMigration(DataSource dataSource) { this.dataSource = dataSource; }
     @Bean static BeanFactoryPostProcessor migrationBeforeJpa() {
         return factory -> {
-            if (factory.containsBeanDefinition("entityManagerFactory"))
-                factory.getBeanDefinition("entityManagerFactory").setDependsOn("schemaMigration");
+            if (factory.containsBeanDefinition("entityManagerFactory")) {
+                var definition=factory.getBeanDefinition("entityManagerFactory");
+                var dependencies=new java.util.LinkedHashSet<String>();
+                if(definition.getDependsOn()!=null)dependencies.addAll(java.util.List.of(definition.getDependsOn()));
+                dependencies.add("schemaMigration");definition.setDependsOn(dependencies.toArray(String[]::new));
+            }
         };
     }
     @Override public void afterPropertiesSet() throws Exception { migrate(dataSource); }
