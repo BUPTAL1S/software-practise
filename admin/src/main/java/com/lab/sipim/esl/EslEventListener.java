@@ -47,6 +47,15 @@ public class EslEventListener implements AutoCloseable {
     private volatile long lastSnapshotAt;
     public boolean hasFreshRoomState() {return connected && lastSnapshotAt > 0 && System.currentTimeMillis()-lastSnapshotAt < 15000;}
     public long getLastSnapshotAt(){return lastSnapshotAt;}
+    private volatile java.time.Instant lastConnectedAt,lastDisconnectedAt;
+    private volatile String lastError="";
+    private final java.util.concurrent.atomic.AtomicLong attempts=new java.util.concurrent.atomic.AtomicLong();
+    public Map<String,Object> diagnostics() {
+        Map<String,Object> out=new LinkedHashMap<>();out.put("enabled",enabled);out.put("connected",connected);
+        out.put("lastConnectedAt",lastConnectedAt);out.put("lastDisconnectedAt",lastDisconnectedAt);
+        out.put("lastSnapshotAt",lastSnapshotAt>0?java.time.Instant.ofEpochMilli(lastSnapshotAt):null);
+        out.put("roomStateFresh",hasFreshRoomState());out.put("lastError",lastError);out.put("connectionAttempts",attempts.get());return out;
+    }
     private Thread workerThread;
     private volatile Socket activeSocket;
     private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
@@ -120,6 +129,7 @@ public class EslEventListener implements AutoCloseable {
     private void runLoop() {
         while (running) {
             try (Socket socket = new Socket()) {
+                attempts.incrementAndGet();
                 socket.connect(new InetSocketAddress(host, port), 3000);
                 socket.setSoTimeout(5000);
                 activeSocket = socket;
@@ -131,7 +141,7 @@ public class EslEventListener implements AutoCloseable {
                 writer.flush();
                 requireOk(reader.read(), "event subscription");
                 if (!running) break;
-                connected = true;
+                connected = true;lastConnectedAt=java.time.Instant.now();lastError="";
                 log.info("FreeSWITCH ESL subscribed at {}:{}", host, port);
                 reconciliationWorker.execute(this::refreshConferenceState);
 
@@ -148,8 +158,11 @@ public class EslEventListener implements AutoCloseable {
                     }
                 }
             } catch (Exception error) {
+                String message=String.valueOf(error.getMessage()).toLowerCase(java.util.Locale.ROOT);
+                lastError=message.contains("authentication")?"ESL认证失败":message.contains("subscription")?"ESL事件订阅失败":error instanceof java.net.ConnectException?"ESL连接被拒绝":error instanceof java.net.SocketTimeoutException?"ESL连接超时":"ESL连接中断";
                 if (running) log.warn("FreeSWITCH ESL {}:{} disconnected: {}", host, port, error.getMessage());
             } finally {
+                lastDisconnectedAt=java.time.Instant.now();
                 connected = false;
                 activeSocket = null;
             }

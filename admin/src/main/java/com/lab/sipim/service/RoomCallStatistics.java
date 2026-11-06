@@ -13,7 +13,13 @@ public class RoomCallStatistics {
 
     public RoomCallStatistics(CdrRepository records) { this.records = records; }
 
-    public Map<String, Integer> peaksByRoom() { return calculate(records.findRoomCalls()); }
+    private String cachedKey="";
+    private Map<String,Integer> cachedPeaks=Map.of();
+    public synchronized Map<String, Integer> peaksByRoom() {
+        String key=records.count()+":"+records.sumTotalDurationSec()+":"+records.newestId();
+        if(!key.equals(cachedKey)){cachedPeaks=Map.copyOf(calculate(records.findRoomCalls()));cachedKey=key;}
+        return cachedPeaks;
+    }
 
     public int peakForRoom(String room) { return peaksByRoom().getOrDefault(roomKey(room), 0); }
 

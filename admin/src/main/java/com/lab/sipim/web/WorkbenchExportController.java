@@ -32,6 +32,8 @@ public class WorkbenchExportController {
                 Writer writer=new BufferedWriter(new OutputStreamWriter(output,StandardCharsets.UTF_8));writer.write('\uFEFF');line(writer,columns);
                 var page=first;
                 do {
+                    var current=tokens.userIdOf(MeController.bearerToken(auth)).flatMap(users::findById).orElse(null);
+                    if(current==null || current.isDisabled() || !com.lab.sipim.security.ApiAccessPolicy.isAdmin(current))throw new IOException("导出会话已失效");
                     for(var item:page.items())line(writer,columns.stream().map(key->Objects.toString(item.get(key),"")).toList());
                     if(!page.hasNext())break;
                     query.put("page",""+(page.page()+1));page=queries.page(resource,query);

@@ -80,6 +80,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
   const hostile = `<img src=x onerror="window.injected=true"> O'Reilly & <svg onload="window.injected=true">`;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
+    const route=url.pathname.replace(/\/page$/,'');
     if (!url.pathname.startsWith('/api/')) {
       const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       if (!['index.html', 'admin.html', 'admin.js'].includes(name)) { response.writeHead(404).end(); return; }
@@ -90,7 +91,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
     state.requests.push({ path: url.pathname, query: url.searchParams.toString(), method: request.method, auth: request.headers.authorization, body });
     const send = (data, status = 200) => {
       if (response.destroyed) return;
-      response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data));
+      response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(url.pathname.endsWith('/page') && Array.isArray(data) ? {items:data,page:Number(url.searchParams.get('page')||0),size:Number(url.searchParams.get('size')||25),total:data.length,hasNext:false,snapshotMaxId:10} : data));
     };
     if (url.pathname === '/api/admin/login') {
       const user = JSON.parse(body);
@@ -103,37 +104,39 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
     if (url.pathname === '/api/admin/session') { send({ username: '1001', role: 'ADMIN' }); return; }
     if (url.pathname === '/api/admin/logout') { send({ success: true }); return; }
     if (url.pathname.endsWith('/health')) { send(state.health === 'ok' ? { status: 'ok', esl: { enabled: true, connected: true } } : { error: 'backend unavailable' }, state.health === 'ok' ? 200 : 503); return; }
-    if (url.pathname.endsWith('/stats')) { send({ totalCalls: 5, totalDurationSec: 90, averageDurationSec: 18, peakRoomMembers: 2 }); return; }
+    if (route.endsWith('/stats') || route.endsWith('/query-stats')) { send({ totalCalls: 5, totalDurationSec: 90, averageDurationSec: 18, peakRoomMembers: 2 }); return; }
+    if (route.endsWith('/operations')) {send({version:'test',revision:'abc',schemaVersion:1,uptimeSeconds:50,globalPeakRoomMembers:2,esl:{enabled:true,connected:true}});return;}
+    if (route.endsWith('/audit')) {send([{id:1,actor:'1001',action:'USER_DISABLE',target:hostile,result:'SUCCESS',detail:hostile}]);return;}
     if (url.pathname.endsWith('/users/online')) { send(state.online ? { count: 1, users: ['1001'] } : { error: 'online unavailable' }, state.online ? 200 : 503); return; }
-    if (url.pathname.endsWith('/cdr')) {
+    if (route.endsWith('/cdr')) {
       state.activeCdr++; state.maxCdr = Math.max(state.maxCdr, state.activeCdr);
       response.on('close', () => { state.activeCdr--; });
       const caller = url.searchParams.get('caller') || hostile;
       await sleep(caller === 'slow' ? 400 : state.cdrDelay);
       send([{ id: 1, caller, callee_or_room: hostile, call_id: hostile, duration_sec: 15, started_at: 'invalid-date' }]); return;
     }
-    if (url.pathname.endsWith('/rooms')) {
+    if (route.endsWith('/rooms')) {
       if (state.roomsFail) { send({ error: 'rooms unavailable' }, 503); return; }
       if (request.method === 'POST') { state.roomPosts++; assert.equal(JSON.parse(body).max_members, 8); await sleep(250); send({ id: 2, name: JSON.parse(body).name }); }
       else send([{ id: 1, name: hostile, sip_uri: 'room-101', max_members: 8, member_count: 0 }]);
       return;
     }
-    if (url.pathname.endsWith('/users')) {
+    if (route.endsWith('/users')) {
       if (request.method === 'POST') { state.userPosts++; await sleep(250); send({ username: JSON.parse(body).username }); }
       else send([{ id: 1, username: '1001', sipId: hostile },
-        ...state.userDeleted ? [] : [{ id: 2, username: hostile, sipId: '1002' }]]);
+        { id: 2, username: hostile, sipId: '1002', disabled: state.userDeleted }]);
       return;
     }
-    if (url.pathname.endsWith('/users/2') && request.method === 'DELETE') {
+    if (url.pathname.endsWith('/users/2/state') && request.method === 'PATCH') {
       state.userDeletes++; await sleep(250);
       if (state.userDeleteFail) send({ error: 'delete unavailable' }, 503);
-      else { state.userDeleted = true; send({ success: true, username: hostile }); }
+      else { state.userDeleted = JSON.parse(body).disabled; send({ success: true, username: hostile }); }
       return;
     }
-    if (url.pathname.endsWith('/files')) { send([{ id: 1, name: hostile, size: 1024, from: hostile, to: '1001', created_at: 'invalid-date', url: 'javascript:window.injected=true' }]); return; }
+    if (route.endsWith('/files')) { send([{ id: 1, name: hostile, size: 1024, from: hostile, to: '1001', created_at: 'invalid-date', url: 'javascript:window.injected=true' }]); return; }
     if (url.pathname.endsWith('/files/1')) { response.writeHead(200, { 'Content-Type': 'application/octet-stream' }); response.end('file'); return; }
-    if (url.pathname === '/api/admin/messages') { send([{ id: 1, sender: hostile, receiver: '1002', content: hostile, status: 'PENDING', created_at: 'bad' }]); return; }
-    if (url.pathname === '/api/admin/room-messages') { send([{ id: 1, room_uri: hostile, sender: hostile, content: hostile, created_at: 'bad' }]); return; }
+    if (route.endsWith('/messages')) { send([{ id: 1, sender: hostile, receiver: '1002', content: hostile, status: 'PENDING', created_at: 'bad' }]); return; }
+    if (route.endsWith('/room-messages')) { send([{ id: 1, room_uri: hostile, sender: hostile, content: hostile, created_at: 'bad' }]); return; }
     send({ error: 'unknown test endpoint' }, 404);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -239,7 +242,7 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       await browser.wait(`!document.querySelector('[data-delete-user-id="2"]').disabled`);
       state.userDeleteFail = false;
       await browser.evaluate(`var remove=document.querySelector('[data-delete-user-id="2"]'); remove.click(); remove.click()`);
-      await browser.wait(`document.querySelector('[data-delete-user-id="2"]') === null`);
+      await browser.wait(`document.querySelector('[data-delete-user-id="2"]').textContent === '恢复账号'`);
       assert.equal(state.userDeletes, 2, 'one failed request and one successful request');
       assert.equal(await browser.evaluate('document.getElementById("userCountBadge").textContent'), '1 人');
       assert.equal(await browser.evaluate('document.querySelectorAll("tbody img,tbody svg,tbody script").length'), 0);
@@ -258,14 +261,14 @@ test('management workbench browser contract', { timeout: 60000 }, async t => {
       await browser.wait('document.getElementById("tab-rooms").classList.contains("active")');
     });
     await t.test('slow polling never overlaps requests; logout and expiration clear private rows', async () => {
-      const previous = state.requests.filter(item => item.path.endsWith('/cdr')).length;
+      const previous = state.requests.filter(item => item.path.endsWith('/cdr/page')).length;
       await clickTab('cdr');
       // Cached rows and the global refresh button do not describe the tab's separate load.
       // Settle that load before measuring the polling cycle, including its server-side close.
       for (let attempt = 0; attempt < 200 && (state.activeCdr !== 0 ||
-          state.requests.filter(item => item.path.endsWith('/cdr')).length === previous); attempt++) await sleep(10);
+          state.requests.filter(item => item.path.endsWith('/cdr/page')).length === previous); attempt++) await sleep(10);
       assert.equal(state.activeCdr, 0);
-      assert.ok(state.requests.filter(item => item.path.endsWith('/cdr')).length > previous);
+      assert.ok(state.requests.filter(item => item.path.endsWith('/cdr/page')).length > previous);
       await browser.wait('!document.getElementById("refreshAll").disabled');
       state.cdrDelay = 5800; state.maxCdr = 0;
       await browser.evaluate('document.getElementById("refreshAll").click(); document.getElementById("autoRefreshToggle").click()');

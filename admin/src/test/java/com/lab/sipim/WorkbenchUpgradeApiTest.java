@@ -19,6 +19,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class WorkbenchUpgradeApiTest {
     @Autowired MockMvc mvc; @Autowired ObjectMapper json; @Autowired CdrRepository calls;
     @Autowired UserRepository users; @Autowired LoginTokens tokens; @Autowired WorkbenchQueries queries;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired com.lab.sipim.service.AccountManagement accounts;
+    @org.springframework.boot.test.mock.mockito.SpyBean com.lab.sipim.service.AdminAudit audit;
     String admin;
     @BeforeEach void setup(){calls.deleteAll();admin=tokens.issue(users.findByUsername("1001").orElseThrow().getId());}
     void call(String peer,int second){var c=new Cdr();c.setCaller("1001");c.setCalleeOrRoom(peer);c.setStartedAt(Instant.parse("2026-11-06T00:00:00Z").plusSeconds(second));c.setDurationSec(10);calls.save(c);}
@@ -40,5 +43,27 @@ class WorkbenchUpgradeApiTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1));
         mvc.perform(get("/api/admin/workbench/cdr/page").header("Authorization","Bearer "+admin).param("fromTime","invalid"))
             .andExpect(status().isBadRequest());
+    }
+    @Test void exportsAllMatchingRowsAndPersistsAudit() throws Exception {
+        for(int i=0;i<126;i++)call("1002",i);
+        var pending=mvc.perform(get("/api/admin/workbench/cdr/export").header("Authorization","Bearer "+admin))
+            .andExpect(request().asyncStarted()).andReturn();
+        var done=mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn();
+        String csv=new String(done.getResponse().getContentAsByteArray(),java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(csv.startsWith("\uFEFF\"id\""));assertEquals(127,csv.lines().count());
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM audit_events WHERE action='DATA_EXPORT' AND result='SUCCESS'",Long.class)>0);
+        mvc.perform(get("/api/admin/workbench/operations").header("Authorization","Bearer "+admin))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(1)).andExpect(jsonPath("$.esl.enabled").value(false));
+        mvc.perform(get("/api/admin/workbench/audit/page").header("Authorization","Bearer "+admin).param("action","DATA_EXPORT"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].action").value("DATA_EXPORT"));
+    }
+    @Test void accountChangeRollsBackIfAuditCannotBeWritten() {
+        var user=users.findByUsername("1002").orElseThrow();user.setDisabled(false);users.saveAndFlush(user);
+        org.mockito.Mockito.doThrow(new IllegalStateException("test write failure")).when(audit)
+            .record("1001","USER_DISABLE","1002","SUCCESS","account state changed");
+        try {
+            assertThrows(IllegalStateException.class,()->accounts.state(user.getId(),true,"test","1001"));
+            assertFalse(users.findById(user.getId()).orElseThrow().isDisabled());
+        } finally {org.mockito.Mockito.reset(audit);}
     }
 }

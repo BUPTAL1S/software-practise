@@ -59,7 +59,7 @@
     clearTimeout(toastTimer);
     text('toast', ''); $('toast').style.display = 'none';
     $('registerForm').reset(); $('roomForm').reset();
-    ['rangeStart', 'rangeEnd', 'filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
+    ['fileFrom','fileTo','auditActor','auditAction','rangeStart', 'rangeEnd', 'filterCaller', 'filterCallee', 'chatUserFilter', 'chatPeerFilter', 'chatRoomFilter', 'chatRoomSenderFilter']
       .forEach(id => { $(id).value = ''; });
     ['cdrCountBadge', 'roomCountBadge', 'userCountBadge', 'fileCountBadge', 'roomChatBadge']
       .forEach(id => text(id, '--'));
@@ -166,8 +166,8 @@
     return result;
   }
   function statusFor(key) {
-    const tab = key === 'roomChat' || key === 'chat' ? 'chat' : key;
-    const keys = tab === 'chat' ? ['chat', 'roomChat'] : [key];
+    const tab = key === 'audit' || key === 'operations' ? 'operations' : key === 'roomChat' || key === 'chat' ? 'chat' : key;
+    const keys = tab === 'operations' ? ['operations','audit'] : tab === 'chat' ? ['chat', 'roomChat'] : [key];
     const failed = keys.map(k => failures.get(k)).filter(Boolean);
     const stamp = resources.get(key)?.updated;
     text('dataStatus-' + tab, failed.length ? '刷新失败：' + failed.join('；') + '。已保留上次数据'
@@ -187,7 +187,7 @@
       if (!current()) return;
       render(data);
       item.updated = new Date().toISOString(); failures.delete(key);
-      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].includes(key)) statusFor(key);
+      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].includes(key)) statusFor(key);
     }).catch(error => {
       if (!current() || error.name === 'AbortError') return;
       failures.set(key, error.message);
@@ -200,7 +200,7 @@
         text('statOnlineUsers', '--'); text('statOnlineUsersDesc', '会话状态未知');
         renderUsers();
       }
-      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].includes(key)) statusFor(key);
+      if (['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].includes(key)) statusFor(key);
     }).finally(() => {
       if (resources.get(key) === item) item.promise = null;
       if (current()) syncSummary();
@@ -252,6 +252,13 @@
       if (currentEpoch === epoch) { deletingUsers.delete(user.id); renderUsers(); }
     }
   }
+  function renderOperations(data) {
+      const esl=data.esl || {};
+      const lines=[['后台版本',data.version],['构建提交',data.revision],['启动时间',time(data.startedAt)],['运行时长',duration(data.uptimeSeconds)],['数据库版本',data.schemaVersion],['历史保留身份数',data.reservedHistoricalIdentities],['ESL最近连接',time(esl.lastConnectedAt)],['ESL最近断开',time(esl.lastDisconnectedAt)],['最近人数同步',time(esl.lastSnapshotAt)],['人数状态',esl.roomStateFresh?'有效':'未知或已过期'],['最近连接错误',esl.lastError || '无'],['连接尝试次数',esl.connectionAttempts]];
+      renderTable('operationsTableBody',lines,2,item=>row(item[0],item[1]??'--'));
+      text('statPeakRoomMembers',data.globalPeakRoomMembers??'--');
+
+  }
   function baseLoads(force) {
     return [
       load('health', base + '/health', data => {
@@ -263,12 +270,13 @@
         text('eslStatus', label);
         $('eslStatus').className = 'badge badge-' + (esl?.enabled && esl?.connected ? 'success' : 'gray');
       }, force),
+      load('operations',base+'/operations',renderOperations,force),
       load('stats', base + '/query-stats?' + dateParams(), data => {
         text('statTotalCalls', data.totalCalls ?? '--');
         text('statTotalDuration', duration(data.totalDurationSec));
         text('statTotalDurationDesc', '累计已上报通话时长');
         text('statAvgDuration', duration(data.averageDurationSec));
-        text('statPeakRoomMembers', data.peakRoomMembers ?? '--');
+
       }, force),
       load('online', base + '/users/online', data => {
         if (!Array.isArray(data.users)) throw new Error('会话列表格式不正确');
@@ -304,6 +312,9 @@
     if(!['users','rooms'].includes(resource))dateParams().forEach((value,key)=>url.searchParams.set(key,value));
     const requestedSize = Math.min(100, Number(url.searchParams.get('limit') || 25));
     url.searchParams.delete('limit');
+    if(key==='users' && $('userState').value)url.searchParams.set('disabled',$('userState').value);
+    if(key==='rooms' && $('roomState').value)url.searchParams.set('archived',$('roomState').value);
+    if(key==='files')for(const [key,id] of [['from','fileFrom'],['to','fileTo']])if($(id).value.trim())url.searchParams.set(key,$(id).value.trim());
     const signature = url.searchParams.toString();
     let state = paging.get(key);
     if (!state || state.signature !== signature) {
@@ -315,7 +326,7 @@
       if (!data || !Array.isArray(data.items)) throw Error('分页响应格式不正确');
       state.snapshot = data.snapshotMaxId;
       render(data.items);
-      const tab = key === 'chat' || key === 'roomChat' ? 'chat' : key;
+      const tab = key === 'audit' ? 'operations' : key === 'chat' || key === 'roomChat' ? 'chat' : key;
       let host = $('pager-' + key);
       if (!host) {host=element('div',null,'form-inline'); host.id='pager-'+key; $('tab-'+tab).append(host);}
       const previous=button('上一页',()=>{state.page--; panelLoads(true);}); previous.disabled=state.page===0;
@@ -360,6 +371,9 @@
         button('下载', event => download(file, event.currentTarget))));
       text('fileCountBadge', data.length + ' 个');
     }, force)];
+    if (activeTab === 'operations') return [paged('audit',base+'/audit?'+new URLSearchParams({actor:$('auditActor').value.trim(),action:$('auditAction').value.trim()}),data=>{
+      renderTable('auditTableBody',data,7,item=>row(item.id,time(item.occurred_at),item.actor,item.action,item.target,badge(item.result,item.result==='SUCCESS'?'success':'gray'),item.detail));
+    },force)];
     const params = new URLSearchParams({ limit: $('chatLimit').value });
     if ($('chatUserFilter').value.trim()) params.set('user', $('chatUserFilter').value.trim());
     if ($('chatPeerFilter').value.trim()) params.set('peer', $('chatPeerFilter').value.trim());
@@ -403,7 +417,7 @@
     }
   }
   function activateTab(id) {
-    ['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat'].forEach(abortResource);
+    ['cdr', 'rooms', 'users', 'files', 'chat', 'roomChat','operations','audit'].forEach(abortResource);
     activeTab = id.replace('tab-', '');
     document.querySelectorAll('[data-tab]').forEach(item => {
       const selected = item.dataset.tab === id;
@@ -451,9 +465,12 @@
     if (!refreshing) { refreshQueued = false; refresh(true); }
   }
   function install() {
+    $('queryAudit').addEventListener('click',()=>panelLoads(true));
+    $('queryFiles').addEventListener('click',()=>panelLoads(true));
+    ['userState','roomState'].forEach(id=>$(id).addEventListener('change',()=>panelLoads(true)));
     $('applyRange').addEventListener('click',()=>{paging.clear();refresh(true);});
     $('clearRange').addEventListener('click',()=>{$('rangeStart').value='';$('rangeEnd').value='';paging.clear();refresh(true);});
-    for(const [id,resource,filters] of [['exportCdr','cdr',{caller:'filterCaller',callee:'filterCallee'}],['exportFiles','files',{}],['exportChat','messages',{user:'chatUserFilter',peer:'chatPeerFilter'}],['exportRoomChat','room-messages',{room:'chatRoomFilter',sender:'chatRoomSenderFilter'}]]) {
+    for(const [id,resource,filters] of [['exportCdr','cdr',{caller:'filterCaller',callee:'filterCallee'}],['exportFiles','files',{from:'fileFrom',to:'fileTo'}],['exportChat','messages',{user:'chatUserFilter',peer:'chatPeerFilter'}],['exportRoomChat','room-messages',{room:'chatRoomFilter',sender:'chatRoomSenderFilter'}]]) {
       $(id).addEventListener('click',event=>exportData(resource,filters,event.currentTarget));
     }
 

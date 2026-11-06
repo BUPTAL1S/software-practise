@@ -116,7 +116,7 @@ public class LoginController {
         user.setPasswordHash(passwordEncoder.encode(password));
         User saved = users.save(user);
         reservations.reserve(username,"account");reservations.reserve(sipId,"account");
-        audit.record(username,"USER_CREATE",username,"SUCCESS","account created");
+        audit.record(audit.actor(username),"USER_CREATE",username,"SUCCESS","account created");
 
         String token = tokens.issue(saved.getId());
         Map<String, Object> resp = new LinkedHashMap<>();

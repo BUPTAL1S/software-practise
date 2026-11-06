@@ -73,6 +73,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7).trim() : "";
         User user = tokens.userIdOf(token).flatMap(users::findById).orElse(null);
         if (user == null || user.isDisabled()) return deny(response, 401, "unauthorized");
+        request.setAttribute("auditActor",user.getUsername());
         if (adminOnly && !isAdmin(user)) return deny(response, 403, "仅管理员账号 1001 可以访问管理工作台");
         if (isAdmin(user)) return true;
 

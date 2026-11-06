@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/admin")
 public class AdminSessionController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
     private final UserRepository users;
     private final PasswordEncoder passwords;
     private final LoginTokens tokens;
@@ -29,6 +30,7 @@ public class AdminSessionController {
             return ResponseEntity.status(401).body(Map.of("error", "账号或密码错误"));
         if (!ApiAccessPolicy.isAdmin(user))
             return ResponseEntity.status(403).body(Map.of("error", "仅管理员账号 1001 可以登录工作台"));
+        audit.record(user.getUsername(),"ADMIN_LOGIN",user.getUsername(),"SUCCESS","browser session issued");
         return ResponseEntity.ok(Map.of("token", tokens.issue(user.getId()), "username", user.getUsername(), "role", "ADMIN"));
     }
 

@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/rooms")
 public class RoomController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
 
     private final RoomRepository roomRepo;
     private final RoomMessageRepository messageRepo;
@@ -244,6 +245,7 @@ public class RoomController {
         if (customSipUri != null) {
             room.setSipUri(customSipUri);
             Room saved = roomRepo.save(room);
+            audit.record(audit.actor("client"),"ROOM_CREATE",saved.getSipUri(),"SUCCESS","room created");
             return ResponseEntity.status(HttpStatus.CREATED).body(formatRoom(saved));
         }
 
@@ -254,6 +256,7 @@ public class RoomController {
         saved.setSipUri("room-" + saved.getId());
         saved = roomRepo.save(saved);
 
+        audit.record(audit.actor("client"),"ROOM_CREATE",saved.getSipUri(),"SUCCESS","room created");
         return ResponseEntity.status(HttpStatus.CREATED).body(formatRoom(saved));
     }
 

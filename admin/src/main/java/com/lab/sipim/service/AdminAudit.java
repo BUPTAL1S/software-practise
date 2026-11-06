@@ -10,6 +10,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdminAudit {
     private final JdbcTemplate jdbc;
     public AdminAudit(JdbcTemplate jdbc) {this.jdbc=jdbc;}
+    public String actor(String fallback) {
+        var attributes=org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if(attributes instanceof org.springframework.web.context.request.ServletRequestAttributes web) {
+            Object actor=web.getRequest().getAttribute("auditActor");if(actor instanceof String name)return name;
+        }
+        return fallback;
+    }
     @Transactional public void record(String actor,String action,String target,String result,String detail) {
         jdbc.update("INSERT INTO audit_events(occurred_at,actor,action,target,result,detail) VALUES(?,?,?,?,?,?)",
             Instant.now().toString(), bounded(actor,64),bounded(action,64),bounded(target,128),bounded(result,16),bounded(detail,256));
