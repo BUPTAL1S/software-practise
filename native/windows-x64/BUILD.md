@@ -86,6 +86,26 @@ Windows 端本地摄像头预览的“照镜子”翻转功能由 `winmirror.dll
 
 本机合成视频验证：`mvn -f client/pom.xml -Dtest=NativeLayoutIntegrationTest -Dsip.nativeLayoutTest=true test`。它使用两个 Colorbar 设备，验证最大化、连续 32 次缩放、远端摄像头关闭后仅保留预览和镜像隔离。输出截图在 `client/target/test-snapshots/`；这是本机原生窗口验证，不代表双机真实通话验收。macOS 源码同步了 ABI，但须在 Mac 重新编译和实测。
 
+### 2026-11-06 挂断后输入失效修复
+
+[video-idle-events-2.17.patch](patches/video-idle-events-2.17.patch) 保留 Windows SDL
+线程在最后一个视频流销毁后的消息处理。原先空流列表会无限等待信号量；与 JavaFX
+共享过输入队列的 SDL 线程停止取消息后，主界面可以更新、来电可以弹窗，鼠标输入却失效。
+Windows 现在继续按原有 50 ms 间隔处理事件；其他平台仍保留原来的空闲等待。
+没有后台合成视频、摄像头采集或媒体发送用于维持这个循环。
+
+构建脚本会应用此补丁，Windows 打包脚本会拒绝没有新策略标记的旧 `pjsua2.dll`。
+在 Windows 上运行以下回归检查（需要 JDK 17、MSYS2 MinGW64 和 Maven）：
+
+```powershell
+./scripts/test-native-idle-events.ps1 -JdkHome $env:JAVA_HOME
+```
+
+该测试仅使用隐藏 Colorbar 和同进程 SDL 线程的私有消息，不模拟键鼠、不采集摄像头或
+麦克风、不注册账号、不连接信令/MCU。先验证活动流的消息处理，再确认 HWND 已销毁，
+最后验证空闲线程仍取消息，重复五轮并检查正常退出。现场诊断和验证边界见
+[本次报告](../../docs/reports/windows-input-hang-20261106.md)。
+
 ## 启动
 
 仓库根目录下 `native/windows-x64` 已有 dll 后，在 `client/` 双击 `启动.bat`，或：

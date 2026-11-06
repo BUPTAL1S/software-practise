@@ -1,0 +1,31 @@
+diff --git a/pjmedia/src/pjmedia-videodev/sdl_dev.c b/pjmedia/src/pjmedia-videodev/sdl_dev.c
+--- a/pjmedia/src/pjmedia-videodev/sdl_dev.c
++++ b/pjmedia/src/pjmedia-videodev/sdl_dev.c
+@@ -305,6 +305,10 @@
+         sdl_log_err("SDL_Init()");
+         return PJMEDIA_EVID_INIT;
+     }
++
++#if defined(PJ_WIN32) && PJ_WIN32 != 0
++    PJ_LOG(3, (THIS_FILE, "SDL idle event policy: pump-without-streams"));
++#endif
+ 
+     return PJ_SUCCESS;
+ }
+@@ -426,8 +430,15 @@
+         pj_mutex_lock(sf->mutex);
+         if (pj_list_empty(&sf->streams)) {
+             pj_mutex_unlock(sf->mutex);
+-            /* Wait until there is any stream. */
++            /* Cross-thread HWND parenting attaches the SDL and host input
++             * queues on Windows. Input/IME messages may remain after the last
++             * renderer is destroyed. Keep pumping on the SDL owner thread at
++             * the existing 50 ms cadence, including while no stream exists;
++             * otherwise the host can repaint yet stop receiving user input.
++             * Other platforms retain their original idle wait. */
++#if !defined(PJ_WIN32) || PJ_WIN32 == 0
+             pj_sem_wait(sf->sem);
++#endif
+         } else
+             pj_mutex_unlock(sf->mutex);
+ 
