@@ -27,6 +27,9 @@ if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('Video latency policy: 
 if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('SDL viewport policy: renderer-output aspect-fit')) {
     throw 'Rebuild PJSUA2 with the viewport patch before packaging.'
 }
+if (-not [Text.Encoding]::ASCII.GetString($jni).Contains('SDL idle event policy: pump-without-streams')) {
+    throw 'Rebuild PJSUA2 with the Windows idle-event patch before packaging; older DLLs can freeze input after video hangup.'
+}
 foreach ($helper in @(@('callwindow.dll','Java_lab_sip_client_WindowLayout_attachScaledNative'),
                        @('winmirror.dll','Java_lab_sip_client_NativeMirror_mirrorApiVersionNative'))) {
     $binary = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $native $helper[0])))

@@ -12,7 +12,7 @@ if($LASTEXITCODE -ne 0 -or $head -ne '5a457451fa2712ba18e12b01738e8ff3af2b26fd')
 if(-not $JdkHome -or -not (Test-Path -LiteralPath (Join-Path $JdkHome 'include\jni.h'))) {throw 'A Windows JDK 17 with JNI headers is required.'}
 $release=Get-Content -LiteralPath (Join-Path $JdkHome 'release') -Raw
 if($release -notmatch 'JAVA_VERSION="17\.' -or $release -notmatch 'OS_NAME="Windows"' -or $release -notmatch 'OS_ARCH="(x86_64|amd64)"') {throw 'Use a Windows x64 JDK 17.'}
-foreach($name in @('video-hangup-2.17.patch','video-latency-2.17.patch','video-viewport-2.17.patch')) {
+foreach($name in @('video-hangup-2.17.patch','video-latency-2.17.patch','video-viewport-2.17.patch','video-idle-events-2.17.patch')) {
     $patch=Join-Path $repo ('native\windows-x64\patches\'+$name)
     & git -C $source apply --check $patch 2>$null
     if($LASTEXITCODE -eq 0) {
@@ -57,7 +57,7 @@ try {
     if($LASTEXITCODE -ne 0) {throw 'Native build failed; no installed DLL was replaced.'}
     $dll=Join-Path $source 'pjsip-apps\src\swig\java\output\pjsua2.dll'
     $metadata=[ordered]@{sourceCommit=$head;host='x86_64-w64-mingw32';dll=$dll;sha256=(Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant();
-        bytes=(Get-Item -LiteralPath $dll).Length;patches=@('video-hangup-2.17.patch','video-latency-2.17.patch','video-viewport-2.17.patch');installed=$false}
+        bytes=(Get-Item -LiteralPath $dll).Length;patches=@('video-hangup-2.17.patch','video-latency-2.17.patch','video-viewport-2.17.patch','video-idle-events-2.17.patch');installed=$false}
     $metadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $source 'native-build-result.json') -Encoding utf8
     $metadata | ConvertTo-Json
 } finally {foreach($name in $previous.Keys) {[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
