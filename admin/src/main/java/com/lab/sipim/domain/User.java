@@ -10,6 +10,15 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "users")
 public class User {
+    @Column(nullable = false) private boolean disabled;
+    @Column(name="disabled_reason") private String disabledReason;
+    @Column(name="disabled_at") private String disabledAt;
+    public boolean isDisabled() {return disabled;}
+    public void setDisabled(boolean value) {disabled=value;}
+    public String getDisabledReason() {return disabledReason;}
+    public void setDisabledReason(String value) {disabledReason=value;}
+    public String getDisabledAt() {return disabledAt;}
+    public void setDisabledAt(String value) {disabledAt=value;}
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

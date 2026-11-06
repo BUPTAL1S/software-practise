@@ -46,7 +46,7 @@ class UserDeletionApiTest {
             User target = users.findByUsername(name).orElseGet(User::new);
             target.setUsername(name);
             target.setSipId(name);
-            target.setRole("USER");
+            target.setRole("USER"); target.setDisabled(false);
             target.setPasswordHash(passwords.encode(name));
             users.saveAndFlush(target);
         }
@@ -95,7 +95,7 @@ class UserDeletionApiTest {
 
         mvc.perform(delete("/api/users/" + target.getId()).header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("1008"));
-        assertThat(users.findById(target.getId())).isEmpty();
+        assertThat(users.findById(target.getId()).orElseThrow().isDisabled()).isTrue();
         assertThat(tokens.userIdOf(first)).isEmpty();
         assertThat(tokens.userIdOf(second)).isEmpty();
         assertThat(tokens.userIdOf(admin)).isPresent();
@@ -108,10 +108,10 @@ class UserDeletionApiTest {
                 .content("{\"username\":\"1008\",\"password\":\"1008\"}"))
                 .andExpect(status().isUnauthorized());
         mvc.perform(delete("/api/users/" + target.getId()).header("Authorization", "Bearer " + admin))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isOk());
         seeds.run();
-        assertThat(users.findByUsername("1008")).isEmpty();
-        assertThat(users.findAll().stream()
+        assertThat(users.findByUsername("1008").orElseThrow().isDisabled()).isTrue();
+        assertThat(users.findAll().stream().filter(u -> !u.getId().equals(target.getId()))
                 .map(u -> List.of(u.getId().toString(), u.getUsername(), u.getSipId(), u.getPasswordHash(), u.getRole())).toList())
                 .containsExactlyElementsOf(remaining);
     }
@@ -122,5 +122,17 @@ class UserDeletionApiTest {
         User target = users.findByUsername("1009").orElseThrow();
         mvc.perform(delete("/api/admin/workbench/users/" + target.getId()).header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("1009"));
+    }
+    @Test void disabledIdentityCannotBeReRegisteredAndRestoreKeepsOriginalId() throws Exception {
+        long id=users.findByUsername("1008").orElseThrow().getId();
+        mvc.perform(delete("/api/users/"+id).header("Authorization","Bearer "+admin)).andExpect(status().isOk());
+        mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"username\":\"1008\",\"password\":\"different\"}")).andExpect(status().isConflict());
+        mvc.perform(patch("/api/admin/workbench/users/"+id+"/state").header("Authorization","Bearer "+admin)
+            .contentType(MediaType.APPLICATION_JSON).content("{\"disabled\":false}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.disabled").value(false));
+        assertThat(users.findByUsername("1008").orElseThrow().getId()).isEqualTo(id);
+        mvc.perform(post("/api/login").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"username\":\"1008\",\"password\":\"1008\"}")).andExpect(status().isOk());
     }
 }

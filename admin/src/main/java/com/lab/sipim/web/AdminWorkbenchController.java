@@ -29,7 +29,7 @@ public class AdminWorkbenchController {
     @PostMapping("/rooms") public ResponseEntity<?> createRoom(@RequestBody(required = false) RoomController.CreateRoomRequest request) {
         return rooms.createRoom(request);
     }
-    @GetMapping("/users") public Object users() { return users.list(); }
+    @GetMapping("/users") public Object users() { return users.managementList(); }
     @GetMapping("/users/online") public Object online() { return users.online(); }
     @PostMapping("/users") public ResponseEntity<?> createUser(@RequestBody(required = false) LoginController.RegisterRequest request) {
         return users.create(request);
@@ -38,6 +38,8 @@ public class AdminWorkbenchController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         return users.delete(id, authorization);
     }
+    @PatchMapping("/users/{id}/state") public ResponseEntity<?> state(@PathVariable Long id,@RequestBody Map<String,Object> body,
+            @RequestHeader("Authorization") String auth) {return users.state(id,body,auth);}
     @GetMapping("/files") public ResponseEntity<?> files(@RequestParam(defaultValue = "100") int limit) {
         return files.list(null, null, limit);
     }

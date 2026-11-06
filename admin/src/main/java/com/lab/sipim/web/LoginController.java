@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api")
 public class LoginController {
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.IdentityReservations reservations;
+    @org.springframework.beans.factory.annotation.Autowired private com.lab.sipim.service.AdminAudit audit;
 
     static final String MISSING = "username and password are required";
     static final String UNAUTHORIZED = "unauthorized";
@@ -43,7 +45,7 @@ public class LoginController {
         if (found.isEmpty()) {
             found = users.findBySipId(trimmedUser);
         }
-        if (found.isEmpty() || !IdentityRules.passwordFits(request.password())
+        if (found.isEmpty() || found.get().isDisabled() || !IdentityRules.passwordFits(request.password())
                 || !passwordEncoder.matches(request.password(), found.get().getPasswordHash())) {
             return ResponseEntity.status(401).body(Map.of("error", UNAUTHORIZED));
         }
@@ -81,6 +83,7 @@ public class LoginController {
     }
 
     @PostMapping("/register")
+    @org.springframework.transaction.annotation.Transactional
     public synchronized ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
         if (request == null || blank(request.username()) || blank(request.password())) {
             return ResponseEntity.badRequest().body(Map.of("error", MISSING));
@@ -100,10 +103,10 @@ public class LoginController {
         }
         // Usernames and extensions are both accepted as identities. Reserve the
         // entire alias namespace so a new account cannot claim another user's extension/name.
-        if (users.existsByUsernameIgnoreCase(username) || users.existsBySipIdIgnoreCase(username)) {
+        if (reservations.reserved(username) || users.existsByUsernameIgnoreCase(username) || users.existsBySipIdIgnoreCase(username)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "username already exists"));
         }
-        if (users.existsBySipIdIgnoreCase(sipId) || users.existsByUsernameIgnoreCase(sipId)) {
+        if (reservations.reserved(sipId) || users.existsBySipIdIgnoreCase(sipId) || users.existsByUsernameIgnoreCase(sipId)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "sipId already exists"));
         }
 
@@ -112,6 +115,8 @@ public class LoginController {
         user.setSipId(sipId);
         user.setPasswordHash(passwordEncoder.encode(password));
         User saved = users.save(user);
+        reservations.reserve(username,"account");reservations.reserve(sipId,"account");
+        audit.record(username,"USER_CREATE",username,"SUCCESS","account created");
 
         String token = tokens.issue(saved.getId());
         Map<String, Object> resp = new LinkedHashMap<>();

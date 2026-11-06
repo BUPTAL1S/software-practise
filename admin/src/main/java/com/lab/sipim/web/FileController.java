@@ -174,7 +174,7 @@ public class FileController {
         boolean avatar = "profile".equals(index.getToUserOrRoom()) && userRepo.existsByAvatarUrl("/api/files/" + id);
         if (!avatar) {
             User viewer = tokens.userIdOf(MeController.bearerToken(authorization)).flatMap(userRepo::findById).orElse(null);
-            if (viewer == null) return ResponseEntity.status(401).build();
+            if (viewer == null || viewer.isDisabled()) return ResponseEntity.status(401).build();
             String recipient = Optional.ofNullable(index.getToUserOrRoom()).orElse("");
             String roomKey = recipient.replaceFirst("(?i)^sip:", "").split("@", 2)[0];
             // Rooms currently form a public directory: their attachments require a logged-in account.
