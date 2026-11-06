@@ -44,6 +44,9 @@ public class EslEventListener implements AutoCloseable {
 
     private volatile boolean running = true;
     private volatile boolean connected = false;
+    private volatile long lastSnapshotAt;
+    public boolean hasFreshRoomState() {return connected && lastSnapshotAt > 0 && System.currentTimeMillis()-lastSnapshotAt < 15000;}
+    public long getLastSnapshotAt(){return lastSnapshotAt;}
     private Thread workerThread;
     private volatile Socket activeSocket;
     private java.util.concurrent.ScheduledExecutorService reconciliationWorker;
@@ -456,6 +459,7 @@ public class EslEventListener implements AutoCloseable {
                 conferenceJoinTimes.clear();
                 conferenceJoinTimes.putAll(joinTimeMaps);
             }
+            lastSnapshotAt=System.currentTimeMillis();
             return true;
         } catch (Exception error) {
             log.warn("Unable to reconcile conference snapshot: {}", error.getMessage());
