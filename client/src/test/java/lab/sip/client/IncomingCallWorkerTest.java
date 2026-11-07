@@ -169,7 +169,8 @@ class IncomingCallWorkerTest {
 
   private void runProbe(Class<?> probe, String direction, boolean videoOffer) throws Exception {
     Path log = Path.of("target/" + direction + "-worker-" + videoOffer + ".log").toAbsolutePath();
-    String java = Path.of(System.getProperty("java.home"), "bin", "java.exe").toString();
+    String java = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
     String cp = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process child = new ProcessBuilder(java, "-cp", cp, probe.getName(), Boolean.toString(videoOffer))
         .redirectErrorStream(true).redirectOutput(log.toFile()).start();

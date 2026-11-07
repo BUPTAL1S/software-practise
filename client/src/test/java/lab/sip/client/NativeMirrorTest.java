@@ -45,6 +45,20 @@ class NativeMirrorTest {
     } catch (Exception e) {
       org.junit.jupiter.api.Assertions.fail(e);
     }
+
+    Path macDylib = root.resolve("native/macos-arm64/libmacmirror.dylib");
+    Path macSh = root.resolve("native/macos-arm64/build-macmirror.sh");
+    Path macSrc = root.resolve("native/macos-arm64/NativeMirror.m");
+
+    assertTrue(Files.isRegularFile(macDylib), "macOS 镜像动态库 libmacmirror.dylib 应当存在");
+    assertTrue(Files.isRegularFile(macSh), "macOS 编译脚本 build-macmirror.sh 应当存在");
+    assertTrue(Files.isRegularFile(macSrc), "macOS 源码 NativeMirror.m 应当存在");
+
+    try {
+      assertTrue(Files.size(macDylib) > 1024, "libmacmirror.dylib 文件大小应大于 1KB");
+    } catch (Exception e) {
+      org.junit.jupiter.api.Assertions.fail(e);
+    }
   }
 
   @Test
@@ -75,13 +89,22 @@ class NativeMirrorTest {
 
     // 默认应当开启镜像预览（符合照镜子直觉）
     assertTrue(sip.isPreviewMirrorEnabled(), "摄像头预览默认应当开启镜像模式");
+    assertTrue(sip.isCameraMirrorEnabled(), "所有本地摄像头显示默认应当开启镜像模式");
 
     // 切换为真实模式
     sip.togglePreviewMirror();
     assertFalse(sip.isPreviewMirrorEnabled(), "切换后应当为非镜像真实模式");
+    assertFalse(sip.isCameraMirrorEnabled(), "切换后全局摄像头镜像应当关闭");
 
     // 再次切换回镜像模式
     sip.togglePreviewMirror();
     assertTrue(sip.isPreviewMirrorEnabled(), "再次切换后应当恢复镜像模式");
+    assertTrue(sip.isCameraMirrorEnabled(), "再次切换后全局摄像头镜像应当恢复开启");
+
+    // setCameraMirrorEnabled 控制
+    sip.setCameraMirrorEnabled(false);
+    assertFalse(sip.isCameraMirrorEnabled(), "setCameraMirrorEnabled(false) 应生效");
+    sip.setCameraMirrorEnabled(true);
+    assertTrue(sip.isCameraMirrorEnabled(), "setCameraMirrorEnabled(true) 应生效");
   }
 }

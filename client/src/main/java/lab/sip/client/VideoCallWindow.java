@@ -214,9 +214,17 @@ final class VideoCallWindow {
           boolean applied = placement.apply(bounds, () -> WindowLayout.attach(nativeParent,
               requested.remote(), requested.pip(), requested.x(), requested.y(), requested.w(), requested.h(),
               requested.scaleX(), requested.scaleY()));
-          if (applied) Platform.runLater(() -> {
-            if (!disposed && requestedBounds == requested && requested.remote() != 0 && !remoteAvatarOff) showWaiting(false);
-          });
+          if (applied) {
+            if (requested.pip() != 0) {
+              NativeMirror.applyPreviewMirror(requested.pip(), "本地画中画 (镜像)");
+            }
+            if (requested.remote() != 0 && NativeMirror.isMirrored(requested.remote())) {
+              NativeMirror.restoreNormal(requested.remote(), null);
+            }
+            Platform.runLater(() -> {
+              if (!disposed && requestedBounds == requested && requested.remote() != 0 && !remoteAvatarOff) showWaiting(false);
+            });
+          }
           // Coalesce resize events while native parenting is busy; never build an unbounded queue.
         } while (bounds != requestedBounds && !disposed);
       } finally {

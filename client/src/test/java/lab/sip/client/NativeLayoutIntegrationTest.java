@@ -15,7 +15,9 @@ class NativeLayoutIntegrationTest {
   @Test void maximizedAndContinuousResizeKeepIndependentRenderersInsideTheCallSurface() throws Exception {
     int soakSeconds = Math.max(0, Math.min(180, Integer.getInteger("sip.nativeLayoutSoakSeconds", 0)));
     Path log = Path.of("target/native-layout.log").toAbsolutePath();
-    var child = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
+    String javaBin = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
+    var child = new ProcessBuilder(javaBin,
         "-Dsip.captureDeviceName=Colorbar generator", "-Dsip.nativeLayoutSoakSeconds=" + soakSeconds,
         "-Dsip.native.dir=" + NativeLoader.libraryFile().toAbsolutePath().getParent(),
         "-cp", System.getProperty("surefire.test.class.path"), Probe.class.getName())
@@ -76,6 +78,8 @@ class NativeLayoutIntegrationTest {
         Thread.sleep(350);
         fx(() -> { window.attachNative(remote,pip); return null; });
         awaitPlacement(remote,pip); screenshot("maximized");
+        assertTrue(NativeMirror.isMirrored(pip), "PiP handle must be mirrored after attachNative");
+        assertFalse(NativeMirror.isMirrored(remote), "Remote handle must NOT be mirrored after attachNative");
         fx(() -> { stage.setMaximized(false); return null; });
         for (int i=0; i<32; i++) {
           final int step=i;
