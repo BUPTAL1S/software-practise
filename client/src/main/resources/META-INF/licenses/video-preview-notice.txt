@@ -1,0 +1,15 @@
+Windows attachment preview uses JavaCV and JavaCPP 1.5.14 from Bytedeco.
+Their Apache License 2.0 terms are in apache-2.0.txt.
+JavaCV source: https://github.com/bytedeco/javacv/tree/1.5.14
+JavaCPP source: https://github.com/bytedeco/javacpp/tree/1.5.14
+
+The Windows JAR also includes the FFmpeg shared libraries from Maven Central
+org.bytedeco:ffmpeg:8.1.2-1.5.14:windows-x86_64, the non-GPL classifier.
+The libraries report LGPL version 3 or later. The license texts are in
+ffmpeg-lgpl-3.0.txt and ffmpeg-gpl-3.0.txt.
+FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
+FFmpeg preset build and patches: https://github.com/bytedeco/javacpp-presets/tree/1.5.14/ffmpeg
+
+The application dynamically loads these libraries through JavaCPP. To rebuild
+with modified compatible libraries, build the FFmpeg preset above and use the
+resulting native dependency with the client Maven project.
