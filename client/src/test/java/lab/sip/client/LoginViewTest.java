@@ -99,6 +99,9 @@ class LoginViewTest {
         }
         account.setText("0123"); confirmation.setText("different"); submit.fire();
         assertNull(registered.get());
+        password.setText("123"); confirmation.setText("123"); submit.fire();
+        assertNull(registered.get(), "A short password must not reach the backend");
+        password.setText(chosenPassword);
         confirmation.setText(chosenPassword);
         login.scene().getRoot().applyCss(); login.scene().getRoot().layout();
         assertTrue(submit.localToScene(submit.getBoundsInLocal()).getMaxY() <= login.scene().getHeight(),

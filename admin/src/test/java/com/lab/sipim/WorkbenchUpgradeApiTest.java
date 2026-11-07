@@ -62,7 +62,8 @@ class WorkbenchUpgradeApiTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].action").value("DATA_EXPORT"));
     }
     @Test void accountChangeRollsBackIfAuditCannotBeWritten() {
-        var user=users.findByUsername("1002").orElseThrow();user.setDisabled(false);users.saveAndFlush(user);
+        var user=users.findByUsername("1002").orElseThrow();
+        users.updateAccountState(user.getId(), false, null, null);
         org.mockito.Mockito.doThrow(new IllegalStateException("test write failure")).when(audit)
             .record("1001","USER_DISABLE","1002","SUCCESS","account state changed");
         try {

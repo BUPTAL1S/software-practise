@@ -46,9 +46,10 @@ class UserDeletionApiTest {
             User target = users.findByUsername(name).orElseGet(User::new);
             target.setUsername(name);
             target.setSipId(name);
-            target.setRole("USER"); target.setDisabled(false);
+            target.setRole("USER");
             target.setPasswordHash(passwords.encode(name));
             users.saveAndFlush(target);
+            if (target.isDisabled()) users.updateAccountState(target.getId(), false, null, null);
         }
         admin = tokens.issue(users.findByUsername("1001").orElseThrow().getId());
     }
@@ -122,6 +123,24 @@ class UserDeletionApiTest {
         User target = users.findByUsername("1009").orElseThrow();
         mvc.perform(delete("/api/admin/workbench/users/" + target.getId()).header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("1009"));
+    }
+
+    @Test void profileSaveStartedBeforeDisableCannotRestoreTheAccount() throws Exception {
+        User staleProfile = users.findByUsername("1008").orElseThrow();
+        long id = staleProfile.getId();
+        mvc.perform(patch("/api/admin/workbench/users/" + id + "/state")
+                .header("Authorization", "Bearer " + admin).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"disabled\":true,\"reason\":\"test disable\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.disabled").value(true));
+
+        staleProfile.setNickname("已开始的资料更新");
+        users.saveAndFlush(staleProfile);
+
+        User stored = users.findById(id).orElseThrow();
+        assertThat(stored.isDisabled()).isTrue();
+        assertThat(stored.getDisabledReason()).isEqualTo("test disable");
+        assertThat(stored.getDisabledAt()).isNotBlank();
+        assertThat(stored.getNickname()).isEqualTo("已开始的资料更新");
     }
     @Test void disabledIdentityCannotBeReRegisteredAndRestoreKeepsOriginalId() throws Exception {
         long id=users.findByUsername("1008").orElseThrow().getId();
