@@ -262,6 +262,55 @@ class HttpFileClientTest {
     } finally { server.removeContext("/thumbnail"); }
   }
 
+  @Test void previewAuthenticatesAndDeletesAnOversizedChunkedResponse(@TempDir Path dir) throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    client.login("1001", "1001");
+    var authorization = new java.util.concurrent.atomic.AtomicReference<String>();
+    server.createContext("/api/files/105", exchange -> {
+      authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+      exchange.sendResponseHeaders(200, 0);
+      try (var output = exchange.getResponseBody()) { output.write(TEST_FILE_CONTENT); }
+    });
+    try {
+      Path target = dir.resolve("preview.mp4");
+      client.downloadPreview("/api/files/105", target, 1024);
+      assertArrayEquals(TEST_FILE_CONTENT, Files.readAllBytes(target));
+      assertEquals("Bearer tok-abc-123", authorization.get());
+      Files.delete(target);
+      assertThrows(IOException.class, () -> client.downloadPreview("/api/files/105", target, 4));
+      assertFalse(Files.exists(target));
+    } finally { server.removeContext("/api/files/105"); }
+  }
+
+  @Test void previewDoesNotFollowRedirectsOutsideBackend(@TempDir Path dir) throws Exception {
+    HttpFileClient client = new HttpFileClient(serverBaseUrl);
+    client.login("1001", "1001");
+    var foreign = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    var visited = new AtomicBoolean();
+    foreign.createContext("/attachment", exchange -> {
+      visited.set(true);
+      exchange.sendResponseHeaders(200, TEST_FILE_CONTENT.length);
+      try (var output = exchange.getResponseBody()) { output.write(TEST_FILE_CONTENT); }
+    });
+    foreign.start();
+    String foreignUrl = "http://127.0.0.1:" + foreign.getAddress().getPort() + "/attachment";
+    server.createContext("/api/files/106", exchange -> {
+      exchange.getResponseHeaders().set("Location", foreignUrl);
+      exchange.sendResponseHeaders(302, -1);
+      exchange.close();
+    });
+    try {
+      Path target = dir.resolve("preview.png");
+      assertThrows(IOException.class, () -> client.downloadPreview("/api/files/106", target, 1024));
+      assertThrows(IOException.class, () -> client.downloadPreview(foreignUrl, target, 1024));
+      assertFalse(visited.get());
+      assertFalse(Files.exists(target));
+    } finally {
+      server.removeContext("/api/files/106");
+      foreign.stop(0);
+    }
+  }
+
   @Test
   void testDownloadRelativeAndLocalhostRewriting(@TempDir Path tempDir) throws Exception {
     HttpFileClient client = new HttpFileClient(serverBaseUrl);

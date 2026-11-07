@@ -19,7 +19,9 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -112,6 +114,10 @@ public final class HttpFileClient {
           .connectTimeout(Duration.ofMillis(800))
           .followRedirects(HttpClient.Redirect.NORMAL)
           .build();
+
+  // Attachment previews only use the configured backend. Never forward its token on a redirect.
+  private static final HttpClient PREVIEW_CLIENT = HttpClient.newBuilder()
+      .connectTimeout(Duration.ofSeconds(5)).build();
 
   private final HttpClient httpClient;
   private volatile String baseUrl;
@@ -747,12 +753,54 @@ public final class HttpFileClient {
     if (!sameOrigin(uri, URI.create(getEffectiveBaseUrl()))) throw new IOException("不支持外部图片预览");
     var builder = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15)).GET();
     if (authToken != null && !authToken.isBlank()) builder.header("Authorization", "Bearer " + authToken);
-    var response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+    var response = PREVIEW_CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
     try (var input = response.body()) {
       if (response.statusCode() != 200) throw new IOException("图片下载失败，HTTP " + response.statusCode());
       byte[] bytes = input.readNBytes(8 * 1024 * 1024 + 1);
       if (bytes.length > 8 * 1024 * 1024) throw new IOException("图片过大，请下载查看");
       return bytes;
+    }
+  }
+
+  /** Fetch a preview into a private temporary file, retaining the backend's access checks. */
+  Path downloadPreview(String url, Path target, long maxBytes) throws IOException, InterruptedException {
+    URI uri = URI.create(normalizeFileUrl(url));
+    URI base = URI.create(getEffectiveBaseUrl());
+    String filePathPrefix = base.getPath().replaceFirst("/$", "") + "/api/files/";
+    if (!sameOrigin(uri, base) || !uri.getPath().matches(Pattern.quote(filePathPrefix) + "[0-9]+"))
+      throw new IOException("只能预览当前后台的附件");
+    var builder = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(60)).GET();
+    if (authToken != null && !authToken.isBlank()) builder.header("Authorization", "Bearer " + authToken);
+    boolean complete = false;
+    try {
+      var response = PREVIEW_CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+      try (var input = response.body()) {
+        if (response.statusCode() != 200) throw new IOException("预览加载失败，HTTP " + response.statusCode());
+        if (response.headers().firstValueAsLong("Content-Length").orElse(0) > maxBytes)
+          throw new IOException("附件超过预览大小限制，请下载后查看");
+        // An InputStream response can outlive the request timeout once headers arrive.
+        var deadline = new CompletableFuture<Void>().orTimeout(60, TimeUnit.SECONDS);
+        deadline.exceptionallyAsync(timeout -> {
+          try { input.close(); } catch (IOException ignored) { }
+          return null;
+        });
+        try (var output = Files.newOutputStream(target)) {
+          byte[] buffer = new byte[32 * 1024];
+          long total = 0;
+          int count;
+          while ((count = input.read(buffer)) != -1) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("预览已关闭");
+            total += count;
+            if (total > maxBytes) throw new IOException("附件超过预览大小限制，请下载后查看");
+            output.write(buffer, 0, count);
+          }
+          if (deadline.isCompletedExceptionally()) throw new IOException("附件预览加载超时");
+        } finally { deadline.complete(null); }
+      }
+      complete = true;
+      return target;
+    } finally {
+      if (!complete) Files.deleteIfExists(target);
     }
   }
 
