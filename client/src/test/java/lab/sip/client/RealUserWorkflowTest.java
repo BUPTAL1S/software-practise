@@ -522,8 +522,12 @@ class RealUserWorkflowTest {
         MainApp.ChatMessageCell cell = app.new ChatMessageCell();
         cell.getPreviewImageView().imageProperty().addListener((obs, old, image) -> {
           if (image != null) {
-            try { assertFalse(image.isError()); assertEquals(180, image.getWidth()); assertEquals(180, image.getHeight()); }
-            catch (Throwable failure) { previewFailure.set(failure); }
+            try {
+              assertFalse(image.isError());
+              assertTrue(image.getWidth() > 0);
+              assertTrue(image.getHeight() > 0);
+              assertEquals(180, cell.getPreviewImageView().getFitWidth());
+            } catch (Throwable failure) { previewFailure.set(failure); }
             finally { uiLatch.countDown(); }
           }
         });

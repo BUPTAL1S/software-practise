@@ -102,7 +102,7 @@ public final class NativeMirror {
       Path lib = NativeLoader.helperFile("winmirror.dll", "libmacmirror.dylib");
       if (Files.isRegularFile(lib)) {
         System.load(lib.toAbsolutePath().toString());
-        loaded = !os.contains("win") || mirrorApiVersionNative() == 2;
+        loaded = mirrorApiVersionNative() == 2;
       }
     } catch (UnsatisfiedLinkError e) {
       loaded = false;

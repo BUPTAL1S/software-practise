@@ -3115,13 +3115,18 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
         boolean hasLocal = item.getLocalPath() != null && Files.exists(item.getLocalPath());
         if (isImage) {
+          previewImageView.setVisible(true);
+          previewImageView.setManaged(true);
           var thumbnail = hasLocal ? attachmentPreviews.loadLocal(item.getLocalPath())
               : attachmentPreviews.load(httpFileClient, fm.getUrl());
           thumbnail.thenAccept(loaded -> Platform.runLater(() -> {
             if (getItem() != item || isEmpty() || sessionClosed) return;
-            previewImageView.setImage(loaded);
-            previewImageView.setVisible(true);
-            previewImageView.setManaged(true);
+            if (loaded != null) {
+              previewImageView.setImage(loaded);
+            } else {
+              previewImageView.setVisible(false);
+              previewImageView.setManaged(false);
+            }
           }));
           previewImageView.setOnMouseClicked(e -> previewAttachment(item));
         }

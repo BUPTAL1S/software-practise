@@ -12,7 +12,9 @@ import org.pjsip.pjsua2.*;
 class SdlIdleEventIntegrationTest {
   @Test void sdlOwnerStillPumpsMessagesAfterLastRendererStops() throws Exception {
     Path log=Path.of("target/native-idle-events.log").toAbsolutePath();
-    Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin","java.exe").toString(),
+    String javaBin = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
+    Process child=new ProcessBuilder(javaBin,
         "-Dsip.native.dir="+System.getProperty("sip.native.dir"),
         "-Dsip.idleProbe="+System.getProperty("sip.idleProbe"),
         "-cp",System.getProperty("surefire.test.class.path"),Probe.class.getName())

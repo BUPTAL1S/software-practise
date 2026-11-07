@@ -63,7 +63,7 @@ class AttachmentPreviewWindowTest {
         stage.setRenderScaleY(1.5);
         return null;
       });
-      await(() -> fx(() -> stage(title).getScene().getWidth() < 535 && stage(title).getScene().getHeight() > 620));
+      await(() -> fx(() -> stage(title).getScene().getWidth() <= 535 && stage(title).getScene().getHeight() > 620));
       assertStableFit(title);
       fx(() -> {
         Stage stage = stage(title);

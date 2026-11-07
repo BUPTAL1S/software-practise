@@ -9,10 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
-@EnabledOnOs(OS.WINDOWS)
+@EnabledOnOs({OS.WINDOWS, OS.MAC})
 class WindowLayoutNativeTest {
   @Test void invalidWindowsAreNotCachedAsSuccessfullyAttached() {
-    assertTrue(WindowLayout.isAvailable(), "Build callwindow.dll before this native test");
+    assertTrue(WindowLayout.isAvailable(), "Build callwindow library before this native test");
     assertFalse(WindowLayout.attach(1, 2, 0, 0, 0, 640, 360));
   }
 

@@ -41,7 +41,8 @@ class CameraPreviewLifecycleTest {
 
   private void runProbe(String mode) throws Exception {
     Path output = Path.of("target", "camera-lifecycle-" + mode + ".log").toAbsolutePath();
-    String javaBinary = Path.of(System.getProperty("java.home"), "bin", "java.exe").toString();
+    String javaBinary = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process child = new ProcessBuilder(javaBinary, "-cp", classpath, Probe.class.getName(), mode)
         .redirectErrorStream(true).redirectOutput(output.toFile()).start();
@@ -138,10 +139,16 @@ class CameraPreviewLifecycleTest {
           }
           long handle = sip.getPreviewWindowHandle();
           if (handle == 0) throw new AssertionError("No real camera preview");
+          if (NativeMirror.isSupported() && !NativeMirror.isMirrored(handle)) {
+            throw new AssertionError("Camera preview handle must be mirrored");
+          }
           long remote = inCall ? sip.getActiveVideoWindowHandle() : handle;
           if (remote == 0 || (inCall && remote == handle)) {
             throw new AssertionError("Video call must have a separate receive renderer: remote=" + remote
                 + ", preview=" + handle + ", connected=" + sip.isCallConnected());
+          }
+          if (inCall && NativeMirror.isSupported() && NativeMirror.isMirrored(remote)) {
+            throw new AssertionError("Remote call video must NOT be mirrored");
           }
           if (inRoom && !http.toggleRoomVmute(room, "1098", false)) throw new AssertionError("Conference unmute failed");
           CountDownLatch stopped = new CountDownLatch(1);

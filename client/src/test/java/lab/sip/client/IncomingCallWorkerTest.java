@@ -180,7 +180,8 @@ class IncomingCallWorkerTest {
 
   private void runProbe(Class<?> probe, String direction, boolean videoOffer) throws Exception {
     Path log = Path.of("target/" + direction + "-worker-" + videoOffer + ".log").toAbsolutePath();
-    String java = Path.of(System.getProperty("java.home"), "bin", "java.exe").toString();
+    String java = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
     String cp = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     List<String> command = new ArrayList<>(List.of(java));
     String nativeDir = System.getProperty("sip.native.dir");
