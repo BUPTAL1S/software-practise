@@ -611,6 +611,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             public void stateChanged() {
               Platform.runLater(
                   () -> {
+                    if (!sessionClosed) calls.syncRingtone();
                     if (sessionClosed || calls.isBusy()) return;
                     refreshButtons();
                     if (sip.isRegistered()) {
@@ -1259,6 +1260,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
     stage.setOnCloseRequest(
         e -> {
+          calls.silenceIncomingCall();
           probeAndPollTimeline.stop();
           roomPollingTimeline.stop();
           if (logs != null) {
@@ -1453,6 +1455,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private void logoutToLogin(Timeline polling, Timeline roomPolling) {
     if (sessionClosed) return;
     sessionClosed = true;
+    calls.silenceIncomingCall();
     backgroundLoginAllowed = false;
     heartbeatRoom = "";
     heartbeatExecutor.shutdownNow();
@@ -1797,6 +1800,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void refreshButtons() {
+    if (!sessionClosed) calls.syncRingtone();
     if (sessionClosed || calls.isBusy()) return;
     boolean on = sip.isStarted();
     boolean reg = sip.isRegistered();

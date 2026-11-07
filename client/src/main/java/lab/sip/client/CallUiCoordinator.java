@@ -44,6 +44,8 @@ final class CallUiCoordinator implements AutoCloseable {
   }
 
   private final Host host;
+  private final IncomingRingtone ringtone;
+  private Object silencedIncomingCall;
   private CallWindow callWindow;
   private VideoCallWindow videoCallWindow;
   private IncomingCallWindow incomingCallWindow;
@@ -72,7 +74,15 @@ final class CallUiCoordinator implements AutoCloseable {
           });
 
   CallUiCoordinator(Host host) {
+    this(host, new IncomingRingtone(error -> Platform.runLater(() -> {
+      LogView logs = host.logs();
+      if (logs != null) logs.append("警告", "来电铃声播放失败：" + error.getMessage());
+    })));
+  }
+
+  CallUiCoordinator(Host host, IncomingRingtone ringtone) {
     this.host = host;
+    this.ringtone = ringtone;
   }
 
   boolean isBusy() {
@@ -100,12 +110,16 @@ final class CallUiCoordinator implements AutoCloseable {
   }
 
   void hangup() {
+    Object call = host.sip().callIdentity();
+    silenceIncomingCall();
     // Queue behind camera work; teardown must not race native capture startup
     // or block JavaFX while SDL is waiting for the window message pump.
     callPreviews.execute(host.sip()::hangup, () -> {
       host.refreshMainUi();
       sync();
     }, error -> {
+      if (host.sip().callIdentity() == call) silencedIncomingCall = null;
+      syncRingtone();
       if (host.logs() != null) host.logs().append("错误", "挂断失败：" + error.getMessage());
       if (!callPreviews.isBusy()) host.refreshMainUi();
     });
@@ -135,7 +149,23 @@ final class CallUiCoordinator implements AutoCloseable {
     }
   }
 
+  void syncRingtone() {
+    if (closed) return;
+    SipService sip = host.sip();
+    Object call = sip.callIdentity();
+    if (call != silencedIncomingCall) silencedIncomingCall = null;
+    boolean waiting = call != null && sip.hasIncoming() && !sip.isCallConnected()
+        && call != silencedIncomingCall && sip.callIdentity() == call;
+    ringtone.update(waiting ? call : null);
+  }
+
+  void silenceIncomingCall() {
+    silencedIncomingCall = host.sip().callIdentity();
+    ringtone.update(null);
+  }
+
   void sync() {
+    syncRingtone();
     if (closed || callPreviews.isBusy()) return;
     SipService sip = host.sip();
     Object current = sip.callIdentity();
@@ -301,12 +331,16 @@ final class CallUiCoordinator implements AutoCloseable {
 
   void answer(boolean video) {
     if (callPreviews.isBusy()) return;
+    Object call = host.sip().callIdentity();
+    silenceIncomingCall();
     incomingAnswered = true;
     closeIncomingWindow();
     callPreviews.execute(() -> host.sip().answer(video), () -> {
       host.refreshMainUi();
       sync();
     }, error -> {
+      if (host.sip().callIdentity() == call) silencedIncomingCall = null;
+      syncRingtone();
       incomingAnswered = false;
       if (host.logs() != null) host.logs().append("错误", "接听失败：" + error.getMessage());
       if (!callPreviews.isBusy()) { host.refreshMainUi(); sync(); }
@@ -447,6 +481,7 @@ final class CallUiCoordinator implements AutoCloseable {
     // Do not enqueue native work into an executor that has been closed.
     if (closed) return;
     closed = true;
+    ringtone.close();
     sipControl.shutdownNow();
     roomCameraUpdates.shutdownNow();
     closeWindows();
