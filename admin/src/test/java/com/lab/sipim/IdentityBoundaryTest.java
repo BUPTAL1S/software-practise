@@ -29,6 +29,11 @@ class IdentityBoundaryTest {
     @Autowired UserRepository users;
     @Autowired LoginTokens tokens;
 
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder createAccount() {
+        String admin = tokens.issue(users.findByUsername("1001").orElseThrow().getId());
+        return post("/api/users").header("Authorization", "Bearer " + admin);
+    }
+
     @Test void startupCreatesDefaultAvatar() throws Exception {
         Path avatar = avatars.getFsAvatarDir().resolve("default.png");
         assertThat(Files.size(avatar)).isPositive();
@@ -41,7 +46,7 @@ class IdentityBoundaryTest {
             for (String field : new String[]{"username", "sipId"}) {
                 var request = new java.util.HashMap<>(Map.of("username", "safe-account", "sipId", "safe-extension", "password", "secret"));
                 request.put(field, bad);
-                mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                mvc.perform(createAccount().contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsString(request))).andExpect(status().isBadRequest());
             }
         }
@@ -51,24 +56,24 @@ class IdentityBoundaryTest {
     @Test void passwordsRoundTripExactlyAndOversizeUtf8IsRejected() throws Exception {
         String name="spaces-"+UUID.randomUUID();
         var request=Map.of("username",name,"password"," secret 密码 ");
-        mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request)))
+        mvc.perform(createAccount().contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request)))
                 .andExpect(status().isCreated());
         mvc.perform(post("/api/login").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request)))
                 .andExpect(status().isOk());
         mvc.perform(post("/api/login").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("username",name,"password","secret 密码"))))
                 .andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(createAccount().contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("username","large-pass","password","密".repeat(25)))))
                 .andExpect(status().isBadRequest());
     }
 
     @Test void reserveAliasesIgnoringCase() throws Exception {
         String name="case-"+UUID.randomUUID();
-        mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(createAccount().contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("username",name,"password","secret"))))
                 .andExpect(status().isCreated());
-        mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(createAccount().contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("username",name.toUpperCase(java.util.Locale.ROOT),"password","secret"))))
                 .andExpect(status().isConflict());
     }

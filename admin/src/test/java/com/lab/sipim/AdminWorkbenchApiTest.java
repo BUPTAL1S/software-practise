@@ -96,7 +96,7 @@ class AdminWorkbenchApiTest {
         mvc.perform(get("/api/rooms")).andExpect(status().isOk());
         mvc.perform(get("/api/health")).andExpect(status().isOk());
         mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"workbench-client\",\"password\":\"client-secret\"}"))
+                .content("{\"username\":\"7311\",\"password\":\"client-secret\"}"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.token").isNotEmpty());
         String regular = token("1002");
         mvc.perform(post("/api/rooms").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"room\"}"))
@@ -157,9 +157,14 @@ class AdminWorkbenchApiTest {
         user.setSipId("7303"); users.saveAndFlush(user);
         try {
             String regular = token("1003");
+            String admin = token("1001");
+            mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"username\":\"7303\",\"password\":\"secret\"}"))
+                    .andExpect(status().isConflict());
             for (var attempt : new Map[]{Map.of("username", "7303", "password", "secret", "sipId", "new-extension"),
                     Map.of("username", "new-identity", "password", "secret", "sipId", "1003")}) {
-                mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(attempt)))
+                mvc.perform(post("/api/users").header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(attempt)))
                         .andExpect(status().isConflict());
             }
             var fake = new com.lab.sipim.domain.User(); fake.setUsername("sip:7303@lab"); fake.setSipId("another-extension");
@@ -169,13 +174,13 @@ class AdminWorkbenchApiTest {
             try {
                 var left = pool.submit(() -> {
                     gate.await();
-                    return mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                    return mvc.perform(post("/api/users").header("Authorization", "Bearer " + admin).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"username\":\"alias-left\",\"sipId\":\"alias-right\",\"password\":\"secret\"}"))
                             .andReturn().getResponse().getStatus();
                 });
                 var right = pool.submit(() -> {
                     gate.await();
-                    return mvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                    return mvc.perform(post("/api/users").header("Authorization", "Bearer " + admin).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"username\":\"alias-right\",\"sipId\":\"alias-left\",\"password\":\"secret\"}"))
                             .andReturn().getResponse().getStatus();
                 });

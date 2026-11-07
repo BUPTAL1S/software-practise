@@ -1309,8 +1309,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         });
     if (loginRequired) {
       LoginView[] login = new LoginView[1];
-      login[0] = new LoginView(user.getText(), server.getText(), httpServerField.getText(),
-          credentials -> loginAndConnect(login[0], credentials, scene, probeAndPollTimeline));
+      login[0] = new LoginView("", server.getText(), httpServerField.getText(),
+          credentials -> loginAndConnect(login[0], credentials, scene, probeAndPollTimeline, false),
+          credentials -> loginAndConnect(login[0], credentials, scene, probeAndPollTimeline, true));
       stage.setTitle("登录 · SIP Connect");
       stage.setMinWidth(780); stage.setMinHeight(640);
       stage.setScene(login[0].scene());
@@ -1400,7 +1401,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   }
 
   private void loginAndConnect(LoginView login, LoginView.Credentials credentials,
-      Scene chatScene, Timeline polling) {
+      Scene chatScene, Timeline polling, boolean createAccount) {
     // Snapshot UI values before doing network/native work on the background thread.
     int preferredPort;
     try { preferredPort = Integer.parseInt(sipPort.getText()); }
@@ -1412,7 +1413,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         String backend = discovered == null ? credentials.http() : discovered;
         httpFileClient.setBaseUrl(backend);
         httpFileClient.setAuthToken(null);
-        httpFileClient.login(credentials.username(), credentials.password());
+        if (createAccount) httpFileClient.register(credentials.username(), credentials.password());
+        else httpFileClient.login(credentials.username(), credentials.password());
         int bound = preferredPort;
         String warning = null;
         try {

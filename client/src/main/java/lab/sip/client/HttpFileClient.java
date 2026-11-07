@@ -357,22 +357,33 @@ public final class HttpFileClient {
    * Performs backend authentication via POST /api/login.
    */
   public String login(String username, String password) throws IOException, InterruptedException {
+    return authenticate(username, password, false);
+  }
+
+  public String register(String username, String password) throws IOException, InterruptedException {
+    return authenticate(username, password, true);
+  }
+
+  private String authenticate(String username, String password, boolean createAccount)
+      throws IOException, InterruptedException {
     String json = "{\"username\":\"" + escapeJson(username) + "\",\"password\":\"" + escapeJson(password) + "\"}";
     HttpRequest req =
         HttpRequest.newBuilder()
-            .uri(URI.create(getEffectiveBaseUrl() + "/api/login"))
+            .uri(URI.create(getEffectiveBaseUrl() + (createAccount ? "/api/register" : "/api/login")))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(5))
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
             .build();
     HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-    if (resp.statusCode() == 200) {
+    if (resp.statusCode() == (createAccount ? 201 : 200)) {
       Matcher m = TOKEN_PATTERN.matcher(resp.body());
       if (m.find()) {
         String token = m.group(1);
         this.authToken = token;
         nickname = nullToEmpty(jsonString(resp.body(), "nickname"));
         role = nullToEmpty(jsonString(resp.body(), "role"));
+        if (createAccount && nickname.isEmpty()) nickname = username;
+        if (createAccount && role.isEmpty()) role = "USER";
         Matcher am = AVATAR_URL_PATTERN.matcher(resp.body());
         if (am.find()) {
           this.userAvatarUrl = am.group(1);
@@ -381,7 +392,13 @@ public final class HttpFileClient {
         }
         return token;
       }
-      return "";
+      throw new IOException(createAccount ? "账号已创建，请返回登录页面登录" : "后台未返回有效的登录凭证");
+    } else if (createAccount) {
+      if (resp.statusCode() == 409) {
+        throw new IOException("账号已存在或已被保留，请更换四位数字账号，或返回登录");
+      }
+      String error = jsonString(resp.body(), "error");
+      throw new IOException(error == null ? "注册失败 (HTTP " + resp.statusCode() + ")" : error);
     } else if (resp.statusCode() == 401) {
       throw new IOException("后台鉴权失败 (HTTP 401 unauthorized)");
     } else {
@@ -416,7 +433,24 @@ public final class HttpFileClient {
 
   private static String escapeJson(String s) {
     if (s == null) return "";
-    return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    StringBuilder escaped = new StringBuilder();
+    for (int i = 0; i < s.length(); i++) {
+      char character = s.charAt(i);
+      switch (character) {
+        case '\\' -> escaped.append("\\\\");
+        case '"' -> escaped.append("\\\"");
+        case '\n' -> escaped.append("\\n");
+        case '\r' -> escaped.append("\\r");
+        case '\t' -> escaped.append("\\t");
+        case '\b' -> escaped.append("\\b");
+        case '\f' -> escaped.append("\\f");
+        default -> {
+          if (character < 0x20) escaped.append(String.format("\\u%04x", (int) character));
+          else escaped.append(character);
+        }
+      }
+    }
+    return escaped.toString();
   }
 
   /**

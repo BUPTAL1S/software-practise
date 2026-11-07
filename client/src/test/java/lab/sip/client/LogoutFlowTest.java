@@ -90,7 +90,7 @@ class LogoutFlowTest {
           assertNull(previous.getHttpFileClient().getAuthToken());
           assertNull(current.getHttpFileClient().getAuthToken());
           assertTrue(current.getOrCreateSession("1002").isEmpty(), "Previous account data must not leak");
-          assertEquals("1001", ((TextField) stage.getScene().lookup("#login-account")).getText());
+          assertEquals("", ((TextField) stage.getScene().lookup("#login-account")).getText());
           assertEquals("", ((PasswordField) stage.getScene().lookup("#login-password")).getText());
           assertFalse(stage.getScene().lookup("#login-submit").isDisabled());
           assertEquals("登录 · SIP Connect", stage.getTitle());

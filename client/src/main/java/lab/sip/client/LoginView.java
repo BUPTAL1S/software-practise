@@ -1,6 +1,7 @@
 package lab.sip.client;
 
 import java.util.function.Consumer;
+import java.nio.charset.StandardCharsets;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -13,19 +14,22 @@ final class LoginView {
   record Credentials(String username, String password, String sip, String http) {}
   private final TextField account;
   private final PasswordField password = new PasswordField();
+  private final PasswordField confirmation = new PasswordField();
   private final TextField sip;
   private final TextField http;
   private final Label feedback = new Label();
   private final Button signIn = new Button("登录并上线");
   private final VBox form;
   private final Scene scene;
+  private boolean registering;
 
-  LoginView(String username, String sipHost, String httpUrl, Consumer<Credentials> authenticate) {
+  LoginView(String username, String sipHost, String httpUrl, Consumer<Credentials> authenticate,
+      Consumer<Credentials> createAccount) {
     account = new TextField(username);
     account.setId("login-account");
     password.setId("login-password");
     signIn.setId("login-submit");
-    account.setPromptText("输入账号，如 1002");
+    account.setPromptText("输入登录账号");
     password.setPromptText("输入登录密码");
     sip = new TextField(sipHost);
     http = new TextField(httpUrl);
@@ -40,6 +44,11 @@ final class LoginView {
       visiblePassword.setVisible(selected); visiblePassword.setManaged(selected);
     });
     StackPane passwordBox = new StackPane(password, visiblePassword);
+    confirmation.setId("register-confirm-password");
+    confirmation.setPromptText("再次输入密码");
+    VBox confirmBox = new VBox(8, label("确认密码", "login-label"), confirmation);
+    confirmBox.setVisible(false);
+    confirmBox.setManaged(false);
     VBox connections = new VBox(8, label("通话服务器", "login-label"), sip,
         label("账号与消息服务器", "login-label"), http);
     connections.setPadding(new Insets(12, 0, 4, 0));
@@ -55,16 +64,45 @@ final class LoginView {
       if (account.getText().isBlank() || password.getText().isEmpty()) {
         error("请填写账号和密码"); return;
       }
+      if (registering) {
+        if (!account.getText().trim().matches("[0-9]{4}")) {
+          error("注册账号必须为四位数字"); return;
+        }
+        if (password.getText().isBlank()
+            || password.getText().getBytes(StandardCharsets.UTF_8).length > 72) {
+          error("密码不能为空，UTF-8 长度不超过 72 字节"); return;
+        }
+        if (!password.getText().equals(confirmation.getText())) {
+          error("两次输入的密码不一致"); return;
+        }
+      }
       if (sip.getText().isBlank() || http.getText().isBlank()) {
         error("请检查连接设置中的服务器地址"); return;
       }
       setBusy(true);
-      authenticate.accept(new Credentials(account.getText().trim(), password.getText(),
+      Consumer<Credentials> submit = registering ? createAccount : authenticate;
+      submit.accept(new Credentials(account.getText().trim(), password.getText(),
           sip.getText().trim(), http.getText().trim()));
     });
-    form = new VBox(12, label("欢迎回来", "login-title"), label("登录账号，开始聊天和通话", "login-muted"),
+    Label title = label("欢迎回来", "login-title");
+    Label hint = label("登录账号，开始聊天和通话", "login-muted");
+    Hyperlink switchMode = new Hyperlink("注册新账号");
+    switchMode.setId("login-register");
+    switchMode.setOnAction(e -> {
+      registering = !registering;
+      clearPassword();
+      feedback.setText("");
+      confirmBox.setVisible(registering);
+      confirmBox.setManaged(registering);
+      account.setPromptText(registering ? "输入四位数字账号" : "输入登录账号");
+      title.setText(registering ? "注册新账号" : "欢迎回来");
+      hint.setText(registering ? "设置四位数字账号和密码，注册后直接上线" : "登录账号，开始聊天和通话");
+      signIn.setText(registering ? "注册并上线" : "登录并上线");
+      switchMode.setText(registering ? "已有账号，返回登录" : "注册新账号");
+    });
+    form = new VBox(10, title, hint,
         label("账号", "login-label"), account, label("密码", "login-label"), passwordBox, reveal,
-        advanced, feedback, signIn);
+        confirmBox, advanced, feedback, signIn, switchMode);
     form.setMaxWidth(350);
     form.setAlignment(Pos.CENTER_LEFT);
     SVGPath bubble = new SVGPath();
@@ -89,11 +127,13 @@ final class LoginView {
   Scene scene() { return scene; }
   void setBusy(boolean busy) {
     form.setDisable(busy);
-    signIn.setText(busy ? "正在连接…" : "登录并上线");
-    feedback.setText(busy ? "正在验证账号并连接通话服务…" : "");
+    String action = registering ? "注册并上线" : "登录并上线";
+    String progress = registering ? "正在创建账号并连接通话服务…" : "正在验证账号并连接通话服务…";
+    signIn.setText(busy ? "正在连接…" : action);
+    feedback.setText(busy ? progress : "");
   }
   void error(String message) { setBusy(false); feedback.setText(message); }
-  void clearPassword() { password.clear(); }
+  void clearPassword() { password.clear(); confirmation.clear(); }
   static Label label(String text, String style) {
     Label label = new Label(text); label.getStyleClass().add(style); label.setWrapText(true); return label;
   }

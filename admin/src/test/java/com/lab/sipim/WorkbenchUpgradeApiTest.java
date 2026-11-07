@@ -102,7 +102,7 @@ class WorkbenchUpgradeApiTest {
     @Test void historicalIdentityIsReservedWithoutCreatingOrAssigningAnAccount() throws Exception {
         String alias="retired-"+java.util.UUID.randomUUID();call(alias,0);identities.run(null);
         assertTrue(users.findByUsername(alias).isEmpty());
-        mvc.perform(post("/api/register").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+        mvc.perform(post("/api/users").header("Authorization", "Bearer " + admin).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
             .content(json.writeValueAsString(java.util.Map.of("username",alias.toUpperCase(),"password","secret"))))
             .andExpect(status().isConflict());
         String ordinary=tokens.issue(users.findByUsername("1002").orElseThrow().getId());
