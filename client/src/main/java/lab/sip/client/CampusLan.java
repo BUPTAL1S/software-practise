@@ -1,5 +1,6 @@
 package lab.sip.client;
 
+import java.net.DatagramSocket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -97,6 +98,37 @@ final class CampusLan {
     }
   }
 
+  /** Resolve the local RTP address independently of the SIP transport's Contact header. */
+  static String mediaAddress(Target target, String advertised) {
+    String fallback = "";
+    try {
+      if (advertised != null && !advertised.isBlank()) {
+        InetAddress candidate = InetAddress.getByName(advertised);
+        if (usableMediaAddress(candidate) && NetworkInterface.getByInetAddress(candidate) != null) {
+          fallback = candidate.getHostAddress();
+        }
+      }
+    } catch (Exception ignored) { }
+    try (DatagramSocket route = new DatagramSocket()) {
+      InetAddress server = InetAddress.getByName(target.host);
+      // Connecting an empty UDP socket asks the OS for its route without sending a packet.
+      route.connect(server, target.port);
+      InetAddress source = route.getLocalAddress();
+      if (usableMediaAddress(source)) return source.getHostAddress();
+      // A proxy on localhost may still connect callers on the campus LAN.
+      if (server.isLoopbackAddress() && source instanceof Inet4Address && source.isLoopbackAddress()) {
+        return fallback.isEmpty() ? source.getHostAddress() : fallback;
+      }
+    } catch (Exception ignored) { }
+    return fallback;
+  }
+
+  private static boolean usableMediaAddress(InetAddress address) {
+    return address instanceof Inet4Address && !address.isAnyLocalAddress()
+        && !address.isLoopbackAddress() && !address.isMulticastAddress()
+        && !skipAddress(address, address.getHostAddress());
+  }
+
   private static boolean skipNic(NetworkInterface nic) {
     try {
       if (!nic.isUp() || nic.isLoopback() || nic.isVirtual() || nic.isPointToPoint()) {
@@ -129,6 +161,8 @@ final class CampusLan {
     if (addr.isLinkLocalAddress() || ip.startsWith("169.254.")) {
       return true;
     }
+    // TUN adapters can use this benchmark-only range, which LAN peers cannot reach.
+    if (ip.startsWith("198.18.") || ip.startsWith("198.19.")) return true;
     // VMware host-only / NAT on the signalling host
     if (ip.startsWith("192.168.154.") || ip.startsWith("192.168.204.")) {
       return true;
