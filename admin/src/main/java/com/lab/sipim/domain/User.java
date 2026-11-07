@@ -16,9 +16,11 @@ public class User {
         usernameKey=username==null?null:username.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
-    @Column(nullable = false) private boolean disabled;
-    @Column(name="disabled_reason") private String disabledReason;
-    @Column(name="disabled_at") private String disabledAt;
+    // Only the explicit account-state update can write these columns after insert.
+    // A profile request may hold a User snapshot that predates an administrator's change.
+    @Column(nullable = false, updatable = false) private boolean disabled;
+    @Column(name="disabled_reason", updatable = false) private String disabledReason;
+    @Column(name="disabled_at", updatable = false) private String disabledAt;
     public boolean isDisabled() {return disabled;}
     public void setDisabled(boolean value) {disabled=value;}
     public String getDisabledReason() {return disabledReason;}

@@ -41,6 +41,24 @@ class SelfRegistrationApiTest {
     @Autowired IdentityReservations identities;
     @Autowired PasswordEncoder passwords;
 
+    @Test void bothRegistrationEntriesRequireAtLeastFourCharacters() throws Exception {
+        String admin = tokens.issue(users.findByUsername("1001").orElseThrow().getId());
+        for (String endpoint : List.of("/api/register", "/api/admin/workbench/users")) {
+            String username = endpoint.equals("/api/register") ? "7455" : "7456";
+            for (String shortPassword : List.of("1", "123", "🔒🔒")) {
+                mvc.perform(post(endpoint).header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("username", username, "password", shortPassword))))
+                        .andExpect(status().isBadRequest());
+                assertThat(users.findByUsername(username)).isEmpty();
+            }
+            mvc.perform(post(endpoint).header("Authorization", "Bearer " + admin)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(json.writeValueAsString(Map.of("username", username, "password", "a234"))))
+                    .andExpect(status().isCreated());
+        }
+    }
+
     @Test void newAccountPreservesLeadingZeroAndChosenPasswordAndAppearsInAdmin() throws Exception {
         String password = " 自定\"密\\码\t ";
         String request = json.writeValueAsString(Map.of("username", "0427", "password", password, "role", "ADMIN"));
