@@ -83,7 +83,21 @@ public class LoginController {
     }
 
     @PostMapping("/register")
-    public synchronized ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
+    public ResponseEntity<?> register(@RequestBody(required = false) RegisterRequest request) {
+        if (request == null || blank(request.username()) || blank(request.password())) {
+            return ResponseEntity.badRequest().body(Map.of("error", MISSING));
+        }
+        String username = request.username().trim();
+        if (!username.matches("[0-9]{4}")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "注册账号必须为四位数字"));
+        }
+        if (!blank(request.sipId()) && !username.equals(request.sipId().trim())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "注册账号与通话分机号必须一致"));
+        }
+        return createAccount(new RegisterRequest(username, request.password(), username));
+    }
+
+    public synchronized ResponseEntity<?> createAccount(RegisterRequest request) {
         // Enter the transaction only after acquiring the alias lock, and commit
         // before releasing it. Otherwise a second SQLite reader can prevent the
         // first registration from committing while waiting for its write lock.

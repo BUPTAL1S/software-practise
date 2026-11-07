@@ -104,7 +104,7 @@ def main():
         app = Backend(baseline, data, root, "baseline")
         assert app.api("/api/cdr", {"caller": "1001", "callee_or_room": "1008", "duration_sec": 22})[0] == 200
         assert app.api("/api/messages", {"receiver": "1008", "content": "升级前保留的记录", "status": "DELIVERED", "isFile": False})[0] in (200, 201)
-        status, retired = app.api("/api/register", {"username": "upgrade-retired", "password": "test-only"})
+        status, retired = app.api("/api/users", {"username": "upgrade-retired", "password": "test-only"})
         assert status == 201
         assert app.api("/api/messages", {"receiver": "upgrade-retired", "content": "历史身份保留", "status": "DELIVERED", "isFile": False})[0] in (200, 201)
         assert app.api("/api/users/" + str(retired["id"]), method="DELETE")[0] == 200
@@ -134,7 +134,7 @@ def main():
         _, files = app.api("/api/admin/workbench/files/page")
         assert files["total"] == 1
         assert app.api("/api/admin/workbench/files/" + str(files["items"][0]["id"]))[1] == attachment.read_bytes()
-        assert app.api("/api/register", {"username": "upgrade-retired", "password": "test-only"})[0] == 409
+        assert app.api("/api/users", {"username": "upgrade-retired", "password": "test-only"})[0] == 409
         route = "/api/admin/workbench/users/" + str(target["id"]) + "/state"
         assert app.api(route, {"disabled": True}, "PATCH")[0] == 200
         assert request(app.origin, "/api/login", body={"username": "1008", "password": "1008"})[0] == 401

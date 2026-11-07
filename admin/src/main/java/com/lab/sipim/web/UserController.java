@@ -74,7 +74,7 @@ public class UserController {
 
     @PostMapping
     public ResponseEntity<?> create(@RequestBody(required = false) LoginController.RegisterRequest request) {
-        return loginController.register(request);
+        return loginController.createAccount(request);
     }
 
     @DeleteMapping("/{id}")
