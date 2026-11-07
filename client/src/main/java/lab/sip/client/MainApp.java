@@ -88,6 +88,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private final ObservableList<ChatMessage> chatMessages = FXCollections.observableArrayList();
   private final HttpFileClient httpFileClient = new HttpFileClient("http://localhost:8080");
   private final AttachmentPreviews attachmentPreviews = new AttachmentPreviews();
+  private AttachmentPreviewWindow attachmentPreviewWindow;
 
   public ObservableList<ChatMessage> getOrCreateSession(String target) {
     if (target == null || target.isBlank()) {
@@ -1460,6 +1461,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     heartbeatRoom = "";
     heartbeatExecutor.shutdownNow();
     attachmentPreviews.close();
+    closeAttachmentPreview();
     polling.stop();
     roomPolling.stop();
     logs.dockBack();
@@ -1679,6 +1681,20 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       return;
     }
 
+    if (AttachmentMedia.kind(file.getName()) != AttachmentMedia.Kind.OTHER) {
+      closeAttachmentPreview();
+      attachmentPreviewWindow = new AttachmentPreviewWindow(owner, file.getName(),
+          "发送给 " + targetPeer + " · " + FileMessage.formatSize(file.length()), true,
+          () -> uploadFile(file, targetPeer, isRoom));
+      attachmentPreviewWindow.show(file.getName(), file.length(), file.toPath(), null, null);
+      return;
+    }
+    uploadFile(file, targetPeer, isRoom);
+  }
+
+  private void uploadFile(File file, String targetPeer, boolean isRoom) {
+    if (sessionClosed) return;
+
     String targetDomain = domain.getText().trim();
     String myUser = user.getText().trim();
     String httpUrl = httpServerField.getText().trim();
@@ -1797,6 +1813,21 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
             },
             "file-downloader")
         .start();
+  }
+
+  private void previewAttachment(ChatMessage item) {
+    if (sessionClosed || !item.isFile()) return;
+    FileMessage file = item.getFile();
+    closeAttachmentPreview();
+    attachmentPreviewWindow = new AttachmentPreviewWindow(primaryStage, file.getName(),
+        FileMessage.formatSize(file.getSize()), false, () -> handleDownloadFile(item));
+    attachmentPreviewWindow.show(file.getName(), file.getSize(), item.getLocalPath(), httpFileClient, file.getUrl());
+  }
+
+  private void closeAttachmentPreview() {
+    if (attachmentPreviewWindow == null) return;
+    attachmentPreviewWindow.close();
+    attachmentPreviewWindow = null;
   }
 
   private void refreshButtons() {
@@ -2955,6 +2986,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     private final HBox fileActionBox = new HBox(6);
     private final Button downloadBtn = new Button();
     private final Button openBtn = new Button("打开");
+    private final Button previewBtn = new Button();
 
     public ImageView getPreviewImageView() {
       return previewImageView;
@@ -2976,6 +3008,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       previewImageView.setSmooth(true);
       previewImageView.setVisible(false);
       previewImageView.setManaged(false);
+      previewImageView.setCursor(javafx.scene.Cursor.HAND);
       previewImageView.setStyle(
           "-fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.08), 4, 0, 0, 1);");
 
@@ -2984,7 +3017,8 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
               + " -fx-background-radius: 8; -fx-padding: 8 10 8 10; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.03), 4, 0, 0, 1);");
       downloadBtn.getStyleClass().setAll("btn-secondary");
       openBtn.getStyleClass().setAll("btn-secondary");
-      fileActionBox.getChildren().addAll(downloadBtn, openBtn);
+      previewBtn.getStyleClass().setAll("btn-secondary");
+      fileActionBox.getChildren().addAll(previewBtn, downloadBtn, openBtn);
       fileBox.getChildren().addAll(fileNameLabel, fileSizeLabel, previewImageView, fileActionBox);
 
       header.getChildren().addAll(metaLabel, statusLabel);
@@ -3014,6 +3048,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     public void updateItem(ChatMessage item, boolean empty) {
       super.updateItem(item, empty);
       updateDateSeparator();
+      previewImageView.setImage(null);
+      previewImageView.setVisible(false);
+      previewImageView.setManaged(false);
+      previewImageView.setOnMouseClicked(null);
       if (empty || item == null) {
         setGraphic(null);
         return;
@@ -3056,15 +3094,16 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
         fileBox.setManaged(true);
 
         FileMessage fm = item.getFile();
-        String lower = fm.getName().toLowerCase();
+        String lower = fm.getName().toLowerCase(java.util.Locale.ROOT);
         String icon = "[文档] ";
-        boolean isImage = lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
-            || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".bmp");
+        var kind = AttachmentMedia.kind(fm.getName());
+        boolean isImage = kind == AttachmentMedia.Kind.IMAGE;
+        boolean isVideo = kind == AttachmentMedia.Kind.VIDEO;
         if (isImage) {
           icon = "[图片] ";
         } else if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".m4a")) {
           icon = "[音频] ";
-        } else if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv") || lower.endsWith(".avi")) {
+        } else if (isVideo) {
           icon = "[视频] ";
         } else if (lower.endsWith(".zip") || lower.endsWith(".tar") || lower.endsWith(".gz") || lower.endsWith(".7z")) {
           icon = "[压缩包] ";
@@ -3074,46 +3113,21 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
         boolean hasLocal = item.getLocalPath() != null && Files.exists(item.getLocalPath());
         if (isImage) {
-          try {
-            Image img;
-            if (hasLocal) {
-              img = new Image(item.getLocalPath().toUri().toString(), 180, 0, true, true);
-            } else {
-              img = null;
-              attachmentPreviews.load(httpFileClient, fm.getUrl()).thenAccept(loaded -> Platform.runLater(() -> {
-                if (getItem() == item && !isEmpty()) previewImageView.setImage(loaded);
-              }));
-            }
-            previewImageView.setImage(img);
+          var thumbnail = hasLocal ? attachmentPreviews.loadLocal(item.getLocalPath())
+              : attachmentPreviews.load(httpFileClient, fm.getUrl());
+          thumbnail.thenAccept(loaded -> Platform.runLater(() -> {
+            if (getItem() != item || isEmpty() || sessionClosed) return;
+            previewImageView.setImage(loaded);
             previewImageView.setVisible(true);
             previewImageView.setManaged(true);
-            previewImageView.setOnMouseClicked(
-                e -> {
-                  try {
-                    if (hasLocal) {
-                      if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
-                        Desktop.getDesktop().open(item.getLocalPath().toFile());
-                      } else {
-                        getHostServices().showDocument(item.getLocalPath().toUri().toString());
-                      }
-                    } else {
-                      handleDownloadFile(item);
-                    }
-                  } catch (Exception ex) {
-                    logs.append("错误", "打开图片失败: " + ex.getMessage());
-                  }
-                });
-            previewImageView.setCursor(javafx.scene.Cursor.HAND);
-          } catch (Exception e) {
-            previewImageView.setImage(null);
-            previewImageView.setVisible(false);
-            previewImageView.setManaged(false);
-          }
-        } else {
-          previewImageView.setImage(null);
-          previewImageView.setVisible(false);
-          previewImageView.setManaged(false);
+          }));
+          previewImageView.setOnMouseClicked(e -> previewAttachment(item));
         }
+
+        previewBtn.setText(isVideo ? "预览视频" : "预览图片");
+        previewBtn.setVisible(isImage || isVideo);
+        previewBtn.setManaged(isImage || isVideo);
+        previewBtn.setOnAction(e -> previewAttachment(item));
 
         openBtn.setVisible(hasLocal);
         openBtn.setManaged(hasLocal);
@@ -3271,6 +3285,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     heartbeatRoom = "";
     heartbeatExecutor.shutdownNow();
     attachmentPreviews.close();
+    closeAttachmentPreview();
     roomCameraUpdates.shutdownNow();
     pollExecutor.shutdownNow();
     calls.close();
