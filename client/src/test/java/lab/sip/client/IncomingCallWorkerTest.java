@@ -11,6 +11,63 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /** Exercise the actual incoming-window answer worker in an isolated JVM: a native assert must fail the test. */
 class IncomingCallWorkerTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void callerCancellationStopsRingtoneDuringCameraWork(boolean videoOffer) throws Exception {
+    runProbe(RingtoneCancellationProbe.class, "ringtone-cancel", videoOffer);
+  }
+
+  public static class RingtoneCancellationProbe {
+    public static void main(String[] args) throws Exception {
+      Platform.startup(() -> {});
+      Platform.setImplicitExit(false);
+      CountDownLatch registered = new CountDownLatch(1);
+      CountDownLatch busy = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      var coordinator = new java.util.concurrent.atomic.AtomicReference<CallUiCoordinator>();
+      SipService sip = new SipService(new SipService.Events() {
+        public void log(String message) {}
+        public void log(String category, String message) {
+          if (category.equals("注册") && message.contains("200")) registered.countDown();
+        }
+        public void sip(boolean outgoing, String summary, String raw) {}
+        public void stateChanged() {
+          Platform.runLater(() -> {
+            CallUiCoordinator ui = coordinator.get();
+            if (ui != null) ui.syncRingtone();
+          });
+        }
+      });
+      IncomingRingtoneTest.RecordedClip clip = new IncomingRingtoneTest.RecordedClip();
+      var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
+      CallUiCoordinator ui = new CallUiCoordinator(host(sip), new IncomingRingtone(() -> clip.clip, failure::set));
+      coordinator.set(ui);
+      try (Peer peer = new Peer()) {
+        int port = sip.start(15984, "127.0.0.1");
+        sip.register("127.0.0.1:" + peer.socket.getLocalPort(), "1098", "", "lab", "udp");
+        if (!registered.await(3, TimeUnit.SECONDS)) throw new AssertionError("Registration missing");
+        peer.invite(port, Boolean.parseBoolean(args[0]));
+        if (!clip.started.await(3, TimeUnit.SECONDS)) throw new AssertionError("Incoming ringtone missing");
+        var field = CallUiCoordinator.class.getDeclaredField("callPreviews");
+        field.setAccessible(true);
+        CallPreviewLifecycle lifecycle = (CallPreviewLifecycle) field.get(ui);
+        lifecycle.execute(() -> { busy.countDown(); release.await(10, TimeUnit.SECONDS); }, () -> {}, error -> {});
+        if (!busy.await(2, TimeUnit.SECONDS)) throw new AssertionError("Camera worker not blocked");
+        peer.cancel();
+        if (!clip.closed.await(3, TimeUnit.SECONDS)) throw new AssertionError("Cancellation did not stop ringtone");
+        if (!ui.isBusy()) throw new AssertionError("Ringtone test did not cover busy camera work");
+        if (clip.starts.get() != 1 || failure.get() != null) throw new AssertionError("Ringtone failed or restarted");
+        System.out.println("PASS ringtone-cancel worker");
+      } finally {
+        release.countDown();
+        Platform.runLater(ui::close);
+        sip.shutdown();
+        Platform.exit();
+      }
+      System.exit(0);
+    }
+  }
+
   @org.junit.jupiter.api.Test
   void shutdownDrainsCallsEvenWhenFxCleanupIsDelayed() throws Exception {
     runProbe(DelayedCleanupProbe.class, "cleanup", false);
@@ -209,6 +266,9 @@ class IncomingCallWorkerTest {
           Thread.sleep(10);
         }
         // The service was initialized on main, while the actual answer runs on call-sip-control.
+        IncomingRingtoneTest.RecordedClip ring = new IncomingRingtoneTest.RecordedClip();
+        java.util.concurrent.atomic.AtomicReference<Exception> ringFailure = new java.util.concurrent.atomic.AtomicReference<>();
+        IncomingRingtone ringtone = new IncomingRingtone(() -> ring.clip, ringFailure::set);
         CallUiCoordinator ui = new CallUiCoordinator(new CallUiCoordinator.Host() {
           public javafx.stage.Stage owner() { return null; }
           public SipService sip() { return sip; }
@@ -219,8 +279,10 @@ class IncomingCallWorkerTest {
           public String user() { return "1098"; }
           public void runAction(Throwing action) { try { action.run(); } catch (Exception e) { throw new RuntimeException(e); } }
           public void refreshMainUi() {}
-        });
+        }, ringtone);
         if (!peer.ringing.await(3, TimeUnit.SECONDS)) throw new AssertionError("incoming 180 missing");
+        Platform.runLater(ui::syncRingtone);
+        if (!ring.started.await(2, TimeUnit.SECONDS)) throw new AssertionError("incoming ringtone missing");
         // Also exercise metadata reads on a fresh Java thread, independent of startup's FX registration.
         CompletableFuture<Void> metadata = new CompletableFuture<>();
         new Thread(() -> {
@@ -234,6 +296,8 @@ class IncomingCallWorkerTest {
         metadata.get(3, TimeUnit.SECONDS);
         Platform.runLater(() -> ui.answer(Boolean.parseBoolean(args[0])));
         if (!peer.answered.await(5, TimeUnit.SECONDS)) throw new AssertionError("answer worker never sent 200 OK");
+        if (!ring.closed.await(2, TimeUnit.SECONDS)) throw new AssertionError("ringtone continued after answer");
+        if (ring.starts.get() != 1 || ringFailure.get() != null) throw new AssertionError("ringtone restarted or failed");
         sip.hangup();
         Thread.sleep(150);
         CompletableFuture<Void> closed = new CompletableFuture<>();
@@ -291,6 +355,12 @@ class IncomingCallWorkerTest {
       send("INVITE sip:1098@127.0.0.1:" + port + " SIP/2.0\r\n" + headers("To: <sip:1098@lab>", "INVITE")
           + "Content-Type: application/sdp\r\nContent-Length: " + sdp.getBytes(StandardCharsets.UTF_8).length + "\r\n\r\n" + sdp,
           new InetSocketAddress("127.0.0.1", port));
+    }
+    void cancel() throws Exception {
+      String cancelHeaders = headers("To: <sip:1098@lab>", "CANCEL")
+          .replace("branch=z9hG4bK-CANCEL", "branch=z9hG4bK-INVITE");
+      send("CANCEL sip:1098@127.0.0.1:" + port + " SIP/2.0\r\n" + cancelHeaders
+          + "Content-Length: 0\r\n\r\n", new InetSocketAddress("127.0.0.1", port));
     }
     void send(String message, SocketAddress destination) throws Exception {
       byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
