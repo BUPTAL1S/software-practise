@@ -264,14 +264,14 @@ final class CallUiCoordinator implements AutoCloseable {
       videoCallWindow.setMuted(sip.isAudioMuted());
       videoCallWindow.syncElapsed(sip.callElapsedNanos());
       videoCallWindow.setAvatar(callAvatar(targetId));
-      boolean showAvatar = connected && (remoteAvatarOff || !videoActive);
+      boolean showAvatar = connected && !inRoom && (remoteAvatarOff || !videoActive);
       videoCallWindow.setAvatarHint(
           remoteAvatarOff
               ? "对方已关闭摄像头，仍可继续语音交流"
               : "对方正在使用语音，视频画面暂不可用");
       videoCallWindow.setRemoteAvatarOff(showAvatar, target);
 
-      long remote = showAvatar ? 0 : sip.getActiveVideoWindowHandle();
+      long remote = showAvatar ? 0 : sip.getRenderableVideoWindowHandle();
       if (connected) {
         // Local preview is independent of whether the peer is currently sending video.
         if (cameraOn && !inRoom && !sip.isPreviewActive() && !callPreviews.isBusy() && !callPreviewErrorLogged) {
@@ -431,8 +431,10 @@ final class CallUiCoordinator implements AutoCloseable {
                   if (videoCallWindow == null || !host.sip().isCallConnected()) {
                     return;
                   }
-                  long remote = remoteAvatarOff ? 0 : host.sip().getActiveVideoWindowHandle();
-                  long pip = host.sip().isPreviewActive() ? host.sip().getPreviewWindowHandle() : 0;
+                  SipService sip = host.sip();
+                  long remote = remoteAvatarOff ? 0 : sip.getRenderableVideoWindowHandle();
+                  long pip = sip.isCameraEnabled() && !sip.isInRoomCall() && sip.isPreviewActive()
+                      ? sip.getPreviewWindowHandle() : 0;
                   videoCallWindow.attachNative(remote, pip);
                 }));
     pipLayoutTimeline.setCycleCount(Timeline.INDEFINITE);

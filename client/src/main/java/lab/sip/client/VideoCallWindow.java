@@ -55,6 +55,7 @@ final class VideoCallWindow {
   private Label avatarInitial;
   private Label avatarHint;
   private boolean remoteAvatarOff;
+  private boolean room;
   private Button muteBtn;
   private Button cameraBtn;
   private Button hangupBtn;
@@ -96,6 +97,7 @@ final class VideoCallWindow {
     this.onMute = onMute == null ? value -> {} : onMute;
     this.onCamera = onCamera == null ? value -> {} : onCamera;
     this.cameraOn = cameraOn;
+    this.room = room;
     if (stage == null) {
       build(target, room);
       stage.show();
@@ -123,10 +125,7 @@ final class VideoCallWindow {
     if (cameraBtn != null) {
       CallUi.state(cameraBtn, cameraOn ? "关闭摄像头" : "开启摄像头", !cameraOn);
     }
-    if (placeholder != null) {
-      placeholder.setText(connected ? "正在加载对方画面…" : "等待对方接听视频邀请…");
-      showWaiting(!connected || (remoteHandle == 0 && !remoteAvatarOff));
-    }
+    updateWaiting();
     if (avatarOverlay != null) {
       avatarOverlay.setVisible(remoteAvatarOff);
       avatarOverlay.setManaged(remoteAvatarOff);
@@ -170,10 +169,12 @@ final class VideoCallWindow {
     if (peerAvatar != null) CallUi.photo(peerAvatar, image);
   }
 
-  private void showWaiting(boolean visible) {
-    // Every path that reveals this pane must use the current call state, including
-    // avatar/camera changes that do not go through update().
-    placeholder.setText(connected ? "通话已接通，正在等待对方视频画面…" : "等待对方接听视频邀请…");
+  private void updateWaiting() {
+    if (placeholder == null) return;
+    boolean displaying = remoteHandle != 0 && (placement.displays(remoteHandle) || !WindowLayout.isAvailable());
+    boolean visible = !connected || (!remoteAvatarOff && !displaying);
+    if (room) placeholder.setText(connected ? "已入会，正在等待会议画面…" : "正在加入会议…");
+    else placeholder.setText(connected ? "通话已接通，正在等待对方视频画面…" : "等待对方接听视频邀请…");
     waitingPane.setVisible(visible);
     waitingPane.setManaged(visible);
   }
@@ -194,6 +195,7 @@ final class VideoCallWindow {
     long oldPip = pipHandle;
     if (pip == 0 && oldPip != 0) runNative(() -> WindowLayout.detach(0, oldPip));
     remoteHandle = remote; pipHandle = pip;
+    updateWaiting();
     // Child avatar/waiting panes may still have stale or overflowing visual bounds
     // during a managed-state transition. Only the allocated viewport owns video.
     var area = videoArea.localToScene(videoArea.getLayoutBounds());
@@ -215,7 +217,7 @@ final class VideoCallWindow {
               requested.remote(), requested.pip(), requested.x(), requested.y(), requested.w(), requested.h(),
               requested.scaleX(), requested.scaleY()));
           if (applied) Platform.runLater(() -> {
-            if (!disposed && requestedBounds == requested && requested.remote() != 0 && !remoteAvatarOff) showWaiting(false);
+            if (!disposed && requestedBounds == requested) updateWaiting();
           });
           // Coalesce resize events while native parenting is busy; never build an unbounded queue.
         } while (bounds != requestedBounds && !disposed);
@@ -231,13 +233,12 @@ final class VideoCallWindow {
   }
 
   void detachPip() {
+    if (pipHandle == 0) return;
     requestedBounds = null;
     placement.invalidate();
-    if (pipHandle != 0) {
-      long oldPip = pipHandle;
-      pipHandle = 0;
-      runNative(() -> WindowLayout.detach(0, oldPip));
-    }
+    long oldPip = pipHandle;
+    pipHandle = 0;
+    runNative(() -> WindowLayout.detach(0, oldPip));
   }
 
   /** Release SDL/JavaFX parenting before creating or restarting a native renderer. */
@@ -248,6 +249,7 @@ final class VideoCallWindow {
     long pip = pipHandle;
     remoteHandle = 0;
     pipHandle = 0;
+    updateWaiting();
     if (remote != 0 || pip != 0) {
       runNative(() -> WindowLayout.detach(remote, pip));
     }
@@ -309,9 +311,7 @@ final class VideoCallWindow {
       avatarOverlay.setVisible(off);
       avatarOverlay.setManaged(off);
     }
-    if (placeholder != null) {
-      showWaiting(!off && remoteHandle == 0);
-    }
+    updateWaiting();
   }
 
   /**

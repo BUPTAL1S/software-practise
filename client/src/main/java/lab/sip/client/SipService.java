@@ -332,6 +332,14 @@ final class SipService {
     return call != null && !call.callDisconnected ? call.nativeVideoHandle : 0;
   }
 
+  /** The native renderer can exist before any inbound video RTP reaches the call. */
+  long getRenderableVideoWindowHandle() {
+    ClientCall call = activeCall;
+    if (call == null || call.callDisconnected) return 0;
+    long received = call.receivedVideoHandle;
+    return received == call.nativeVideoHandle ? received : 0;
+  }
+
   /** Native handle of the PJSIP camera preview window. */
   public long getPreviewWindowHandle() {
     return previewHandle;
@@ -802,6 +810,13 @@ final class SipService {
     }
     // 经 127.0.0.1 连 Docker 时 PJSIP 会把 Contact 写成回环，容器内 INVITE 回不了本机。
     String advertise = advertisedIp.isBlank() ? CampusLan.detect() : advertisedIp;
+    String mediaAddress = CampusLan.mediaAddress(target, advertise);
+    if (!mediaAddress.isEmpty()) {
+      // RTP/RTCP are separate from the SIP transport. Leave the sockets bound to
+      // all interfaces and advertise the address peers can actually send to.
+      cfg.getMediaConfig().getTransportConfig().setPublicAddress(mediaAddress);
+      events.log("媒体", "RTP/RTCP 地址 " + mediaAddress);
+    }
     if (!advertise.isBlank() && !advertise.equals("127.0.0.1") && !advertise.equals("localhost")) {
       String contact = "sip:" + user + "@" + advertise + ":" + boundPort;
       if (tcp) {
@@ -1499,6 +1514,8 @@ final class SipService {
     private volatile String cachedRemote = "";
     private volatile String cachedCallId = "";
     private volatile long nativeVideoHandle;
+    private volatile long receivedVideoHandle;
+    private final java.util.concurrent.atomic.AtomicBoolean videoReceptionPending = new java.util.concurrent.atomic.AtomicBoolean();
     private volatile boolean cameraDesired;
     private volatile boolean transmitting;
     private volatile boolean upgradePending;
@@ -1540,6 +1557,48 @@ final class SipService {
     private void stopMediaStatistics() {
       ScheduledFuture<?> task = statisticsTask;
       if (task != null) task.cancel(false);
+    }
+
+    private boolean awaitingVideoReception() {
+      return activeCall == this && !shuttingDown && !localHangup && !callDisconnected
+          && videoStreamActive && videoMediaIndex >= 0 && nativeVideoHandle != 0
+          && receivedVideoHandle != nativeVideoHandle;
+    }
+
+    private void watchVideoReception() {
+      if (!awaitingVideoReception() || !videoReceptionPending.compareAndSet(false, true)) return;
+      try {
+        mediaStatistics.schedule(this::probeVideoReception, 120, TimeUnit.MILLISECONDS);
+      } catch (java.util.concurrent.RejectedExecutionException shutdown) {
+        videoReceptionPending.set(false);
+      }
+    }
+
+    private void probeVideoReception() {
+      boolean received = false;
+      try {
+        if (!awaitingVideoReception() || !nativeLifetime.readLock().tryLock()) return;
+        try {
+          if (!awaitingVideoReception()) return;
+          long handle = nativeVideoHandle;
+          int index = videoMediaIndex;
+          ensureThreadRegistered();
+          var stats = getStreamStat(index);
+          try {
+            if (stats.getRtcp().getRxStat().getBytes() > 0 && awaitingVideoReception()
+                && nativeVideoHandle == handle && videoMediaIndex == index) {
+              receivedVideoHandle = handle;
+              received = true;
+            }
+          } finally { stats.delete(); }
+        } finally { nativeLifetime.readLock().unlock(); }
+        if (received) events.stateChanged();
+      } catch (Exception ignored) {
+        // A media update can replace a stream between polls.
+      } finally {
+        videoReceptionPending.set(false);
+        watchVideoReception();
+      }
     }
 
     private void sampleMediaStatistics() {
@@ -1693,6 +1752,7 @@ final class SipService {
       videoStreamActive = false;
       videoMediaIndex = -1;
       nativeVideoHandle = 0;
+      receivedVideoHandle = 0;
       if (win == null) {
         return;
       }
@@ -1934,8 +1994,9 @@ final class SipService {
           }
         }
         videoStreamActive = activeVideo;
-        if (!activeVideo) { nativeVideoHandle = 0; transmitting = false; }
+        if (!activeVideo) { nativeVideoHandle = 0; receivedVideoHandle = 0; transmitting = false; }
         else {
+          watchVideoReception();
           upgradePending = false;
           cameraSync.execute(() -> {
             try { setTransmitVideo(cameraDesired); }
