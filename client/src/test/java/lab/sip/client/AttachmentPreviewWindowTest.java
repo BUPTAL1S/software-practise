@@ -91,6 +91,12 @@ class AttachmentPreviewWindowTest {
       }
       return null;
     });
+    // Closing the window cancels the background loader without blocking FX.
+    // A read already in progress must release the Windows file handle first.
+    await(() -> {
+      try { return !Files.exists(image) || Files.deleteIfExists(image); }
+      catch (java.io.IOException stillReading) { return false; }
+    });
   }
 
   private static void assertStableFit(String title) throws Exception {
@@ -139,14 +145,28 @@ class AttachmentPreviewWindowTest {
     try {
       await(() -> fx(() -> find(stage(title), MediaView.class) != null));
       MediaPlayer player = fx(() -> find(stage(title), MediaView.class).getMediaPlayer());
+      assertTrue(fx(() -> player.getMedia().getTracks().stream()
+          .anyMatch(javafx.scene.media.AudioTrack.class::isInstance)), "Native playback must retain the AAC audio track");
       Path cached = fx(() -> Path.of(URI.create(player.getMedia().getSource())));
       assertTrue(Files.isRegularFile(cached));
       Button toggle = fx(() -> button(stage(title), "播放"));
       fx(() -> { toggle.fire(); return null; });
       await(() -> fx(() -> player.getStatus() == MediaPlayer.Status.PLAYING
-          && "暂停".equals(toggle.getText()) && player.getCurrentTime().toMillis() >= 200));
+          && "暂停".equals(toggle.getText()) && player.getCurrentTime().toMillis() >= 200
+          && player.getCurrentTime().toSeconds() < 1));
+      double firstPosition = fx(() -> player.getCurrentTime().toSeconds());
+      Thread.sleep(400);
+      double advance = fx(() -> player.getCurrentTime().toSeconds()) - firstPosition;
+      assertTrue(advance > .15 && advance < 1, "Native playback must advance at normal speed after preroll");
       fx(() -> { toggle.fire(); return null; });
       await(() -> fx(() -> player.getStatus() == MediaPlayer.Status.PAUSED));
+      assertTrue(fx(() -> {
+        var frame = find(stage(title), MediaView.class).snapshot(null, null);
+        var colors = new java.util.HashSet<Integer>();
+        for (int y = 0; y < frame.getHeight(); y += 12)
+          for (int x = 0; x < frame.getWidth(); x += 12) colors.add(frame.getPixelReader().getArgb(x, y));
+        return colors.size() > 4;
+      }), "MediaView must render the test pattern, not a blank surface");
       fx(() -> {
         Slider position = find(stage(title), Slider.class);
         position.setValue(1.6);
@@ -154,6 +174,7 @@ class AttachmentPreviewWindowTest {
         return null;
       });
       await(() -> fx(() -> Math.abs(player.getCurrentTime().toSeconds() - 1.6) < .3));
+      assertEquals(MediaPlayer.Status.PAUSED, fx(player::getStatus));
       fx(() -> { button(stage(title), "关闭").fire(); return null; });
       assertEquals(MediaPlayer.Status.DISPOSED, fx(player::getStatus));
       await(() -> !Files.exists(cached));

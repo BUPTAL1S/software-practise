@@ -30,6 +30,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.media.Media;
+import javafx.scene.media.MediaException;
 import javafx.scene.media.MediaPlayer;
 import javafx.scene.media.MediaView;
 import javafx.stage.Modality;
@@ -53,7 +54,11 @@ final class AttachmentPreviewWindow implements AutoCloseable {
   private Path temporary;
   private MediaPlayer player;
   private PauseTransition mediaStartup;
+  private PauseTransition mediaSeek;
+  private boolean nativeSeekPending;
   private boolean nativeVideoFailed;
+  private int nativeAttempts;
+  private boolean nativeReady;
   private SoftwareVideoPreview software;
   private AnimationTimer softwareRenderer;
 
@@ -129,6 +134,7 @@ final class AttachmentPreviewWindow implements AutoCloseable {
           path = client.downloadPreview(url, cached, AttachmentMedia.MAX_BYTES);
         }
         if (Files.size(path) > AttachmentMedia.MAX_BYTES) throw new IOException("附件超过 64 MiB，无法预览");
+        if (kind == AttachmentMedia.Kind.VIDEO) WindowsPreviewAudio.initialize();
         Image image = kind == AttachmentMedia.Kind.IMAGE ? AttachmentMedia.loadImage(path, 2048, 1536) : null;
         Path source = path;
         synchronized (this) {
@@ -187,6 +193,9 @@ final class AttachmentPreviewWindow implements AutoCloseable {
   }
 
   private void showVideo(Path source) {
+    if (closed) return;
+    nativeAttempts++;
+    nativeReady = false;
     try {
       Media media = new Media(source.toUri().toString());
       MediaPlayer current = new MediaPlayer(media);
@@ -209,6 +218,7 @@ final class AttachmentPreviewWindow implements AutoCloseable {
       Runnable updateClock = () -> clock.setText(formatTime(progress.getValue()) + " / " + formatTime(progress.getMax()));
       current.setOnReady(() -> {
         if (closed || player != current) return;
+        nativeReady = true;
         if (mediaStartup != null) mediaStartup.stop();
         Duration duration = current.getTotalDuration();
         if (duration != null && !duration.isUnknown() && !duration.isIndefinite() && duration.greaterThan(Duration.ZERO)) {
@@ -220,7 +230,7 @@ final class AttachmentPreviewWindow implements AutoCloseable {
         surface.getChildren().setAll(view);
       });
       current.currentTimeProperty().addListener((obs, oldValue, value) -> {
-        if (!progress.isValueChanging()) progress.setValue(value.toSeconds());
+        if (!progress.isValueChanging() && !nativeSeekPending) progress.setValue(value.toSeconds());
       });
       progress.valueProperty().addListener((obs, oldValue, value) -> updateClock.run());
       Runnable seek = () -> {
@@ -230,7 +240,10 @@ final class AttachmentPreviewWindow implements AutoCloseable {
           current.pause();
           play.setText("播放");
         }
-        current.seek(Duration.seconds(progress.getValue()));
+        Duration requested = Duration.seconds(progress.getValue());
+        if (mediaSeek != null) mediaSeek.stop();
+        nativeSeekPending = true;
+        seekNative(current, requested, 3);
       };
       progress.setOnMouseReleased(e -> seek.run());
       progress.setOnKeyReleased(e -> seek.run());
@@ -247,19 +260,58 @@ final class AttachmentPreviewWindow implements AutoCloseable {
         else if (current.getStatus() == MediaPlayer.Status.PLAYING) current.pause();
         else current.play();
       });
-      media.setOnError(() -> fallbackVideo(source, media.getError()));
-      current.setOnError(() -> fallbackVideo(source, current.getError()));
-      current.setOnHalted(() -> fallbackVideo(source, current.getError()));
+      media.setOnError(() -> nativeFailure(source, current, media.getError()));
+      current.setOnError(() -> nativeFailure(source, current, current.getError()));
+      current.setOnHalted(() -> nativeFailure(source, current, current.getError()));
       notice.setText("正在准备视频…");
       tools.getChildren().setAll(play, progress, clock, mute);
       showTools(true);
       mediaStartup = new PauseTransition(Duration.seconds(6));
-      mediaStartup.setOnFinished(e -> fallbackVideo(source, new IOException("JavaFX media preparation timed out")));
+      mediaStartup.setOnFinished(e -> nativeFailure(source, current, new IOException("JavaFX media preparation timed out")));
       mediaStartup.play();
       if (current.getError() != null || media.getError() != null) {
-        fallbackVideo(source, current.getError() != null ? current.getError() : media.getError());
+        nativeFailure(source, current, current.getError() != null ? current.getError() : media.getError());
       }
     } catch (RuntimeException | LinkageError unavailable) { fallbackVideo(source, unavailable); }
+  }
+
+  private void seekNative(MediaPlayer current, Duration requested, int retries) {
+    if (closed || player != current) return;
+    current.seek(requested);
+    boolean paused = current.getStatus() == MediaPlayer.Status.PAUSED || current.getStatus() == MediaPlayer.Status.READY;
+    if (!paused) { nativeSeekPending = false; return; }
+    // The PAUSED event can precede the Windows decoder finishing its state
+    // transition. Confirm the requested position after preroll and reissue a
+    // lost paused seek, without briefly playing sound or changing pause state.
+    mediaSeek = new PauseTransition(Duration.millis(150));
+    mediaSeek.setOnFinished(e -> {
+      if (closed || player != current) return;
+      if (retries > 0 && current.getStatus() == MediaPlayer.Status.PAUSED
+          && Math.abs(current.getCurrentTime().toSeconds() - requested.toSeconds()) > .25) {
+        seekNative(current, requested, retries - 1);
+      } else { nativeSeekPending = false; mediaSeek = null; }
+    });
+    mediaSeek.play();
+  }
+
+  private void nativeFailure(Path source, MediaPlayer failed, Throwable failure) {
+    if (closed || player != failed || nativeVideoFailed) return;
+    // Windows DirectShow can finish initialization without producing a first
+    // frame. Rebuild a failed startup before selecting software playback. Never
+    // retry a preparation timeout or interrupt playback that was already ready.
+    if (!nativeReady && nativeAttempts < 5 && failure instanceof MediaException
+        && System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+      LOG.log(System.Logger.Level.DEBUG, "Rebuilding native preview after failed startup, attempt {0}", nativeAttempts);
+      disposePlayer();
+      surface.getChildren().setAll(notice);
+      notice.setText("正在准备视频…");
+      showTools(false);
+      mediaStartup = new PauseTransition(Duration.millis(150));
+      mediaStartup.setOnFinished(e -> showVideo(source));
+      mediaStartup.play();
+      return;
+    }
+    fallbackVideo(source, failure);
   }
 
   private void fallbackVideo(Path source, Throwable failure) {
@@ -353,6 +405,8 @@ final class AttachmentPreviewWindow implements AutoCloseable {
 
   private void disposePlayer() {
     if (mediaStartup != null) { mediaStartup.stop(); mediaStartup = null; }
+    if (mediaSeek != null) { mediaSeek.stop(); mediaSeek = null; }
+    nativeSeekPending = false;
     if (player == null) return;
     MediaPlayer current = player;
     player = null;
