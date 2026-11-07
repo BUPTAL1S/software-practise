@@ -10,7 +10,9 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>17</maven.compiler.release>
-    <javafx.version>17.0.15</javafx.version>
+    <!-- Keep JDK 17 while using the tested JavaFX 21 Windows media runtime.
+         The optional process-local AAC bridge complements this upgrade. -->
+    <javafx.version>21.0.13</javafx.version>
     <javacv.version>1.5.14</javacv.version>
     <ffmpeg.version>8.1.2-${javacv.version}</ffmpeg.version>
   </properties>

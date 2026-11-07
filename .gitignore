@@ -18,6 +18,7 @@ native/**/*.dylib
 native/**/*.jnilib
 native/**/*.so
 native/**/*.jar
+native/windows-x64/preview-runtime/
 **/*.lib
 **/*.exp
 

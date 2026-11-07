@@ -5,6 +5,7 @@ JavaFX 桌面端，Win / Mac **同一份代码**。阶段 5：REGISTER + 一对�
 ## 准备
 
 - JDK **17**（`JAVA_HOME` 指向它）
+- JavaFX **21.0.13**（Maven 自动提供，仍使用 JDK 17；macOS 需 11 或以上）
 - Maven
 - 本机编好的 PJSUA2 2.17 原生库（开启视频支持，见下方）
 - Spring Boot 后台服务（用于文件上传/下载、用户鉴权与 CDR 通话记录统计，见 `admin/` 目录）
@@ -134,6 +135,8 @@ mvn javafx:run -Djavafx.args="--user=1002 --port=5062 --peer=1001"
 - **后台 HTTP 连通性测试与鉴权**：
   - 设置区提供「HTTP 后台」地址配置（默认 `http://localhost:8080`，可保存至本地偏好）。
   - 可点击「测试后台」验证后台探活（`GET /api/health`）与密码鉴权（`POST /api/login`）。
+
+Windows 上预览总是进入兼容模式时，可安装应用目录内的原生 AAC 运行时，继续由 JavaFX `MediaPlayer` / `MediaView` 播放画面和声音。安装、验证、禁用和打包说明见 [Windows 原生附件预览](../native/windows-x64/PREVIEW.md)。
 
 ### 4. 登录对接与 CDR 通话记录统计（阶段 4 新增）
 - **账号与登录鉴权**：

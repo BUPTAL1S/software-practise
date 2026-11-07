@@ -522,14 +522,22 @@ class RealUserWorkflowTest {
         MainApp.ChatMessageCell cell = app.new ChatMessageCell();
         cell.getPreviewImageView().imageProperty().addListener((obs, old, image) -> {
           if (image != null) {
-            try { assertFalse(image.isError()); assertEquals(180, image.getWidth()); assertEquals(180, image.getHeight()); }
-            catch (Throwable failure) { previewFailure.set(failure); }
-            finally { uiLatch.countDown(); }
+            // The image is assigned before the asynchronous callback makes the
+            // view visible. Check the completed UI update on the next FX turn.
+            Platform.runLater(() -> {
+              try {
+                assertFalse(image.isError());
+                // Thumbnail decoding caps large images; a 4x4 source is not enlarged.
+                assertEquals(4, image.getWidth());
+                assertEquals(4, image.getHeight());
+                assertTrue(cell.getPreviewImageView().isVisible(), "图片文件气泡必须展示缩略图预览");
+              } catch (Throwable failure) { previewFailure.set(failure); }
+              finally { uiLatch.countDown(); }
+            });
           }
         });
         ChatMessage msg = ChatMessage.file("1002", "1001", false, new FileMessage("avatar.png", png.size(), "/api/files/preview.png"), null);
         cell.updateItem(msg, false);
-        assertTrue(cell.getPreviewImageView().isVisible(), "图片文件气泡必须展示缩略图预览");
         } catch (Throwable failure) { previewFailure.set(failure); uiLatch.countDown(); }
       });
       assertTrue(uiLatch.await(3, TimeUnit.SECONDS));

@@ -14,7 +14,7 @@ public final class Launcher {
     if (args != null && args.length > 0) {
       for (String arg : args) {
         if ("--probe-only".equals(arg) || "--version".equals(arg) || "--help".equals(arg)) {
-          System.out.println("Java SIP Client Fat JAR probe OK (PJSIP 2.17 / JavaFX 17)");
+          System.out.println("Java SIP Client Fat JAR probe OK (PJSIP 2.17 / JavaFX 21)");
           return;
         }
       }

@@ -71,6 +71,10 @@ try {
     Copy-Item -LiteralPath $clientJar -Destination (Join-Path $client 'lib\sip-client.jar')
     Copy-Item -LiteralPath $backendJar -Destination (Join-Path $backend 'lib\sipim-admin.jar')
     Get-ChildItem -LiteralPath $native -Filter '*.dll' | Copy-Item -Destination (Join-Path $client 'native')
+    $previewRuntime = Join-Path $native 'preview-runtime'
+    if (Test-Path -LiteralPath (Join-Path $previewRuntime 'previewaudio.dll')) {
+        Copy-Item -LiteralPath $previewRuntime -Destination (Join-Path $client 'native\preview-runtime') -Recurse
+    }
     $clientLauncher = @'
 @echo off
 setlocal
