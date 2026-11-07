@@ -1,11 +1,17 @@
 package lab.sip.client;
 
 import static org.junit.jupiter.api.Assertions.*;
+import java.io.IOException;
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.*;
 import javafx.application.Platform;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -167,13 +173,27 @@ class IncomingCallWorkerTest {
     runProbe(OutgoingProbe.class, "outgoing", video);
   }
 
+  @Test
+  void videoAnswerReceivesFramesWithLocalCameraOff() throws Exception {
+    runProbe(ReceiveOnlyVideoProbe.class, "receive-video", true);
+  }
+
   private void runProbe(Class<?> probe, String direction, boolean videoOffer) throws Exception {
     Path log = Path.of("target/" + direction + "-worker-" + videoOffer + ".log").toAbsolutePath();
     String java = Path.of(System.getProperty("java.home"), "bin",
         System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java").toString();
     String cp = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
-    Process child = new ProcessBuilder(java, "-cp", cp, probe.getName(), Boolean.toString(videoOffer))
-        .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+    List<String> command = new ArrayList<>(List.of(java));
+    String nativeDir = System.getProperty("sip.native.dir");
+    if (nativeDir != null && !nativeDir.isBlank()) command.add("-Dsip.native.dir=" + nativeDir);
+    command.addAll(List.of("-Dfile.encoding=UTF-8", "-cp", cp, probe.getName(), Boolean.toString(videoOffer)));
+    ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile());
+    if (probe == ReceiveOnlyVideoProbe.class) {
+      Path nativeLog = log.resolveSibling("receive-video-native.log");
+      Files.deleteIfExists(nativeLog);
+      builder.environment().put("UI_LOG_FILE", nativeLog.toString());
+    }
+    Process child = builder.start();
     try {
       for (int i = 0; i < 300 && child.isAlive(); i++) {
         if (Files.exists(log)) {
@@ -187,6 +207,80 @@ class IncomingCallWorkerTest {
       assertEquals(0, child.exitValue(), output);
       assertTrue(output.contains("PASS " + direction + " worker"), output);
     } finally { if (child.isAlive()) child.destroyForcibly(); }
+  }
+
+  public static class ReceiveOnlyVideoProbe {
+    public static void main(String[] args) throws Exception {
+      Platform.startup(() -> {});
+      Platform.setImplicitExit(false);
+      CountDownLatch registered = new CountDownLatch(1);
+      Path nativeLog = Path.of(System.getenv("UI_LOG_FILE"));
+      SipService sip = new SipService(new SipService.Events() {
+        public void log(String message) { log("原生", message); }
+        public void log(String category, String message) {
+          System.out.println(category + ": " + message);
+          if (category.equals("注册") && message.contains("200")) registered.countDown();
+        }
+        public void sip(boolean outgoing, String summary, String raw) {}
+        public void stateChanged() {}
+      });
+      InetAddress localhost = InetAddress.getByName("127.0.0.1");
+      try (Peer peer = new Peer(); DatagramSocket video = new DatagramSocket(0, localhost)) {
+        int port = sip.start(15990, "127.0.0.1");
+        var endpoint = SipService.class.getDeclaredField("endpoint");
+        endpoint.setAccessible(true);
+        ((org.pjsip.pjsua2.Endpoint) endpoint.get(sip)).audDevManager().setNullDev();
+        sip.setCameraEnabled(false);
+        sip.register("127.0.0.1:" + peer.socket.getLocalPort(), "1098", "", "lab", "udp");
+        if (!registered.await(4, TimeUnit.SECONDS)) throw new AssertionError("registration missing");
+        peer.invite(port, true, video.getLocalPort());
+        if (!peer.ringing.await(4, TimeUnit.SECONDS)) throw new AssertionError("incoming video did not ring");
+        sip.answer(true);
+        if (!peer.answered.await(5, TimeUnit.SECONDS)) throw new AssertionError("video answer missing");
+        List<String> mediaAddresses = peer.answerMessage.lines().filter(line -> line.startsWith("c=IN IP4 ")).toList();
+        if (mediaAddresses.isEmpty() || mediaAddresses.stream().anyMatch(line -> !line.equals("c=IN IP4 127.0.0.1"))) {
+          throw new AssertionError("Wrong SDP media address: " + mediaAddresses);
+        }
+        if (sip.getRenderableVideoWindowHandle() != 0) throw new AssertionError("Waiting surface hidden before RTP");
+        int destination = peer.answerMessage.lines().filter(line -> line.startsWith("m=video "))
+            .map(line -> Integer.parseInt(line.split(" ")[1])).findFirst().orElseThrow();
+        // SPS, PPS and IDR for a synthetic 64×64 H.264 colour frame.
+        List<String> nals = List.of("Z0LACtxCbARAAAADAEAAAAejxIng", "aM4PyA==", "ZYiEOhGKAAIY8cAAQPY4AAh5ScnJ1111111111114A==");
+        int sequence = 100;
+        for (int frame = 0; frame < 18; frame++) {
+          for (int i = 0; i < nals.size(); i++) {
+            byte[] nal = Base64.getDecoder().decode(nals.get(i));
+            byte[] packet = ByteBuffer.allocate(12 + nal.length).put((byte) 0x80)
+                .put((byte) (97 | (i == nals.size() - 1 ? 0x80 : 0)))
+                .putShort((short) sequence++).putInt(90000 + frame * 6000).putInt(12345).put(nal).array();
+            video.send(new DatagramPacket(packet, packet.length, localhost, destination));
+          }
+          if (sip.getRenderableVideoWindowHandle() != 0 && decodedSyntheticFrame(nativeLog)) break;
+          Thread.sleep(67);
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!(decodedSyntheticFrame(nativeLog) && sip.getRenderableVideoWindowHandle() != 0)
+            && System.nanoTime() < deadline) Thread.sleep(50);
+        boolean decoded = decodedSyntheticFrame(nativeLog);
+        long handle = sip.getRenderableVideoWindowHandle();
+        if (!decoded || handle == 0) {
+          throw new AssertionError("remote H.264 did not render with local camera off: decoded=" + decoded
+              + ", ready=" + handle + ", raw=" + sip.getActiveVideoWindowHandle() + "; see " + nativeLog);
+        }
+        if (sip.isCameraEnabled() || Files.readString(nativeLog).lines().anyMatch(
+            line -> line.contains("vid_port.c") && line.contains("for capture:"))) {
+          throw new AssertionError("local camera opened");
+        }
+        sip.hangup();
+        Thread.sleep(150);
+        System.out.println("PASS receive-video worker");
+      } finally { sip.shutdown(); Platform.exit(); }
+      System.exit(0);
+    }
+
+    private static boolean decodedSyntheticFrame(Path nativeLog) throws IOException {
+      return Files.exists(nativeLog) && Files.readString(nativeLog).contains("Decoding format changed: 64x64");
+    }
   }
 
   public static class OutgoingProbe {
@@ -318,6 +412,7 @@ class IncomingCallWorkerTest {
     final CountDownLatch message = new CountDownLatch(1);
     final Thread worker;
     int port;
+    volatile String answerMessage;
     Peer() throws Exception {
       worker = new Thread(() -> {
         while (!socket.isClosed()) try {
@@ -334,6 +429,7 @@ class IncomingCallWorkerTest {
           } else if (message.startsWith("SIP/2.0 180")) {
             ringing.countDown();
           } else if (message.startsWith("SIP/2.0 200") && message.contains("CSeq: 1 INVITE")) {
+            answerMessage = message;
             String to = message.lines().filter(line -> line.startsWith("To:")).findFirst().orElseThrow();
             send("ACK sip:1098@127.0.0.1:" + port + " SIP/2.0\r\n" + headers(to, "ACK")
                 + "Content-Length: 0\r\n\r\n", packet.getSocketAddress());
@@ -349,10 +445,13 @@ class IncomingCallWorkerTest {
           + "CSeq: 1 " + method + "\r\nContact: <sip:1099@127.0.0.1:" + socket.getLocalPort() + ">\r\nMax-Forwards: 70\r\n";
     }
     void invite(int port, boolean video) throws Exception {
+      invite(port, video, 49002);
+    }
+    void invite(int port, boolean video, int videoPort) throws Exception {
       this.port = port;
       String sdp = "v=0\r\no=fixture 1 1 IN IP4 127.0.0.1\r\ns=fixture\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n"
           + "m=audio 49000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"
-          + (video ? "m=video 49002 RTP/AVP 97\r\na=rtpmap:97 H264/90000\r\na=sendrecv\r\n" : "");
+          + (video ? "m=video " + videoPort + " RTP/AVP 97\r\na=rtpmap:97 H264/90000\r\na=sendrecv\r\n" : "");
       send("INVITE sip:1098@127.0.0.1:" + port + " SIP/2.0\r\n" + headers("To: <sip:1098@lab>", "INVITE")
           + "Content-Type: application/sdp\r\nContent-Length: " + sdp.getBytes(StandardCharsets.UTF_8).length + "\r\n\r\n" + sdp,
           new InetSocketAddress("127.0.0.1", port));

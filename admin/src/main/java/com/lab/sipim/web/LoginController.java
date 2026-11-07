@@ -125,8 +125,8 @@ public class LoginController {
             return ResponseEntity.badRequest().body(Map.of("error",
                     "账号和分机号须为 1–64 个字母、数字、下划线或连字符，以字母或数字开头，不能使用系统保留名"));
         }
-        if (!IdentityRules.passwordFits(password)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "密码不能为空，UTF-8 长度不超过 72 字节"));
+        if (!IdentityRules.passwordFits(password) || password.codePointCount(0, password.length()) < 4) {
+            return ResponseEntity.badRequest().body(Map.of("error", "密码至少 4 个字符，UTF-8 长度不超过 72 字节"));
         }
         // Usernames and extensions are both accepted as identities. Reserve the
         // entire alias namespace so a new account cannot claim another user's extension/name.

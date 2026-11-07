@@ -68,9 +68,10 @@ final class LoginView {
         if (!account.getText().trim().matches("[0-9]{4}")) {
           error("注册账号必须为四位数字"); return;
         }
-        if (password.getText().isBlank()
-            || password.getText().getBytes(StandardCharsets.UTF_8).length > 72) {
-          error("密码不能为空，UTF-8 长度不超过 72 字节"); return;
+        String chosenPassword = password.getText();
+        if (chosenPassword.isBlank() || chosenPassword.codePointCount(0, chosenPassword.length()) < 4
+            || chosenPassword.getBytes(StandardCharsets.UTF_8).length > 72) {
+          error("密码至少 4 个字符，UTF-8 长度不超过 72 字节"); return;
         }
         if (!password.getText().equals(confirmation.getText())) {
           error("两次输入的密码不一致"); return;

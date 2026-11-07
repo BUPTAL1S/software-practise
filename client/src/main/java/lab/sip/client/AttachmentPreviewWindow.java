@@ -7,6 +7,8 @@ import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import javafx.animation.AnimationTimer;
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.geometry.Insets;
@@ -19,6 +21,8 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Slider;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.WritableImage;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
@@ -35,6 +39,7 @@ import javafx.util.Duration;
 
 /** One attachment preview. HTTP/file IO runs off JavaFX; the player belongs to this window. */
 final class AttachmentPreviewWindow implements AutoCloseable {
+  private static final System.Logger LOG = System.getLogger(AttachmentPreviewWindow.class.getName());
   private final Stage stage = new Stage();
   private final Label notice = new Label("正在加载预览…");
   private final StackPane surface = new StackPane(notice);
@@ -47,6 +52,10 @@ final class AttachmentPreviewWindow implements AutoCloseable {
   private volatile boolean closed;
   private Path temporary;
   private MediaPlayer player;
+  private PauseTransition mediaStartup;
+  private boolean nativeVideoFailed;
+  private SoftwareVideoPreview software;
+  private AnimationTimer softwareRenderer;
 
   AttachmentPreviewWindow(Window owner, String name, String detail, boolean beforeSend, Runnable action) {
     if (owner != null) stage.initOwner(owner);
@@ -82,7 +91,10 @@ final class AttachmentPreviewWindow implements AutoCloseable {
     primary.setOnAction(e -> {
       if (closed) return;
       if (beforeSend) close();
-      else if (player != null) player.pause();
+      else {
+        if (player != null) player.pause();
+        if (software != null) software.setPlaying(false);
+      }
       action.run();
     });
     HBox actions = new HBox(8, dismiss, primary);
@@ -149,25 +161,32 @@ final class AttachmentPreviewWindow implements AutoCloseable {
     percent.textProperty().bind(Bindings.format("%.0f%%", zoom.valueProperty().multiply(100)));
     StackPane centered = new StackPane(view);
     ScrollPane scroll = new ScrollPane(centered);
+    scroll.setMinSize(0, 0);
+    scroll.setFitToWidth(true);
+    scroll.setFitToHeight(true);
     scroll.setPannable(true);
     scroll.setStyle("-fx-background: #0f172a; -fx-background-color: #0f172a;");
-    centered.minWidthProperty().bind(Bindings.createDoubleBinding(
-        () -> scroll.getViewportBounds().getWidth(), scroll.viewportBoundsProperty()));
-    centered.minHeightProperty().bind(Bindings.createDoubleBinding(
-        () -> scroll.getViewportBounds().getHeight(), scroll.viewportBoundsProperty()));
-    view.fitWidthProperty().bind(Bindings.createDoubleBinding(
-        () -> Math.max(1, scroll.getViewportBounds().getWidth() - 16) * zoom.getValue(),
-        scroll.viewportBoundsProperty(), zoom.valueProperty()));
-    view.fitHeightProperty().bind(Bindings.createDoubleBinding(
-        () -> Math.max(1, scroll.getViewportBounds().getHeight() - 16) * zoom.getValue(),
-        scroll.viewportBoundsProperty(), zoom.valueProperty()));
+    Runnable fitImage = () -> {
+      // Scrollbar visibility changes the viewport. Base the image on the stable outer size.
+      double scale = Math.min(Math.max(1, scroll.getWidth() - 16) / image.getWidth(),
+          Math.max(1, scroll.getHeight() - 16) / image.getHeight()) * zoom.getValue();
+      double width = Math.max(1, Math.floor(image.getWidth() * scale));
+      double height = Math.max(1, Math.floor(image.getHeight() * scale));
+      view.setFitWidth(width);
+      view.setFitHeight(height);
+      if (zoom.getValue() > 1) centered.setMinSize(width + 16, height + 16);
+      else centered.setMinSize(0, 0);
+    };
+    scroll.widthProperty().addListener((obs, oldValue, value) -> fitImage.run());
+    scroll.heightProperty().addListener((obs, oldValue, value) -> fitImage.run());
+    zoom.valueProperty().addListener((obs, oldValue, value) -> fitImage.run());
+    fitImage.run();
     surface.getChildren().setAll(scroll);
     tools.getChildren().setAll(new Label("缩放"), zoom, percent);
     showTools(true);
   }
 
   private void showVideo(Path source) {
-    Runnable error = () -> showFailure("无法播放此视频。预览支持 H.264 MP4 / M4V，可下载后查看。");
     try {
       Media media = new Media(source.toUri().toString());
       MediaPlayer current = new MediaPlayer(media);
@@ -190,6 +209,7 @@ final class AttachmentPreviewWindow implements AutoCloseable {
       Runnable updateClock = () -> clock.setText(formatTime(progress.getValue()) + " / " + formatTime(progress.getMax()));
       current.setOnReady(() -> {
         if (closed || player != current) return;
+        if (mediaStartup != null) mediaStartup.stop();
         Duration duration = current.getTotalDuration();
         if (duration != null && !duration.isUnknown() && !duration.isIndefinite() && duration.greaterThan(Duration.ZERO)) {
           progress.setMax(duration.toSeconds());
@@ -227,14 +247,89 @@ final class AttachmentPreviewWindow implements AutoCloseable {
         else if (current.getStatus() == MediaPlayer.Status.PLAYING) current.pause();
         else current.play();
       });
-      media.setOnError(error);
-      current.setOnError(error);
-      current.setOnHalted(error);
+      media.setOnError(() -> fallbackVideo(source, media.getError()));
+      current.setOnError(() -> fallbackVideo(source, current.getError()));
+      current.setOnHalted(() -> fallbackVideo(source, current.getError()));
       notice.setText("正在准备视频…");
       tools.getChildren().setAll(play, progress, clock, mute);
       showTools(true);
-      if (current.getError() != null || media.getError() != null) error.run();
-    } catch (RuntimeException | LinkageError unavailable) { error.run(); }
+      mediaStartup = new PauseTransition(Duration.seconds(6));
+      mediaStartup.setOnFinished(e -> fallbackVideo(source, new IOException("JavaFX media preparation timed out")));
+      mediaStartup.play();
+      if (current.getError() != null || media.getError() != null) {
+        fallbackVideo(source, current.getError() != null ? current.getError() : media.getError());
+      }
+    } catch (RuntimeException | LinkageError unavailable) { fallbackVideo(source, unavailable); }
+  }
+
+  private void fallbackVideo(Path source, Throwable failure) {
+    if (closed || nativeVideoFailed) return;
+    nativeVideoFailed = true;
+    LOG.log(System.Logger.Level.WARNING, "JavaFX video preview unavailable", failure);
+    disposePlayer();
+    if (!SoftwareVideoPreview.supportedPlatform()) {
+      showFailure("无法播放此视频。可下载后查看原文件。");
+      return;
+    }
+
+    notice.setText("正在使用兼容模式加载视频…");
+    surface.getChildren().setAll(notice);
+    SoftwareVideoPreview compatible = new SoftwareVideoPreview(source);
+    software = compatible;
+    ImageView view = new ImageView();
+    view.setPreserveRatio(true);
+    view.setSmooth(true);
+    view.fitWidthProperty().bind(surface.widthProperty());
+    view.fitHeightProperty().bind(surface.heightProperty());
+    Button play = new Button("播放");
+    play.getStyleClass().setAll("btn-secondary");
+    play.setDisable(true);
+    play.setOnAction(e -> compatible.setPlaying(!compatible.isPlaying()));
+    Slider progress = new Slider();
+    progress.setAccessibleText("播放进度");
+    progress.setDisable(true);
+    HBox.setHgrow(progress, Priority.ALWAYS);
+    progress.setOnMouseReleased(e -> compatible.seek(progress.getValue()));
+    progress.setOnKeyReleased(e -> compatible.seek(progress.getValue()));
+    Label clock = new Label("0:00 / 0:00");
+    Runnable updateClock = () -> clock.setText(formatTime(progress.getValue()) + " / " + formatTime(progress.getMax()));
+    progress.valueProperty().addListener((obs, oldValue, value) -> updateClock.run());
+    CheckBox mute = new CheckBox("静音");
+    mute.selectedProperty().addListener((obs, oldValue, value) -> compatible.setMuted(value));
+    tools.getChildren().setAll(play, progress, clock, mute);
+    showTools(true);
+
+    softwareRenderer = new AnimationTimer() {
+      @Override public void handle(long now) {
+        if (compatible.failure() != null) {
+          LOG.log(System.Logger.Level.WARNING, "Software video preview failed", compatible.failure());
+          showFailure("无法解码此视频。可下载后查看原文件。");
+          return;
+        }
+        var frame = compatible.takePicture();
+        if (frame != null) {
+          try {
+            WritableImage image = (WritableImage) view.getImage();
+            if (image == null || image.getWidth() != frame.width() || image.getHeight() != frame.height()) {
+              image = new WritableImage(frame.width(), frame.height());
+              view.setImage(image);
+            }
+            image.getPixelWriter().setPixels(0, 0, frame.width(), frame.height(), PixelFormat.getByteBgraInstance(),
+                frame.pixels(), 0, frame.stride());
+          } finally { compatible.recycle(frame); }
+          if (play.isDisabled()) {
+            surface.getChildren().setAll(view);
+            progress.setMax(compatible.durationSeconds());
+            progress.setDisable(false);
+            play.setDisable(false);
+            updateClock.run();
+          }
+        }
+        if (!progress.isDisabled() && !progress.isValueChanging()) progress.setValue(compatible.positionSeconds());
+        play.setText(compatible.isPlaying() ? "暂停" : compatible.isEnded() ? "重播" : "播放");
+      }
+    };
+    softwareRenderer.start();
   }
 
   private static String formatTime(double seconds) {
@@ -249,7 +344,7 @@ final class AttachmentPreviewWindow implements AutoCloseable {
 
   private void showFailure(String message) {
     if (closed) return;
-    disposePlayer();
+    disposePlayers();
     notice.setText(message == null || message.isBlank() ? "无法加载预览，可下载原文件。" : message);
     surface.getChildren().setAll(notice);
     tools.getChildren().clear();
@@ -257,10 +352,20 @@ final class AttachmentPreviewWindow implements AutoCloseable {
   }
 
   private void disposePlayer() {
+    if (mediaStartup != null) { mediaStartup.stop(); mediaStartup = null; }
     if (player == null) return;
     MediaPlayer current = player;
     player = null;
-    current.dispose();
+    try { current.dispose(); }
+    catch (RuntimeException | LinkageError failure) {
+      LOG.log(System.Logger.Level.WARNING, "Could not release JavaFX video player", failure);
+    }
+  }
+
+  private void disposePlayers() {
+    disposePlayer();
+    if (softwareRenderer != null) { softwareRenderer.stop(); softwareRenderer = null; }
+    if (software != null) software.close();
   }
 
   @Override public void close() {
@@ -277,11 +382,14 @@ final class AttachmentPreviewWindow implements AutoCloseable {
       temporary = null;
     }
     loader.shutdownNow();
-    try { disposePlayer(); }
+    try { disposePlayers(); }
     finally {
       surface.getChildren().clear();
       tools.getChildren().clear();
-      if (cached != null) CompletableFuture.runAsync(() -> deleteTemporary(cached));
+      if (cached != null) {
+        CompletableFuture<Void> finished = software == null ? CompletableFuture.completedFuture(null) : software.stopped();
+        finished.thenRunAsync(() -> deleteTemporary(cached));
+      }
     }
   }
 

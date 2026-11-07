@@ -57,6 +57,9 @@ try {
         $entries -notcontains 'com/sun/glass/ui/win/WinApplication.class') { throw 'The client JAR lacks JavaFX Windows classes or native graphics libraries.' }
     if ($entries -notcontains 'jfxmedia.dll' -or $entries -notcontains 'gstreamer-lite.dll' -or
         $entries -notcontains 'javafx/scene/media/MediaPlayer.class') { throw 'The client JAR lacks JavaFX Windows video playback support.' }
+    if ($entries -notcontains 'org/bytedeco/ffmpeg/windows-x86_64/jniavcodec.dll' -or
+        $entries -notcontains 'org/bytedeco/ffmpeg/windows-x86_64/jniavformat.dll' -or
+        $entries -notcontains 'org/bytedeco/javacpp/windows-x86_64/jnijavacpp.dll') { throw 'The client JAR lacks the Windows software video decoder.' }
     $client = Join-Path $output 'JavaSIP-Client-Windows-x64'
     $backend = Join-Path $output 'JavaSIP-Backend-Windows-x64'
     New-Item -ItemType Directory -Path (Join-Path $client 'lib'),(Join-Path $client 'native'),(Join-Path $backend 'lib') -Force | Out-Null

@@ -17,9 +17,8 @@ public class AccountManagement {
         User user=users.findById(id).orElseThrow(()->new ResponseStatusException(NOT_FOUND,"用户不存在"));
         if("ADMIN".equalsIgnoreCase(user.getRole()) || user.getUsername().equals(actor))throw new ResponseStatusException(CONFLICT,"不能禁用当前账号或管理员账号");
         if(reason!=null && reason.length()>200)throw new IllegalArgumentException("原因不能超过200字");
-        if(user.isDisabled()!=disabled) {
-            user.setDisabled(disabled);user.setDisabledAt(disabled?Instant.now().toString():null);user.setDisabledReason(disabled?reason:null);
-            users.saveAndFlush(user);
+        String disabledAt = disabled ? Instant.now().toString() : null;
+        if (users.updateAccountState(id, disabled, disabledAt, disabled ? reason : null) > 0) {
             reservations.reserve(user.getUsername(),"account");reservations.reserve(user.getSipId(),"account");
             audit.record(actor,disabled?"USER_DISABLE":"USER_RESTORE",user.getUsername(),"SUCCESS","account state changed");
         }

@@ -21,6 +21,11 @@ final class NativeVideoPlacement {
     return true;
   }
 
+  boolean displays(long remote) {
+    Applied current = attached;
+    return remote != 0 && current != null && current.generation == generation.get() && current.bounds.remote() == remote;
+  }
+
   void invalidate() {
     generation.incrementAndGet(); attached = null;
   }

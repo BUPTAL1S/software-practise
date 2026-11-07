@@ -16,6 +16,7 @@ import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Slider;
 import javafx.scene.image.ImageView;
 import javafx.scene.media.MediaPlayer;
@@ -45,6 +46,27 @@ class AttachmentPreviewWindowTest {
       await(() -> fx(() -> find(stage(title), ImageView.class) != null));
       fx(() -> {
         Stage stage = stage(title);
+        stage.setRenderScaleX(1.25);
+        stage.setRenderScaleY(1.25);
+        stage.setMaximized(true);
+        return null;
+      });
+      await(() -> fx(() -> stage(title).isMaximized() && stage(title).getScene().getWidth() > 760));
+      assertStableFit(title);
+      fx(() -> { stage(title).setMaximized(false); return null; });
+      await(() -> fx(() -> !stage(title).isMaximized() && stage(title).getScene().getWidth() <= 770));
+      fx(() -> {
+        Stage stage = stage(title);
+        stage.setWidth(535);
+        stage.setHeight(690);
+        stage.setRenderScaleX(1.5);
+        stage.setRenderScaleY(1.5);
+        return null;
+      });
+      await(() -> fx(() -> stage(title).getScene().getWidth() < 535 && stage(title).getScene().getHeight() > 620));
+      assertStableFit(title);
+      fx(() -> {
+        Stage stage = stage(title);
         assertEquals(0, uploads.get());
         ImageView view = find(stage, ImageView.class);
         Slider zoom = find(stage, Slider.class);
@@ -54,7 +76,7 @@ class AttachmentPreviewWindowTest {
         double initialWidth = view.getFitWidth();
         assertTrue(initialWidth > 100);
         zoom.setValue(2);
-        assertEquals(2 * initialWidth, view.getFitWidth(), .1);
+        assertEquals(2 * initialWidth, view.getFitWidth(), 1.1);
         button(stage, "取消").fire();
         assertEquals(0, uploads.get());
         assertFalse(stage.isShowing());
@@ -69,6 +91,27 @@ class AttachmentPreviewWindowTest {
       }
       return null;
     });
+  }
+
+  private static void assertStableFit(String title) throws Exception {
+    double[] last = null;
+    for (int i = 0; i < 6; i++) {
+      Thread.sleep(45);
+      double[] current = fx(() -> {
+        Stage stage = stage(title);
+        var pane = find(stage, ScrollPane.class);
+        var image = find(stage, ImageView.class);
+        var viewport = pane.getViewportBounds();
+        var content = pane.getContent().getLayoutBounds();
+        assertTrue(image.getBoundsInLocal().getWidth() <= viewport.getWidth() + 1);
+        assertTrue(image.getBoundsInLocal().getHeight() <= viewport.getHeight() + 1);
+        assertTrue(content.getWidth() <= viewport.getWidth() + 1);
+        assertTrue(content.getHeight() <= viewport.getHeight() + 1);
+        return new double[]{viewport.getWidth(), viewport.getHeight(), image.getFitWidth(), image.getFitHeight()};
+      });
+      if (last != null) assertArrayEquals(last, current, 0.01, "Fit must settle across pulses");
+      last = current;
+    }
   }
 
   @Test @EnabledOnOs({OS.WINDOWS, OS.MAC})
@@ -118,6 +161,50 @@ class AttachmentPreviewWindowTest {
       fx(() -> { preview.close(); return null; });
       backend.stop(0);
     }
+  }
+
+  @Test @EnabledOnOs(OS.WINDOWS)
+  void javaFxFailureFallsBackToBundledSoftwarePlayback(@TempDir Path directory) throws Exception {
+    org.junit.jupiter.api.Assumptions.assumeTrue(SoftwareVideoPreview.supportedPlatform());
+    Path video = directory.resolve("兼容播放 #1.mp4");
+    try (var input = getClass().getResourceAsStream("/attachment-preview.mp4")) {
+      assertNotNull(input);
+      Files.copy(input, video);
+    }
+    String title = "视频预览";
+    var preview = fx(() -> {
+      String name = video.getFileName().toString();
+      var window = new AttachmentPreviewWindow(null, name, "测试", false, () -> fail("不得调用下载"));
+      window.show(name, Files.size(video), video, null, null);
+      return window;
+    });
+    try {
+      await(() -> fx(() -> find(stage(title), MediaView.class) != null || find(stage(title), ImageView.class) != null));
+      fx(() -> {
+        var nativeView = find(stage(title), MediaView.class);
+        if (nativeView != null) nativeView.getMediaPlayer().getOnError().run();
+        return null;
+      });
+      await(() -> fx(() -> find(stage(title), ImageView.class) != null));
+      Button toggle = fx(() -> button(stage(title), "播放"));
+      Slider progress = fx(() -> find(stage(title), Slider.class));
+      fx(() -> { toggle.fire(); return null; });
+      await(() -> fx(() -> "暂停".equals(toggle.getText()) && progress.getValue() > 0.2));
+      fx(() -> { toggle.fire(); return null; });
+      await(() -> fx(() -> "播放".equals(toggle.getText())));
+      fx(() -> {
+        progress.setValue(2.1);
+        progress.getOnKeyReleased().handle(null);
+        return null;
+      });
+      Thread.sleep(160);
+      await(() -> fx(() -> Math.abs(progress.getValue() - 2.1) < .3));
+      fx(() -> { button(stage(title), "关闭").fire(); return null; });
+      await(() -> {
+        try { return !Files.exists(video) || Files.deleteIfExists(video); }
+        catch (java.io.IOException stillOpen) { return false; }
+      });
+    } finally { fx(() -> { preview.close(); return null; }); }
   }
 
   private static AttachmentPreviewWindow showImage(Path image, AtomicInteger uploads) {

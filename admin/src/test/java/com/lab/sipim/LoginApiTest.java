@@ -122,7 +122,7 @@ class LoginApiTest {
     void registerUserDuplicateReturnsConflict() throws Exception {
         mvc.perform(post("/api/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"1001\",\"password\":\"any\"}"))
+                        .content("{\"username\":\"1001\",\"password\":\"any4\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("username already exists"));
     }

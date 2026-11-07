@@ -29,6 +29,16 @@ class VideoCallPresentationTest {
         assertFalse(placeholder.getText().contains("邀请"));
         window.update("1001", false, true);
         assertTrue(placeholder.getText().contains("已接通"));
+        window.close();
+        window = new VideoCallWindow(null);
+        window.show("公共研讨室 101", false, true, true, () -> {}, value -> {}, value -> {});
+        var waiting = VideoCallWindow.class.getDeclaredField("waitingPane");
+        waiting.setAccessible(true);
+        var waitingPane = (javafx.scene.layout.VBox) waiting.get(window);
+        assertTrue(waitingPane.isVisible());
+        assertTrue(((Label) field.get(window)).getText().contains("等待会议画面"));
+        assertFalse(window.attachNative(0, 0));
+        assertTrue(waitingPane.isVisible());
       } catch (Throwable error) {
         failure.set(error);
       } finally {
