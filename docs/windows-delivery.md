@@ -1,7 +1,7 @@
 # Windows 客户端与后台便携交付
 
 本轮 Windows x64 构建入口为 `scripts/build-windows.ps1`。接收包的电脑无需安装 Java、Maven 或 MSYS2；构建电脑仍需 Windows x64 JDK 17、PowerShell 7、Maven 和现有原生 DLL。
-客户端与后台分开组包，后台部署到 MCU 同学的主机；本脚本不启动或修改 Docker、Kamailio、FreeSWITCH。
+客户端与后台分开组包，后台部署在现有信令/MCU 服务主机；本脚本不启动或修改 Docker、Kamailio、FreeSWITCH。
 
 ## 构建
 
@@ -49,6 +49,8 @@ pwsh -File scripts/verify-windows-package.ps1 -PackageDirectory 'D:\path\to\dist
 该验证证明 JNI 依赖与后台运行时完整，不代表已验证 JavaFX 的最终桌面启动、摄像头、麦克风或网络通话。本轮没有可操作的第二台电脑，不执行双机及入会验收。
 
 ## 接收端使用
+
+新版客户端支持[局域网服务器地址发现](lan-server-discovery.md)：主机启动新版后台后，登录页可自动获取 SIP/HTTP 地址，点击登录会重新确认。Windows 信令启动脚本默认启动 IP 变化监听。旧 EXE 需更新一次；校园网隔离广播/组播时使用手动设置。
 
 客户端解压后运行 `start-client.bat`，在既有账号设置中填正确的 SIP 和 HTTP 地址。默认媒体档为 balanced；必要时先设置 `SIP_MEDIA_PROFILE=legacy` 回退。详细参数见 [媒体说明](video-performance.md)。
 

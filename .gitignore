@@ -30,6 +30,10 @@ server/freeswitch/avatars/
 *.db-shm
 client/.local-prefs
 admin/.admin.pid
+admin/data/
+server/.lan-ip-watch.lock
+server/.lan-ip-watch.pid
+server/.lan-ready-ip
 server/kamailio/public-ip.defs
 dist/
 *.zip

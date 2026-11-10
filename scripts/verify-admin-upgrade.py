@@ -38,7 +38,7 @@ class Backend:
         self.err = (logs / (label + ".stderr.log")).open("wb")
         self.process = subprocess.Popen([
             str(bundle / "jre/bin/java.exe"), "-jar", str(bundle / "lib/sipim-admin.jar"),
-            "--server.address=127.0.0.1", "--server.port=0", "--freeswitch.esl.enabled=false",
+            "--server.address=127.0.0.1", "--server.port=0", "--freeswitch.esl.enabled=false", "--sipconnect.discovery.enabled=false",
             "--spring.datasource.url=jdbc:sqlite:" + str(data / "sipim.db"),
             "--sipim.files.upload-dir=" + str(data / "uploads"),
             "--sipim.avatar.upload-dir=" + str(data / "avatar-uploads"),

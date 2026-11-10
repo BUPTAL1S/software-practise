@@ -81,6 +81,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
   private volatile String privateChatUser = "";
   private final Object httpAuthLock = new Object();
   private volatile boolean sessionClosed;
+  private LoginView activeLogin;
   private volatile boolean backgroundLoginAllowed = true;
   // JavaFX calls stop() on the original Application even after a new account session starts.
   private MainApp applicationOwner = this;
@@ -1261,6 +1262,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
 
     stage.setOnCloseRequest(
         e -> {
+          if (activeLogin != null) activeLogin.closeDiscovery();
           calls.silenceIncomingCall();
           probeAndPollTimeline.stop();
           roomPollingTimeline.stop();
@@ -1312,6 +1314,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       login[0] = new LoginView("", server.getText(), httpServerField.getText(),
           credentials -> loginAndConnect(login[0], credentials, scene, probeAndPollTimeline, false),
           credentials -> loginAndConnect(login[0], credentials, scene, probeAndPollTimeline, true));
+      activeLogin = login[0];
+      login[0].configureDiscovery(new ServerDiscovery()::find, LocalPrefs.discoveryServerId,
+          LocalPrefs.discoveryAutomatic && !named.containsKey("server") && !named.containsKey("host")
+              && !named.containsKey("http") && !named.containsKey("http-port") && !named.containsKey("http_port"));
       stage.setTitle("登录 · SIP Connect");
       stage.setMinWidth(780); stage.setMinHeight(640);
       stage.setScene(login[0].scene());
@@ -1409,8 +1415,9 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
     String sipDomain = domain.getText().trim();
     Thread thread = new Thread(() -> {
       try {
-        String discovered = HttpFileClient.discoverBackendUrl(credentials.http());
-        String backend = discovered == null ? credentials.http() : discovered;
+        // LoginView has verified discovery, or the user explicitly chose this manual address.
+        // Never send credentials to an unrelated localhost service as a port-probe fallback.
+        String backend = credentials.http();
         httpFileClient.setBaseUrl(backend);
         httpFileClient.setAuthToken(null);
         if (createAccount) httpFileClient.register(credentials.username(), credentials.password());
@@ -1431,7 +1438,10 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
           password.setText(credentials.password());
           server.setText(credentials.sip()); httpServerField.setText(backend);
           sipPort.setText(Integer.toString(actualPort));
+          LocalPrefs.discoveryServerId = login.discoveredServerId();
+          LocalPrefs.discoveryAutomatic = login.automaticDiscoverySelected();
           LocalPrefs.save(credentials.sip(), "tcp", backend);
+          login.closeDiscovery();
           login.clearPassword();
           primaryStage.setScene(chatScene);
           primaryStage.setTitle("SIP Connect · " + credentials.username());
@@ -3282,6 +3292,7 @@ public final class MainApp extends Application implements CallUiCoordinator.Host
       activeSession.stop();
       return;
     }
+    if (activeLogin != null) activeLogin.closeDiscovery();
     sessionClosed = true;
     backgroundLoginAllowed = false;
     heartbeatRoom = "";

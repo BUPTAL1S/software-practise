@@ -13,6 +13,8 @@ final class LocalPrefs {
   static String server = "";
   static String transport = "tcp";
   static String httpServer = "http://localhost:8080";
+  static String discoveryServerId = "";
+  static boolean discoveryAutomatic = true;
 
   static void load() {
     Path file = file();
@@ -26,6 +28,9 @@ final class LocalPrefs {
       return;
     }
     server = props.getProperty("sip.server", "").trim();
+    String identity = props.getProperty("discovery.server-id", "").trim();
+    discoveryServerId = ServerDiscovery.validId(identity) ? identity : "";
+    discoveryAutomatic = Boolean.parseBoolean(props.getProperty("discovery.auto", "true"));
     transport = "tcp";
     String h = props.getProperty("http.server", "").trim();
     if (!h.isEmpty()) {
@@ -38,6 +43,8 @@ final class LocalPrefs {
     props.setProperty("sip.server", sipServer == null ? "" : sipServer.trim());
     props.setProperty("sip.transport", "tcp");
     props.setProperty("http.server", httpUrl == null ? "http://localhost:8080" : httpUrl.trim());
+    props.setProperty("discovery.server-id", discoveryServerId);
+    props.setProperty("discovery.auto", Boolean.toString(discoveryAutomatic));
     Path file = file();
     try {
       Files.createDirectories(file.getParent());

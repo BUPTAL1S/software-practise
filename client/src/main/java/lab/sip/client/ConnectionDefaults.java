@@ -2,17 +2,16 @@ package lab.sip.client;
 
 import java.net.URI;
 
-/** This deployment's LAN host; command-line and login connection fields can override it. */
+/** Local/saved configuration; a fresh remote client obtains its host through LAN discovery. */
 final class ConnectionDefaults {
-  static final String LAN_HOST = "10.21.233.158";
   record Settings(String sip, String http) {}
 
   static Settings resolve(boolean localService, String savedSip, String savedHttp) {
-    String sip = localService ? "127.0.0.1" : LAN_HOST;
+    String sip = localService ? "127.0.0.1" : "";
     if (!localService && savedSip != null && !savedSip.isBlank() && !loopback(host(savedSip))) {
       sip = savedSip.trim();
     }
-    String http = "http://" + host(sip) + ":8080";
+    String http = sip.isBlank() ? "" : "http://" + host(sip) + ":8080";
     if (savedHttp != null && !savedHttp.isBlank()) {
       String savedHost = host(savedHttp);
       if (savedHost.equalsIgnoreCase(host(sip)) || (localService && loopback(savedHost))) http = savedHttp;

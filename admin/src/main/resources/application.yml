@@ -24,6 +24,13 @@ logging:
   level:
     com.lab.sipim: INFO
 
+sipconnect:
+  discovery:
+    enabled: ${SIPIM_DISCOVERY_ENABLED:true}
+    port: ${SIPIM_DISCOVERY_PORT:39771}
+    sip-port: ${SIPIM_SIP_PORT:5060}
+    identity-file: ${SIPIM_DISCOVERY_ID_FILE:./data/.discovery-id}
+
 freeswitch:
   esl:
     enabled: ${ESL_ENABLED:true}

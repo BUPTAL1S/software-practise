@@ -25,7 +25,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Portable client JNI preflight failed.' }
     $stdout = Join-Path $evidence 'backend.stdout.log'; $stderr = Join-Path $evidence 'backend.stderr.log'
     $arguments = @('-jar',(Join-Path $backend 'lib\sipim-admin.jar'),'--server.address=127.0.0.1','--server.port=0',
-        '--freeswitch.esl.enabled=false',('--spring.datasource.url=jdbc:sqlite:'+(Join-Path $evidence 'test.db')),
+        '--freeswitch.esl.enabled=false','--sipconnect.discovery.enabled=false',('--spring.datasource.url=jdbc:sqlite:'+(Join-Path $evidence 'test.db')),
         ('--sipim.avatar.upload-dir='+(Join-Path $evidence 'uploads')))
     $quoted = $arguments | ForEach-Object { '"' + $_ + '"' }
     $process = Start-Process -FilePath (Join-Path $backend 'jre\bin\java.exe') -ArgumentList $quoted -WorkingDirectory $evidence -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru

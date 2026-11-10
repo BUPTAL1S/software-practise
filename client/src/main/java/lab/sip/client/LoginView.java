@@ -2,6 +2,7 @@ package lab.sip.client;
 
 import java.util.function.Consumer;
 import java.nio.charset.StandardCharsets;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -22,6 +23,13 @@ final class LoginView {
   private final VBox form;
   private final Scene scene;
   private boolean registering;
+  private final TitledPane advanced;
+  private final CheckBox automatic = new CheckBox("自动发现服务器");
+  private final Button search = new Button("重新搜索");
+  private ServerDiscovery.Lookup discovery;
+  private String serverId = "";
+  private long lookupGeneration;
+  private boolean applyingConnection, closed, busy;
 
   LoginView(String username, String sipHost, String httpUrl, Consumer<Credentials> authenticate,
       Consumer<Credentials> createAccount) {
@@ -33,6 +41,9 @@ final class LoginView {
     password.setPromptText("输入登录密码");
     sip = new TextField(sipHost);
     http = new TextField(httpUrl);
+    sip.setId("login-sip-server"); http.setId("login-http-server");
+    automatic.setSelected(true); automatic.setId("login-auto-discovery");
+    search.setId("login-search-server");
     TextField visiblePassword = new TextField();
     visiblePassword.textProperty().bindBidirectional(password.textProperty());
     visiblePassword.setPromptText("输入登录密码");
@@ -50,10 +61,24 @@ final class LoginView {
     confirmBox.setVisible(false);
     confirmBox.setManaged(false);
     VBox connections = new VBox(8, label("通话服务器", "login-label"), sip,
-        label("账号与消息服务器", "login-label"), http);
+        label("账号与消息服务器", "login-label"), http, new HBox(12, automatic, search));
     connections.setPadding(new Insets(12, 0, 4, 0));
-    TitledPane advanced = new TitledPane("连接设置 · 已自动配置", connections);
+    advanced = new TitledPane("连接设置", connections);
+    advanced.setId("login-connections");
     advanced.setExpanded(false);
+    sip.textProperty().addListener((obs, old, next) -> connectionEdited());
+    http.textProperty().addListener((obs, old, next) -> connectionEdited());
+    automatic.selectedProperty().addListener((obs, old, selected) -> {
+      if (applyingConnection) return;
+      lookupGeneration++;
+      search.setDisable(false);
+      if (selected) refreshDiscovery();
+      else advanced.setText("连接设置 · 手动设置");
+    });
+    search.setOnAction(event -> {
+      applyingConnection = true; automatic.setSelected(true); applyingConnection = false;
+      refreshDiscovery();
+    });
     feedback.getStyleClass().add("login-feedback");
     feedback.setWrapText(true);
     feedback.setMinHeight(40);
@@ -77,13 +102,15 @@ final class LoginView {
           error("两次输入的密码不一致"); return;
         }
       }
-      if (sip.getText().isBlank() || http.getText().isBlank()) {
+      if ((discovery == null || !automatic.isSelected()) && (sip.getText().isBlank() || http.getText().isBlank())) {
         error("请检查连接设置中的服务器地址"); return;
       }
-      setBusy(true);
       Consumer<Credentials> submit = registering ? createAccount : authenticate;
-      submit.accept(new Credentials(account.getText().trim(), password.getText(),
-          sip.getText().trim(), http.getText().trim()));
+      Credentials entered = new Credentials(account.getText().trim(), password.getText(),
+          sip.getText().trim(), http.getText().trim());
+      setBusy(true);
+      if (discovery != null && automatic.isSelected()) lookup(entered, submit);
+      else submit.accept(entered);
     });
     Label title = label("欢迎回来", "login-title");
     Label hint = label("登录账号，开始聊天和通话", "login-muted");
@@ -116,7 +143,13 @@ final class LoginView {
     brand.getStyleClass().add("login-brand");
     brand.setPrefWidth(345);
     brand.setMinWidth(280);
-    StackPane right = new StackPane(form);
+    form.setMinHeight(Region.USE_PREF_SIZE);
+    ScrollPane scroll = new ScrollPane(form);
+    scroll.setFitToWidth(true); scroll.setFitToHeight(true);
+    scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+    scroll.setStyle("-fx-background-color: transparent; -fx-background: transparent; -fx-padding: 0;");
+    scroll.setMaxWidth(365);
+    StackPane right = new StackPane(scroll);
     right.setPadding(new Insets(34, 40, 34, 40));
     HBox.setHgrow(right, Priority.ALWAYS);
     HBox root = new HBox(brand, right);
@@ -126,7 +159,60 @@ final class LoginView {
   }
 
   Scene scene() { return scene; }
+  String discoveredServerId() { return serverId; }
+  boolean automaticDiscoverySelected() { return automatic.isSelected(); }
+  void configureDiscovery(ServerDiscovery.Lookup discovery, String rememberedId) {
+    configureDiscovery(discovery, rememberedId, true);
+  }
+  void configureDiscovery(ServerDiscovery.Lookup discovery, String rememberedId, boolean enabled) {
+    this.discovery = discovery;
+    this.serverId = rememberedId == null ? "" : rememberedId;
+    applyingConnection = true; automatic.setSelected(enabled); applyingConnection = false;
+    refreshDiscovery();
+  }
+  void closeDiscovery() { closed = true; lookupGeneration++; }
+  private void connectionEdited() {
+    if (applyingConnection) return;
+    lookupGeneration++; serverId = "";
+    automatic.setSelected(false);
+    search.setDisable(false);
+    advanced.setText("连接设置 · 手动设置");
+  }
+  void refreshDiscovery() {
+    if (closed || busy || discovery == null || !automatic.isSelected()) return;
+    lookup(new Credentials("", "", sip.getText().trim(), http.getText().trim()), null);
+  }
+  private void lookup(Credentials entered, Consumer<Credentials> submit) {
+    long generation = ++lookupGeneration;
+    String rememberedId = serverId;
+    advanced.setText("连接设置 · 正在搜索服务器…");
+    search.setDisable(true);
+    Thread worker = new Thread(() -> {
+      ServerDiscovery.Result result;
+      try { result = discovery.find(new ConnectionDefaults.Settings(entered.sip(), entered.http()), rememberedId); }
+      catch (Exception failure) { result = new ServerDiscovery.Result(null, "搜索失败，可重新搜索或手动设置"); }
+      ServerDiscovery.Result found = result;
+      Platform.runLater(() -> {
+        if (closed || generation != lookupGeneration) return;
+        search.setDisable(false);
+        advanced.setText("连接设置 · " + found.message());
+        if (found.server() != null) {
+          applyingConnection = true;
+          sip.setText(found.server().sip()); http.setText(found.server().http());
+          applyingConnection = false;
+          serverId = found.server().id();
+          if (submit != null) submit.accept(new Credentials(entered.username(), entered.password(),
+              found.server().sip(), found.server().http()));
+        } else if (submit != null) {
+          error(found.message() + "。若已手动填写正确地址，请取消“自动发现服务器”后重试。");
+          advanced.setExpanded(true);
+        }
+      });
+    }, "login-server-discovery");
+    worker.setDaemon(true); worker.start();
+  }
   void setBusy(boolean busy) {
+    this.busy = busy;
     form.setDisable(busy);
     String action = registering ? "注册并上线" : "登录并上线";
     String progress = registering ? "正在创建账号并连接通话服务…" : "正在验证账号并连接通话服务…";

@@ -65,7 +65,7 @@ public class ApiAccessPolicy implements HandlerInterceptor, WebMvcConfigurer {
                 || path.equals("/api/users") && method.equals("POST");
         boolean publicRoute = method.equals("POST") && (path.equals("/api/login")
                 || path.equals("/api/register") || path.equals("/api/admin/login"))
-                || read && (path.equals("/api/health") || path.equals("/api/users")
+                || read && (path.equals("/api/health") || path.equals("/api/discovery") || path.equals("/api/users")
                 || path.matches("/api/users/[^/]+") || path.equals("/api/rooms")
                 || path.matches("/api/rooms/[^/]+")
                 // FileController checks ownership; only published profile avatars are public.

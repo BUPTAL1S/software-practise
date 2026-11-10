@@ -10,11 +10,12 @@ class ConnectionDefaultsTest {
   }
   @Test void copiedLocalPreferencesDoNotConnectRemoteMachineToItself() {
     var settings = ConnectionDefaults.resolve(false, "127.0.0.1", "http://localhost:8088");
-    assertEquals("10.21.233.158", settings.sip());
-    assertEquals("http://10.21.233.158:8080", settings.http());
+    assertEquals("", settings.sip());
+    assertEquals("", settings.http());
   }
-  @Test void freshRemoteMachineUsesDeploymentHost() {
-    assertEquals("10.21.233.158", ConnectionDefaults.resolve(false, "", "").sip());
+  @Test void freshRemoteMachineWaitsForDiscoveryInsteadOfShippingAnOldCampusIp() {
+    assertEquals("", ConnectionDefaults.resolve(false, "", "").sip());
+    assertEquals("", ConnectionDefaults.resolve(false, "", "").http());
   }
   @Test void intentionalRemoteServerOverrideSurvivesRestart() {
     var settings = ConnectionDefaults.resolve(false, "10.0.0.8", "http://10.0.0.8:8088");
