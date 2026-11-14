@@ -5,79 +5,80 @@ set "REPO=%~dp0.."
 set "PATH=%REPO%\native\windows-x64;%PATH%"
 
 echo ============================================================================
-echo   Java SIP 客户端启动程序 (Windows)
-echo   模式：纯客户端模式（无需本地 Docker / 无需本地后台服务）
+echo   Java SIP 客户端一体化启动程序 (Windows)
 echo ============================================================================
 
-set "REMOTE_SERVER="
-set "EXTRA_ARGS=%*"
-
-rem 如果传入了参数且第一个参数类似 IP 地址
-if not "%~1"=="" (
-    set "FIRST_ARG=%~1"
-    rem 简单判断是否不以 -- 开头
-    echo !FIRST_ARG! | findstr "^--" >nul
-    if errorlevel 1 (
-        set "REMOTE_SERVER=!FIRST_ARG!"
-        rem 移除第一个参数后保存其余参数
-        for /f "tokens=1* delims= " %%a in ("%*") do set "EXTRA_ARGS=%%b"
+rem 1. 检查 SIP 信令与 MCU 服务 (端口 5060)
+netstat -ano | findstr ":5060" | findstr "LISTENING" >nul 2>nul
+if errorlevel 1 (
+    echo [INFO] 检测到 SIP 服务未在端口 5060 运行，正在检查 Docker 容器...
+    where docker >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        if exist "%REPO%\server\start-kamailio.ps1" (
+            echo [INFO] 正在拉起 Kamailio + FreeSWITCH 容器...
+            powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\server\start-kamailio.ps1" >nul 2>nul
+        )
+    ) else (
+        echo [WARN] 未检测到 Docker 命令，若需 SIP 注册与音视频通话，请确认 Docker 已启动。
     )
+) else (
+    echo [INFO] 检测到 SIP 服务 (Kamailio) 已在端口 5060 正常运行。
 )
 
-rem 如果未传 IP 参数，提示用户输入目标服务器 IP
-if "%REMOTE_SERVER%"=="" (
-    set "SAVED_IP=10.21.247.82"
-    if exist "%REPO%\client\.local-prefs" (
-        for /f "tokens=2 delims==" %%i in ('findstr "^sip.server=" "%REPO%\client\.local-prefs" 2^>nul') do (
-            set "TRIM_IP=%%i"
-            set "TRIM_IP=!TRIM_IP: =!"
-            if not "!TRIM_IP!"=="" if not "!TRIM_IP!"=="127.0.0.1" if not "!TRIM_IP!"=="localhost" set "SAVED_IP=!TRIM_IP!"
+rem 2. 检查 Spring Boot 后台是否已运行。先认 8080，健康响应必须同时含 status 与 esl。
+set "SPRING_PORT="
+for %%P in (8080 8088 8081 8082 8083) do (
+    netstat -ano | findstr ":%%P" | findstr "LISTENING" >nul 2>nul
+    if not errorlevel 1 (
+        powershell -NoProfile -Command "try { $r = (Invoke-WebRequest -Uri 'http://127.0.0.1:%%P/api/health' -TimeoutSec 1 -UseBasicParsing).Content; if ($r -like '*status*ok*' -and $r -like '*esl*') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>nul
+        if not errorlevel 1 (
+            set "SPRING_PORT=%%P"
+            echo [INFO] 检测到 Spring Boot 后台已在端口 %%P 运行并就绪。
+            goto :after_spring_check
         )
     )
-    echo 提示：直接回车将连接目标服务器 [!SAVED_IP!]
-    echo       或输入对方主机 IP（可带端口如 10.21.x.x:8080）并按回车：
-    echo.
-    set "INPUT_IP="
-    set /p "INPUT_IP=目标主机 IP [!SAVED_IP!]: "
-    if "!INPUT_IP!"=="" set "INPUT_IP=!SAVED_IP!"
-    set "REMOTE_SERVER=!INPUT_IP!"
 )
 
-rem 组装启动参数
-set "FINAL_ARGS="
-if not "%REMOTE_SERVER%"=="" (
-    for /f "tokens=1,2 delims=:" %%a in ("%REMOTE_SERVER%") do (
-        set "SERVER_HOST=%%a"
-        set "HTTP_PORT=%%b"
+:after_spring_check
+rem 3. 若未运行，后台启动 Spring Boot 并记录 PID 文件
+if "%SPRING_PORT%"=="" (
+    set "SPRING_PORT=8080"
+    echo [INFO] 正在后台启动 Spring Boot 服务 (端口: 8080)...
+    if not exist "%REPO%\admin\logs" mkdir "%REPO%\admin\logs"
+    cd /d "%REPO%\admin"
+    
+    rem 启动后台进程并记录 PID
+    powershell -NoProfile -Command "$proc = Start-Process cmd.exe -ArgumentList '/c mvn -q spring-boot:run -Dspring-boot.run.arguments=--server.port=8080 > logs\admin.log 2>&1' -PassThru -WindowStyle Hidden; $proc.Id | Set-Content -Path '.admin.pid' -Encoding ascii"
+    cd /d "%~dp0"
+    
+    echo [INFO] 等待后台服务就绪 (http://127.0.0.1:8080/api/health)...
+    set /a "WAITED=0"
+    :wait_loop
+    powershell -NoProfile -Command "try { $r = (Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/health' -TimeoutSec 1 -UseBasicParsing).Content; if ($r -like '*status*ok*' -and $r -like '*esl*') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>nul
+    if not errorlevel 1 (
+        echo [INFO] Spring Boot 后台已就绪！
+        rem 记录实际监听端口的 Java 进程 PID
+        powershell -NoProfile -Command "$conn = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($conn) { $conn.OwningProcess | Set-Content -Path '%REPO%\admin\.admin.pid' -Encoding ascii }" >nul 2>nul
+        goto :launch_client
     )
-    if "!HTTP_PORT!"=="" set "HTTP_PORT=8080"
-    
-    echo !EXTRA_ARGS! | findstr /i "\-\-server=" >nul
-    if errorlevel 1 set "FINAL_ARGS=--server=!SERVER_HOST!"
-    
-    echo !EXTRA_ARGS! | findstr /i "\-\-http=" >nul
-    if errorlevel 1 set "FINAL_ARGS=!FINAL_ARGS! --http=http://!SERVER_HOST!:!HTTP_PORT!"
+    timeout /t 1 /nobreak >nul
+    set /a "WAITED+=1"
+    if !WAITED! lss 35 goto :wait_loop
+    echo [WARN] 等待后台服务超时，客户端仍将启动并尝试自动重连。日志文件: admin\logs\admin.log
 )
 
-if not "%EXTRA_ARGS%"=="" set "FINAL_ARGS=!FINAL_ARGS! %EXTRA_ARGS%"
-
-echo !FINAL_ARGS! | findstr /i "\-\-port=" >nul
-if errorlevel 1 set "FINAL_ARGS=!FINAL_ARGS! --port=5062"
-
-echo.
-echo [INFO] 正在拉起 JavaFX 客户端...
-if not "!FINAL_ARGS!"=="" echo [INFO] 连接参数: !FINAL_ARGS!
-echo ============================================================================
-
-cd /d "%REPO%\client"
-where mvn >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    mvn -q javafx:run -Djavafx.args="!FINAL_ARGS!"
+:launch_client
+set "ARGS=%*"
+if "%ARGS%"=="" (
+    set "ARGS=--http=http://localhost:%SPRING_PORT% --port=5062"
 ) else (
-    if exist "%REPO%\client\target\sip-client-0.1.0-all.jar" (
-        java -Dsip.native.dir="%REPO%\native\windows-x64" -jar "%REPO%\client\target\sip-client-0.1.0-all.jar" !FINAL_ARGS!
-    ) else (
-        echo [ERROR] 未找到 mvn 命令且 target\sip-client-0.1.0-all.jar 不存在。
-        pause
-    )
+    echo %ARGS% | findstr /i "\-\-http=" >nul || set "ARGS=--http=http://localhost:%SPRING_PORT% !ARGS!"
+    echo %ARGS% | findstr /i "\-\-port=" >nul || set "ARGS=--port=5062 !ARGS!"
+)
+
+echo [INFO] 正在拉起 JavaFX 客户端 (参数: %ARGS%)...
+mvn -q javafx:run -Djavafx.args="%ARGS%"
+if errorlevel 1 (
+    echo [ERROR] 客户端启动失败。请确认已安装 JDK 17 与 Maven，且 native\windows-x64 目录下存在相关原生库。
+    pause
 )
