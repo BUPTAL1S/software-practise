@@ -641,7 +641,10 @@ public final class HttpFileClient {
       }
     } catch (Exception ignored) {
     }
-    return false;
+    // If not found in cached set, refresh in case network interface state changed
+    refreshLocalAddresses();
+    lastLocalIpsScanTime = System.currentTimeMillis();
+    return LOCAL_IPS.contains(h);
   }
 
   private static synchronized void refreshLocalAddresses() {
