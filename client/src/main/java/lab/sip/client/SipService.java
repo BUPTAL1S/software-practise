@@ -96,6 +96,7 @@ final class SipService {
   private AudioMedia captureAudioMedia;
   private volatile boolean audioMuted;
   private volatile boolean started;
+  private volatile boolean endpointReady;
   private volatile boolean shuttingDown;
   private MediaTuning mediaTuning = MediaTuning.defaults();
   private final CapabilitySnapshotCache<VideoDetails> videoCapabilities =
@@ -142,7 +143,7 @@ final class SipService {
   }
 
   private void ensureThreadRegistered() {
-    if (started && endpoint != null) {
+    if (endpointReady && endpoint != null) {
       try {
         if (!endpoint.libIsThreadRegistered()) {
           String name = Thread.currentThread().getName();
@@ -342,6 +343,29 @@ final class SipService {
 
   /** Native handle of the PJSIP camera preview window. */
   public long getPreviewWindowHandle() {
+    if (previewHandle == 0 && videoPreview != null) {
+      VideoWindow win = null;
+      try {
+        win = videoPreview.getVideoWindow();
+        if (win != null) {
+          long handle = nativeVideoWindowHandle(win);
+          if (handle != 0) {
+            previewHandle = handle;
+            if (previewMirrorEnabled) {
+              NativeMirror.applyPreviewMirror(handle, "摄像头预览 (镜像)");
+            }
+          }
+        }
+      } catch (Throwable ignored) {
+      } finally {
+        if (win != null) {
+          try {
+            win.delete();
+          } catch (Throwable ignored) {
+          }
+        }
+      }
+    }
     return previewHandle;
   }
 
@@ -386,6 +410,16 @@ final class SipService {
     return previewMirrorEnabled;
   }
 
+  public boolean isCameraMirrorEnabled() {
+    return previewMirrorEnabled;
+  }
+
+  public synchronized void setCameraMirrorEnabled(boolean enabled) {
+    if (this.previewMirrorEnabled != enabled) {
+      togglePreviewMirror();
+    }
+  }
+
   synchronized void togglePreviewMirror() {
     this.previewMirrorEnabled = !this.previewMirrorEnabled;
     if (videoPreview != null) {
@@ -400,12 +434,14 @@ final class SipService {
             if (winInfo != null && winInfo.getWinHandle() != null
                 && winInfo.getWinHandle().getHandle() != null) {
               long hwnd = winInfo.getWinHandle().getHandle().getWindow();
-              if (previewMirrorEnabled) {
-                NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
-                events.log("系统", "摄像头预览已切换为：镜像模式 (符合照镜子直觉)");
-              } else {
-                NativeMirror.restoreNormal(hwnd, "摄像头预览 (真实)");
-                events.log("系统", "摄像头预览已切换为：真实模式 (非镜像)");
+              if (hwnd != 0) {
+                if (previewMirrorEnabled) {
+                  NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+                  events.log("系统", "摄像头预览已切换为：镜像模式 (符合照镜子直觉)");
+                } else {
+                  NativeMirror.restoreNormal(hwnd, "摄像头预览 (真实)");
+                  events.log("系统", "摄像头预览已切换为：真实模式 (非镜像)");
+                }
               }
             }
           } finally {
@@ -508,7 +544,9 @@ final class SipService {
             && winInfo.getWinHandle().getHandle() != null) {
           try {
             long hwnd = winInfo.getWinHandle().getHandle().getWindow();
-            NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+            if (hwnd != 0) {
+              NativeMirror.applyPreviewMirror(hwnd, "摄像头预览 (镜像)");
+            }
           } catch (Throwable t) {
             events.log("系统", "提示: 原生图层镜像应用: " + t.getMessage());
           }
@@ -1191,6 +1229,7 @@ final class SipService {
       epConfig.getMedConfig().setVidPreviewEnableNative(false);
       VideoMediaPolicy.configureAudio(epConfig.getMedConfig(), mediaTuning);
       endpoint.libInit(epConfig);
+      endpointReady = true;
     } finally {
       epConfig.delete();
     }
@@ -1228,6 +1267,7 @@ final class SipService {
 
   private void closeEndpointQuiet() {
     shuttingDown = true;
+    endpointReady = false;
     videoCapabilities.invalidate();
     if (endpoint != null) {
       ensureThreadRegistered();

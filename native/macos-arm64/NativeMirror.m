@@ -7,6 +7,7 @@ static char kMirrorObserverKey;
 
 @interface MirrorHelper : NSObject
 @property (nonatomic, weak) NSView *view;
+@property (nonatomic, assign) BOOL mirrored;
 - (void)frameDidChange:(NSNotification *)note;
 @end
 
@@ -14,22 +15,28 @@ static char kMirrorObserverKey;
 - (void)frameDidChange:(NSNotification *)note {
     NSView *v = self.view;
     if (!v) return;
-    CGFloat w = v.bounds.size.width;
-    if (w <= 0.0) {
-        NSWindow *win = [v window];
-        if (win) {
-            w = [win contentView].bounds.size.width;
-            if (w <= 0.0) {
-                w = [win frame].size.width;
-            }
-        }
-    }
-    if (w <= 0.0) {
-        w = 480.0;
-    }
     v.wantsLayer = YES;
     CALayer *layer = v.layer;
-    if (layer) {
+    if (!layer) return;
+    if (self.mirrored) {
+        // Native camera frames are already horizontally mirrored at the capture driver source (darwin_dev.m).
+        // Maintain identity matrix to render the naturally mirrored stream.
+        layer.affineTransform = CGAffineTransformIdentity;
+    } else {
+        // To display real optical perspective (non-mirrored), invert the already-mirrored stream.
+        CGFloat w = v.bounds.size.width;
+        if (w <= 0.0) {
+            NSWindow *win = [v window];
+            if (win) {
+                w = [win contentView].bounds.size.width;
+                if (w <= 0.0) {
+                    w = [win frame].size.width;
+                }
+            }
+        }
+        if (w <= 0.0) {
+            w = 480.0;
+        }
         layer.affineTransform = CGAffineTransformMake(-1.0, 0.0, 0.0, 1.0, w, 0.0);
     }
 }
@@ -117,6 +124,7 @@ static void doApplyMirror(void *ptr, const char *titleUtf8) {
                                                        object:targetView];
             objc_setAssociatedObject(targetView, &kMirrorObserverKey, helper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        helper.mirrored = YES;
         [helper frameDidChange:nil];
         
         NSWindow *win = [targetView window];
@@ -135,11 +143,19 @@ static void doRestoreNormal(void *ptr, const char *titleUtf8) {
     if (!obj) return;
     NSView *targetView = findTargetView(obj);
     if (targetView) {
-        objc_setAssociatedObject(targetView, &kMirrorObserverKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        CALayer *layer = targetView.layer;
-        if (layer) {
-            layer.affineTransform = CGAffineTransformIdentity;
+        MirrorHelper *helper = objc_getAssociatedObject(targetView, &kMirrorObserverKey);
+        if (!helper) {
+            helper = [[MirrorHelper alloc] init];
+            helper.view = targetView;
+            [targetView setPostsFrameChangedNotifications:YES];
+            [[NSNotificationCenter defaultCenter] addObserver:helper
+                                                     selector:@selector(frameDidChange:)
+                                                         name:NSViewFrameDidChangeNotification
+                                                       object:targetView];
+            objc_setAssociatedObject(targetView, &kMirrorObserverKey, helper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        helper.mirrored = NO;
+        [helper frameDidChange:nil];
         NSWindow *win = [targetView window];
         if (!win && [obj isKindOfClass:[NSWindow class]]) {
             win = (NSWindow *)obj;
@@ -157,6 +173,14 @@ static void doRestoreNormal(void *ptr, const char *titleUtf8) {
             }
         }
     }
+}
+
+JNIEXPORT jint JNICALL Java_lab_sip_client_NativeMirror_mirrorApiVersionNative
+  (JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    return 2;
 }
 
 JNIEXPORT void JNICALL Java_lab_sip_client_NativeMirror_applyMirror
@@ -219,6 +243,13 @@ JNIEXPORT jboolean JNICALL Java_lab_sip_client_NativeMirror_isMirroredNative
         id obj = validatePointerSafely(ptr);
         if (!obj) return;
         NSView *targetView = findTargetView(obj);
+        if (targetView) {
+            MirrorHelper *helper = objc_getAssociatedObject(targetView, &kMirrorObserverKey);
+            if (helper) {
+                mirrored = helper.mirrored ? JNI_TRUE : JNI_FALSE;
+                return;
+            }
+        }
         if (targetView && targetView.layer) {
             CGAffineTransform t = targetView.layer.affineTransform;
             if (t.a < -0.5) {

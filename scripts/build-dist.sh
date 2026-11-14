@@ -29,7 +29,11 @@ echo "===================================================================="
 JLINK_BIN=""
 JAVA_BIN=""
 JDEPS_BIN=""
-if [[ -x "/opt/homebrew/opt/openjdk@17/bin/jlink" ]]; then
+if [[ -d "/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home/bin" ]]; then
+  JLINK_BIN="/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home/bin/jlink"
+  JAVA_BIN="/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home/bin/java"
+  JDEPS_BIN="/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home/bin/jdeps"
+elif [[ -x "/opt/homebrew/opt/openjdk@17/bin/jlink" ]]; then
   JLINK_BIN="/opt/homebrew/opt/openjdk@17/bin/jlink"
   JAVA_BIN="/opt/homebrew/opt/openjdk@17/bin/java"
   JDEPS_BIN="/opt/homebrew/opt/openjdk@17/bin/jdeps"

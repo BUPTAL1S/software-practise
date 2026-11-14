@@ -3,10 +3,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -d "/opt/homebrew/opt/openjdk@17" ]]; then
-  export JAVA_HOME="/opt/homebrew/opt/openjdk@17"
-elif [[ -z "${JAVA_HOME:-}" ]]; then
-  export JAVA_HOME="/opt/homebrew/opt/openjdk@17"
+if [[ -z "${JAVA_HOME:-}" ]]; then
+  if [[ -d "/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home" ]]; then
+    export JAVA_HOME="/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home"
+  elif [[ -d "/opt/homebrew/opt/openjdk@17" ]]; then
+    export JAVA_HOME="/opt/homebrew/opt/openjdk@17"
+  elif command -v /usr/libexec/java_home >/dev/null 2>&1; then
+    export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home 2>/dev/null || true)"
+  fi
 fi
 export PATH="$JAVA_HOME/bin:$PATH"
 export DYLD_LIBRARY_PATH="$REPO/native/macos-arm64:${DYLD_LIBRARY_PATH:-}"
