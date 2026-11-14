@@ -3,6 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# 1. 寻找并配置 JDK 17 与 Maven 环境
 if [[ -z "${JAVA_HOME:-}" ]]; then
   if [[ -d "/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home" ]]; then
     export JAVA_HOME="/Library/Java/JavaVirtualMachines/liberica-jdk-17-full.jdk/Contents/Home"
@@ -12,100 +13,97 @@ if [[ -z "${JAVA_HOME:-}" ]]; then
     export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home 2>/dev/null || true)"
   fi
 fi
-export PATH="$JAVA_HOME/bin:$PATH"
+
+if [[ -n "${JAVA_HOME:-}" && -d "$JAVA_HOME/bin" ]]; then
+  export PATH="$JAVA_HOME/bin:$PATH"
+fi
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# 2. 清理 macOS 隔离标记并配置原生动态库加载路径
+xattr -dr com.apple.quarantine "$REPO/native/macos-arm64" 2>/dev/null || true
 export DYLD_LIBRARY_PATH="$REPO/native/macos-arm64:${DYLD_LIBRARY_PATH:-}"
 
-# 1. 检查并按需启动 SIP 信令与 MCU 容器 (Kamailio + FreeSWITCH)
-if ! nc -z 127.0.0.1 5060 >/dev/null 2>&1; then
-  echo "[INFO] 检测到 SIP 服务未在端口 5060 运行，正在拉起 Docker 容器 (Kamailio + FreeSWITCH)..."
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    (cd "$REPO/server" && ./start-kamailio.sh >/dev/null 2>&1 || docker compose --profile mcu up -d >/dev/null 2>&1)
-    for i in {1..15}; do
-      if nc -z 127.0.0.1 5060 >/dev/null 2>&1; then
-        echo "[INFO] SIP 服务已在端口 5060 启动就绪。"
-        break
-      fi
-      sleep 1
-    done
+echo "===================================================================="
+echo "  Java SIP 客户端启动程序 (macOS)"
+echo "  模式：纯客户端模式（无需本地 Docker / 无需本地后台服务）"
+echo "===================================================================="
+
+REMOTE_SERVER=""
+EXTRA_ARGS=""
+
+# 3. 解析命令行参数
+if [[ $# -gt 0 ]]; then
+  # 若首个参数为纯 IP 地址或 IP:PORT（例如 10.21.247.82 或 10.21.247.82:8080）
+  if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$ ]]; then
+    REMOTE_SERVER="$1"
+    shift
+    EXTRA_ARGS="$*"
   else
-    echo "[WARN] 未检测到 Docker 守护进程，若需 SIP 注册与音视频通话，请先启动 Docker Desktop。"
+    EXTRA_ARGS="$*"
   fi
-else
-  echo "[INFO] 检测到 SIP 服务 (Kamailio) 已在端口 5060 正常运行。"
-fi
-
-# 2. 检查 Spring Boot 是否已在某端口健康运行
-SPRING_PORT=""
-for P in 8080 8088 8081 8082 8083; do
-  if curl -s -m 1 "http://127.0.0.1:$P/api/health" 2>/dev/null | grep -q '"status"' && curl -s -m 1 "http://127.0.0.1:$P/api/health" 2>/dev/null | grep -q '"esl"'; then
-    SPRING_PORT="$P"
-    echo "[INFO] 检测到 Spring Boot 后台已在端口 $P 运行并就绪。"
-    break
+elif [[ -t 0 ]]; then
+  # 终端交互模式：从 .local-prefs 读取上次连接的远程服务器 IP 作为默认建议
+  SAVED_IP=""
+  if [[ -f "$REPO/client/.local-prefs" ]]; then
+    SAVED_IP=$(grep -E '^sip\.server=' "$REPO/client/.local-prefs" 2>/dev/null | cut -d'=' -f2 | tr -d '\r\n ' || true)
   fi
-done
-
-# 3. 若未运行，自动寻找未被占用的端口并后台拉起 Spring Boot
-if [[ -z "$SPRING_PORT" ]]; then
-  TARGET_PORT=""
-  for P in 8080 8088 8081 8082 8083; do
-    if ! lsof -i :"$P" >/dev/null 2>&1; then
-      TARGET_PORT="$P"
-      break
-    fi
-  done
-
-  if [[ -z "$TARGET_PORT" ]]; then
-    echo "[ERROR] 未能找到可用端口（8080、8088、8081、8082、8083 均被占用），请检查端口占用。"
-    exit 1
+  # 若历史保存为本地回环，则推荐常用局域网 IP 10.21.247.82
+  if [[ -z "$SAVED_IP" || "$SAVED_IP" == "127.0.0.1" || "$SAVED_IP" == "localhost" ]]; then
+    SAVED_IP="10.21.247.82"
   fi
 
-  ADMIN_DIR="$REPO/admin"
-  mkdir -p "$ADMIN_DIR/logs"
-  ADMIN_LOG="$ADMIN_DIR/logs/admin.log"
-  echo "[INFO] 正在后台启动 Spring Boot 服务 (端口: $TARGET_PORT)..."
-  (
-    cd "$ADMIN_DIR"
-    export SERVER_PORT="$TARGET_PORT"
-    nohup mvn -q spring-boot:run -Dspring-boot.run.arguments="--server.port=$TARGET_PORT" > "$ADMIN_LOG" 2>&1 &
-    echo $! > "$ADMIN_DIR/.admin.pid"
-  )
-
-  echo -n "[INFO] 等待后台服务就绪 (http://127.0.0.1:$TARGET_PORT/api/health)"
-  MAX_WAIT=35
-  WAITED=0
-  READY=0
-  while [[ $WAITED -lt $MAX_WAIT ]]; do
-    if curl -s -m 1 "http://127.0.0.1:$TARGET_PORT/api/health" 2>/dev/null | grep -q '"status"' && curl -s -m 1 "http://127.0.0.1:$TARGET_PORT/api/health" 2>/dev/null | grep -q '"esl"'; then
-      READY=1
-      break
-    fi
-    sleep 1
-    WAITED=$((WAITED + 1))
-    printf "."
-  done
+  echo "提示：直接回车将连接目标服务器 [$SAVED_IP]"
+  echo "      或输入对方主机 IP（可带端口如 10.21.x.x:8080）并按回车："
   echo ""
-
-  if [[ $READY -eq 1 ]]; then
-    echo "[INFO] Spring Boot 后台已就绪 (耗时 ${WAITED} 秒)。"
-    SPRING_PORT="$TARGET_PORT"
-  else
-    echo "[WARN] 等待后台服务就绪超时，客户端仍将启动并尝试自动重连。日志文件: $ADMIN_LOG"
-    SPRING_PORT="$TARGET_PORT"
+  read -r -p "目标主机 IP [$SAVED_IP]: " INPUT_IP || true
+  INPUT_IP="${INPUT_IP:-$SAVED_IP}"
+  if [[ -n "$INPUT_IP" ]]; then
+    REMOTE_SERVER="$INPUT_IP"
   fi
 fi
+
+# 4. 组装客户端启动参数
+FINAL_ARGS=""
+if [[ -n "$REMOTE_SERVER" ]]; then
+  SERVER_HOST="$REMOTE_SERVER"
+  HTTP_PORT="8080"
+  if [[ "$REMOTE_SERVER" == *":"* ]]; then
+    SERVER_HOST="${REMOTE_SERVER%%:*}"
+    HTTP_PORT="${REMOTE_SERVER##*:}"
+  fi
+
+  if [[ "$EXTRA_ARGS" != *"--server="* && "$EXTRA_ARGS" != *"--host="* ]]; then
+    FINAL_ARGS="--server=$SERVER_HOST"
+  fi
+  if [[ "$EXTRA_ARGS" != *"--http="* ]]; then
+    FINAL_ARGS="$FINAL_ARGS --http=http://$SERVER_HOST:$HTTP_PORT"
+  fi
+fi
+
+if [[ -n "$EXTRA_ARGS" ]]; then
+  FINAL_ARGS="$FINAL_ARGS $EXTRA_ARGS"
+fi
+
+# 若未指定本地 SIP 端口，默认分配 5062
+if [[ "$FINAL_ARGS" != *"--port="* ]]; then
+  FINAL_ARGS="$FINAL_ARGS --port=5062"
+fi
+
+FINAL_ARGS="$(echo "$FINAL_ARGS" | xargs)"
+
+echo ""
+echo "[INFO] 正在拉起 JavaFX 客户端..."
+if [[ -n "$FINAL_ARGS" ]]; then
+  echo "[INFO] 连接参数: $FINAL_ARGS"
+fi
+echo "===================================================================="
 
 cd "$REPO/client"
-if [[ $# -gt 0 ]]; then
-  ARGS="$*"
-  if [[ "$ARGS" != *"--http="* ]]; then
-    ARGS="--http=http://localhost:$SPRING_PORT $ARGS"
-  fi
-  if [[ "$ARGS" != *"--port="* ]]; then
-    ARGS="--port=5062 $ARGS"
-  fi
+if command -v mvn >/dev/null 2>&1; then
+  exec mvn -q javafx:run -Djavafx.args="$FINAL_ARGS"
+elif [[ -f "$REPO/client/target/sip-client-0.1.0-all.jar" ]]; then
+  exec java -Dsip.native.dir="$REPO/native/macos-arm64" -jar "$REPO/client/target/sip-client-0.1.0-all.jar" $FINAL_ARGS
 else
-  ARGS="--http=http://localhost:$SPRING_PORT --port=5062"
+  echo "[ERROR] 未检测到 mvn 命令且 target/sip-client-0.1.0-all.jar 不存在，请先安装 Maven 或打包。"
+  exit 1
 fi
-
-echo "[INFO] 正在拉起 JavaFX 客户端 (参数: $ARGS)..."
-exec mvn -q javafx:run -Djavafx.args="$ARGS"
